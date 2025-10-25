@@ -1,0 +1,35 @@
+{
+    "window.menuBarVisibility": "classic",
+    "commands.commands": {
+        "Restart Container": {
+            "command": "workbench.action.terminal.sendSequence",
+            "args": {
+                "text": "docker restart simplenvr\u000D"
+            },
+            "icon": "debug-restart",
+            "iconColor": "charts.red",
+            "statusBar": {
+                "alignment": "left",
+                "text": "$(debug-restart) Restart",
+                "tooltip": "Restart SimpleNVR Container",
+                "priority": 100,
+                "color": "#f44336"
+            }
+        },
+        "View Logs": {
+            "command": "workbench.action.terminal.sendSequence",
+            "args": {
+                "text": "docker logs -f --tail 50 simplenvr\u000D"
+            },
+            "icon": "output",
+            "iconColor": "charts.blue",
+            "statusBar": {
+                "alignment": "left",
+                "text": "$(output) Logs",
+                "tooltip": "View Container Logs",
+                "priority": 99,
+                "color": "#2196F3"
+            }
+        }
+    }
+}

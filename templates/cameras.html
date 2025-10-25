@@ -1,0 +1,24 @@
+{{if .}}
+    {{range .}}
+    <div class="camera-card">
+        <div class="camera-name">{{.Name}}</div>
+        <div class="camera-info">RTSP: {{.RTSPUrl}}</div>
+        <div class="camera-info">Folder: {{.RecordDir}}</div>
+        <div class="camera-info">Status: {{if .IsRecording}}<span class="recording">● Recording</span>{{else}}Idle{{end}}</div>
+        <div class="retention-control">
+            <label>Keep recordings for:</label>
+            <input type="number" id="retention-{{.ID}}" value="{{.RetentionDisplay}}" min="1" max="365">
+            <span>days</span>
+            <button onclick="updateRetention('{{.ID}}')">Update</button>
+        </div>
+        <div class="button-group">
+            <button class="btn-view" onclick="viewLiveStream('{{.Name}}')">👁️ View Live</button>
+            <button onclick="fetch('/api/record/start', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: '{{.ID}}'})}).then(() => location.reload())">Start Recording</button>
+            <button onclick="fetch('/api/record/stop', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: '{{.ID}}'})}).then(() => location.reload())">Stop Recording</button>
+            <button class="btn-danger" onclick="removeCamera('{{.ID}}')">Remove</button>
+        </div>
+    </div>
+    {{end}}
+{{else}}
+    <p>No cameras configured</p>
+{{end}}

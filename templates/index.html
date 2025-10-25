@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SimpleNVR</title>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="container">
+    <h1>SimpleNVR</h1>
+    
+    <!-- Playback Section (Collapsible) - MOVED TO TOP -->
+    <div class="section">
+        <div class="section-header" onclick="toggleSection('playback-section')">
+            <h2>⏯️ Playback</h2>
+            <span class="toggle-icon" id="playback-section-icon">▼</span>
+        </div>
+        <div class="section-content" id="playback-section">
+            <div class="playback-container">
+                <!-- Left sidebar: Camera/Recording selection -->
+                <div class="playback-sidebar">
+                    <h3>Select Camera</h3>
+                    <select id="playback-camera-select" onchange="loadRecordings(this.value)">
+                        <option value="">-- Select a camera --</option>
+                    </select>
+
+                    <div id="recordings-list" class="recordings-list">
+                        <p class="placeholder-text">Select a camera to view recordings</p>
+                    </div>
+                </div>
+
+                <!-- Right side: Video player -->
+                <div class="playback-player">
+                    <div class="playback-controls">
+                        <button class="btn-fullscreen" onclick="toggleFullscreen()" title="Fullscreen">
+                            <span id="fullscreen-icon">⛶</span> Fullscreen
+                        </button>
+                    </div>
+                    <div id="playback-video-container" class="playback-video-container">
+                        <div class="placeholder-text">Select a recording to play</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Cameras Section (Collapsible) -->
+    <div class="section">
+        <div class="section-header" onclick="toggleSection('cameras-section')">
+            <h2>📹 Cameras</h2>
+            <span class="toggle-icon" id="cameras-section-icon">▼</span>
+        </div>
+        <div class="section-content" id="cameras-section">
+            <div class="header-controls">
+                <div class="header-button-group">
+                    <button class="btn-set-all-retention" onclick="openSetAllRetentionModal()">Set All Retention</button>
+                    <button id="remove-all-btn" class="btn-remove-all" onclick="confirmRemoveAll()">Remove All</button>
+                </div>
+            </div>
+            <div id="camera-list" 
+                 hx-get="/api/cameras" 
+                 hx-trigger="load, every 5s" 
+                 hx-swap="innerHTML"
+                 hx-on::after-request="updateSectionHeight('cameras-section')">
+                Loading...
+            </div>
+        </div>
+    </div>
+
+    <!-- Configuration Section (Collapsible) -->
+    <div class="section">
+        <div class="section-header" onclick="toggleSection('config-section')">
+            <h2>⚙️ Configuration</h2>
+            <span class="toggle-icon" id="config-section-icon">▼</span>
+        </div>
+        <div class="section-content" id="config-section">
+            <div class="config-subsection">
+                <h3>Scan go2rtc Server</h3>
+                <input type="text" id="go2rtc-url" placeholder="http://go2rtc:1984" value="http://go2rtc:1984">
+                <button hx-post="/api/go2rtc/scan" 
+                        hx-include="#go2rtc-url" 
+                        hx-target="#camera-list" 
+                        hx-swap="innerHTML"
+                        hx-on::after-request="updateSectionHeight('cameras-section'); populatePlaybackCameras()">
+                    Scan go2rtc
+                </button>
+            </div>
+
+            <div class="config-subsection">
+                <h3>Add Camera Manually</h3>
+                <input type="text" id="camera-name" placeholder="Camera Name" required>
+                <input type="text" id="rtsp-url" placeholder="rtsp://camera:554/stream" required>
+                <button hx-post="/api/cameras/add" 
+                        hx-include="#camera-name,#rtsp-url" 
+                        hx-target="#camera-list" 
+                        hx-swap="innerHTML"
+                        hx-on::after-request="updateSectionHeight('cameras-section'); populatePlaybackCameras()">
+                    Add Camera
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Live Stream Modal -->
+<div id="liveModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2 class="modal-title" id="modalTitle">Live Feed</h2>
+            <button class="close-btn" onclick="closeLiveStream()">✕ Close</button>
+        </div>
+        <div class="stream-container" id="streamContainer">
+            <div class="stream-loading">Loading stream...</div>
+        </div>
+    </div>
+</div>
+
+<!-- Set All Retention Modal -->
+<div id="setAllRetentionModal" class="modal small-modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2 class="modal-title">Set Retention for All Cameras</h2>
+            <button class="close-btn" onclick="closeSetAllRetentionModal()">✕</button>
+        </div>
+        <div class="modal-body">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <label>Keep recordings for:</label>
+                <input type="number" id="all-retention-days" value="7" min="1" max="365" style="width: 80px;">
+                <span>days</span>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn-secondary" onclick="closeSetAllRetentionModal()">Cancel</button>
+            <button onclick="applyRetentionToAll()">Apply to All</button>
+        </div>
+    </div>
+</div>
+
+<script src="/static/js/core.js"></script>
+<script src="/static/js/cameras.js"></script>
+<script src="/static/js/modals.js"></script>
+<script src="/static/js/playback.js"></script>
+</body>
+</html>
