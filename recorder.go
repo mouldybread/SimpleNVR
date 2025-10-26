@@ -1,239 +1,111 @@
 package main
 
 import (
-    "context"
-    "fmt"
-    "log"
-    "net/url"
-    "os"
-    "path/filepath"
-    "time"
-
-    "github.com/bluenviron/gortsplib/v4"
-    "github.com/bluenviron/gortsplib/v4/pkg/base"
-    "github.com/bluenviron/gortsplib/v4/pkg/format"
-    "github.com/bluenviron/mediacommon/pkg/codecs/h264"
-    "github.com/deepch/vdk/av"
-    "github.com/deepch/vdk/codec/h264parser"
-    "github.com/deepch/vdk/format/mp4"
-    "github.com/pion/rtp"
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"time"
 )
 
 func recordCamera(ctx context.Context, cam *Camera) {
-    log.Printf("Starting recording for %s (retention: %d days)", cam.Name, cam.RetentionDays)
-
-    for {
-        select {
-        case <-ctx.Done():
-            log.Printf("Stopped recording for %s", cam.Name)
-            return
-        default:
-            err := recordSegment(ctx, cam)
-            if err != nil {
-                log.Printf("Recording error for %s: %v. Retrying in 5s...", cam.Name, err)
-                select {
-                case <-ctx.Done():
-                    return
-                case <-time.After(5 * time.Second):
-                    continue
-                }
-            }
-        }
-    }
+	log.Printf("Starting recording for %s (retention: %d days)", cam.Name, cam.RetentionDays)
+	for {
+		select {
+		case <-ctx.Done():
+			log.Printf("Stopped recording for %s", cam.Name)
+			return
+		default:
+			err := recordSegment(ctx, cam)
+			if err != nil {
+				log.Printf("Recording error for %s: %v. Retrying in 5s...", cam.Name, err)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(5 * time.Second):
+					continue
+				}
+			}
+		}
+	}
 }
 
 func recordSegment(ctx context.Context, cam *Camera) error {
-    u, err := url.Parse(cam.RTSPUrl)
-    if err != nil {
-        return fmt.Errorf("invalid RTSP URL: %w", err)
-    }
+	now := time.Now()
+	filename := fmt.Sprintf("%s_%s.mp4",
+		now.Format("20060102_150405"),
+		sanitizeFilename(cam.Name))
+	filePath := filepath.Join(cam.RecordDir, filename)
 
-    client := &gortsplib.Client{}
+	tempPath := filePath + ".tmp"
 
-    err = client.Start(u.Scheme, u.Host)
-    if err != nil {
-        return fmt.Errorf("failed to connect: %w", err)
-    }
-    defer client.Close()
+	segmentCtx, cancel := context.WithTimeout(ctx, 10*time.Minute+5*time.Second)
+	defer cancel()
 
-    baseURL := &base.URL{
-        Scheme: u.Scheme,
-        Host:   u.Host,
-        Path:   u.Path,
-    }
+	log.Printf("Starting segment for %s: %s", cam.Name, filename)
 
-    session, _, err := client.Describe(baseURL)
-    if err != nil {
-        return fmt.Errorf("failed to describe: %w", err)
-    }
+	cmd := exec.CommandContext(segmentCtx, "ffmpeg",
+		"-rtsp_transport", "tcp",
+		"-i", cam.RTSPUrl,
+		"-t", "600",
+		"-c", "copy",
+		"-movflags", "+faststart",
+		"-f", "mp4",
+		"-y",
+		tempPath,
+	)
 
-    var h264Format *format.H264
-    videoMedia := session.FindFormat(&h264Format)
-    if videoMedia == nil {
-        return fmt.Errorf("no H264 track found")
-    }
+	output, err := cmd.CombinedOutput()
 
-    _, err = client.Setup(session.BaseURL, videoMedia, 0, 0)
-    if err != nil {
-        return fmt.Errorf("failed to setup: %w", err)
-    }
+	if ctx.Err() == context.Canceled {
+		os.Remove(tempPath)
+		return fmt.Errorf("recording cancelled")
+	}
 
-    _, err = client.Play(nil)
-    if err != nil {
-        return fmt.Errorf("failed to play: %w", err)
-    }
+	if segmentCtx.Err() == context.DeadlineExceeded {
+		log.Printf("FFmpeg timeout for %s (this shouldn't happen): %s", cam.Name, string(output))
+		os.Remove(tempPath)
+		return fmt.Errorf("segment timeout")
+	}
 
-    now := time.Now()
-    filename := fmt.Sprintf("%s_%s.mp4",
-        now.Format("20060102_150405"),
-        sanitizeFilename(cam.Name))
-    filePath := filepath.Join(cam.RecordDir, filename)
+	if err != nil {
+		log.Printf("FFmpeg error for %s: %v\nOutput: %s", cam.Name, err, string(output))
+		os.Remove(tempPath)
+		return fmt.Errorf("ffmpeg error: %w", err)
+	}
 
-    file, err := os.Create(filePath)
-    if err != nil {
-        return fmt.Errorf("failed to create file: %w", err)
-    }
-    defer file.Close()
+	err = os.Rename(tempPath, filePath)
+	if err != nil {
+		log.Printf("Failed to rename temp file for %s: %v", cam.Name, err)
+		os.Remove(tempPath)
+		return fmt.Errorf("failed to finalize recording: %w", err)
+	}
 
-    muxer := mp4.NewMuxer(file)
-    var videoTrackID int8 = -1
-    var sps, pps []byte
-    var codecData h264parser.CodecData
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to stat recording: %w", err)
+	}
 
-    segmentDuration := 10 * time.Minute
-    startTime := time.Now()
-    firstPacketTime := time.Time{}
+	if info.Size() < 1000 {
+		log.Printf("Warning: Recording file for %s is suspiciously small: %d bytes", cam.Name, info.Size())
+		os.Remove(filePath)
+		return fmt.Errorf("recording file too small")
+	}
 
-    // Use RTPDepacketizer
-    rtpDec, err := h264Format.CreateDecoder()
-    if err != nil {
-        return fmt.Errorf("failed to create decoder: %w", err)
-    }
-
-    client.OnPacketRTP(videoMedia, h264Format, func(pkt *rtp.Packet) {
-        if time.Since(startTime) >= segmentDuration {
-            return
-        }
-
-        select {
-        case <-ctx.Done():
-            return
-        default:
-        }
-
-        // Decode packet
-        nalus, err := rtpDec.Decode(pkt)
-        if err != nil {
-            return
-        }
-
-        for _, nalu := range nalus {
-            typ := h264.NALUType(nalu[0] & 0x1F)
-            switch typ {
-            case h264.NALUTypeSPS:
-                sps = append([]byte{}, nalu...)
-            case h264.NALUTypePPS:
-                pps = append([]byte{}, nalu...)
-            }
-        }
-
-        if videoTrackID == -1 && len(sps) > 0 && len(pps) > 0 {
-            codecData, err = h264parser.NewCodecDataFromSPSAndPPS(sps, pps)
-            if err != nil {
-                log.Printf("Failed to parse codec data: %v", err)
-                return
-            }
-
-            streams := []av.CodecData{codecData}
-            err = muxer.WriteHeader(streams)
-            if err != nil {
-                log.Printf("Failed to write header: %v", err)
-                return
-            }
-            videoTrackID = 0
-            firstPacketTime = time.Now()
-        }
-
-        if videoTrackID != -1 {
-            timestamp := time.Since(firstPacketTime)
-
-            for _, nalu := range nalus {
-                packet := av.Packet{
-                    Idx:        videoTrackID,
-                    Data:       nalu,
-                    Time:       timestamp,
-                    IsKeyFrame: h264.NALUType(nalu[0]&0x1F) == h264.NALUTypeIDR,
-                }
-
-                err = muxer.WritePacket(packet)
-                if err != nil {
-                    log.Printf("Write packet error: %v", err)
-                    return
-                }
-            }
-        }
-    })
-
-    select {
-    case <-ctx.Done():
-        if videoTrackID != -1 {
-            muxer.WriteTrailer()
-        }
-        return nil
-    case <-time.After(segmentDuration):
-        if videoTrackID != -1 {
-            muxer.WriteTrailer()
-        }
-        log.Printf("Completed 10-minute segment for %s: %s", cam.Name, filename)
-        return nil
-    }
+	log.Printf("Completed segment for %s: %s (%.2f MB)", cam.Name, filename, float64(info.Size())/(1024*1024))
+	return nil
 }
 
 func sanitizeFilename(name string) string {
-    safe := ""
-    for _, r := range name {
-        if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-            safe += string(r)
-        } else {
-            safe += "_"
-        }
-    }
-    return safe
-}
-
-func cleanupRoutine() {
-    ticker := time.NewTicker(5 * time.Minute)
-    defer ticker.Stop()
-
-    for range ticker.C {
-        nvr.mu.RLock()
-        for _, cam := range nvr.cameras {
-            retentionDays := cam.RetentionDays
-            if retentionDays == 0 {
-                retentionDays = 7
-            }
-            retention := time.Duration(retentionDays) * 24 * time.Hour
-            cleanupOldRecordings(cam.RecordDir, retention)
-        }
-        nvr.mu.RUnlock()
-    }
-}
-
-func cleanupOldRecordings(dir string, retention time.Duration) {
-    files, err := filepath.Glob(filepath.Join(dir, "*.mp4"))
-    if err != nil {
-        return
-    }
-
-    cutoff := time.Now().Add(-retention)
-    for _, file := range files {
-        info, err := os.Stat(file)
-        if err != nil {
-            continue
-        }
-        if info.ModTime().Before(cutoff) {
-            os.Remove(file)
-            log.Printf("Cleaned up old recording: %s (older than %v)", file, retention)
-        }
-    }
+	safe := ""
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			safe += string(r)
+		} else {
+			safe += "_"
+		}
+	}
+	return safe
 }
