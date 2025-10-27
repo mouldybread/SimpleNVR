@@ -1,11 +1,12 @@
 {{ range . }}
-<div class="camera-box" draggable="true" data-camera-id="{{ .ID }}">
-    <div class="drag-handle">⋮⋮</div>
+<div class="camera-box" data-camera-id="{{ .ID }}">
+    <div class="drag-handle" draggable="true">⋮⋮</div>
     <div class="camera-details">
         <div class="camera-title">{{ .Name }}</div>
         <div class="camera-meta">
             <span class="camera-rtsp">RTSP: {{ .RTSPUrl }}</span>
             <span class="camera-folder">Folder: {{ .RecordDir }}</span>
+            <span class="camera-disk-usage">Disk Usage: {{ .DiskUsage }}</span>
             <span class="camera-status">Status: <span class="{{ if .IsRecording }}status-recording{{ else }}status-idle{{ end }}">{{ if .IsRecording }}Recording{{ else }}Idle{{ end }}</span></span>
             <span class="recording-mode">Recording Mode: <span>{{ .ModeDisplay }}</span></span>
         </div>
@@ -24,6 +25,7 @@
         <button onclick="startRecording('{{ .ID }}')" class="btn btn-start">Start Recording</button>
         {{ end }}
         <button onclick="showModeModal('{{ .ID }}', '{{ .RecordingMode }}')" class="btn btn-mode">Change Mode</button>
+        <button onclick="clearCameraEvents('{{ .Name }}')" class="btn btn-warning">Clear Events</button>
         <button onclick="removeCamera('{{ .ID }}')" class="btn btn-remove">Remove</button>
     </div>
 </div>

@@ -7,6 +7,7 @@ let deleteConfirmCount = 0;
 function openDeleteAllRecordingsModal() {
     // Generate random 4-digit code
     deleteCode = Math.floor(1000 + Math.random() * 9000).toString();
+    
     document.getElementById('delete-code').textContent = deleteCode;
     document.getElementById('delete-code-input').value = '';
     document.getElementById('delete-recordings-btn').disabled = true;
@@ -86,7 +87,7 @@ function deleteAllRecordings() {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            alert(`Successfully deleted ${data.deleted} recordings (${data.size_mb.toFixed(2)} MB)`);
+            showSuccess(`Successfully deleted ${data.deleted} recordings (${data.size_mb.toFixed(2)} MB freed)`);
             closeDeleteRecordingsModal();
             
             // Reload timeline if on playback section
@@ -94,12 +95,12 @@ function deleteAllRecordings() {
                 loadTimelineData();
             }
         } else {
-            alert('Failed to delete recordings');
+            showError('Failed to delete recordings');
         }
     })
     .catch(error => {
         console.error('Error deleting recordings:', error);
-        alert('Failed to delete recordings');
+        showError('Failed to delete recordings');
     })
     .finally(() => {
         btn.disabled = false;

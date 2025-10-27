@@ -1,6 +1,5 @@
-// Enhanced Timeline-based Playback System
-// FIXED: All issues + Firefox compatibility + Download feature with camera selection
-// FIXED: Stable color mapping - colors persist across camera reordering
+// Enhanced Timeline-based Playback System with Event Markers
+// FIXED: All issues + Firefox compatibility + Download feature + Event visualization
 
 // State
 let selectedCameras = [];
@@ -24,6 +23,24 @@ let downloadStartTime = null;
 let downloadEndTime = null;
 let downloadCameras = [];
 
+// Event state
+let timelineEvents = [];
+let eventTooltip = null;
+
+// Event type to emoji mapping
+const EVENT_ICONS = {
+    'Motion Detected': '👁️',
+    'Person Detected': '👤',
+    'Vehicle Detected': '🚗',
+    'Intrusion': '⚠️',
+    'Loitering': '⏱️',
+    'Object Removed': '📦',
+    'Object Left Behind': '🎒',
+    'Sound Alert': '🔔',
+    'Line Crossing': '➡️',
+    'Tamper Alert': '🚨'
+};
+
 // Camera color mapping for UI consistency - stable colors by camera ID
 let cameraColorMap = {};
 const COLORS = [
@@ -46,8 +63,8 @@ const COLORS = [
 ];
 
 // Timeline zoom state
-let timelineZoomLevel = 1.0; // 1.0 = full 24 hours, 2.0 = 12 hours, etc.
-let timelineOffset = 0; // Hours offset from start of day
+let timelineZoomLevel = 1.0;
+let timelineOffset = 0;
 
 let nextColorIndex = 0;
 
@@ -65,7 +82,21 @@ function initializeTimelinePlayback() {
     setupDatePicker();
     setupKeyboardShortcuts();
     setupTimelineControls();
-    setupTimelineZoom(); 
+    setupTimelineZoom();
+}
+
+function loadTimelineEvents(date) {
+    // Events are loaded globally from events.js (allEvents variable)
+    // Filter events for the selected date
+    if (typeof allEvents !== 'undefined' && allEvents) {
+        timelineEvents = allEvents.filter(event => {
+            const eventDate = new Date(event.start_time).toISOString().split('T')[0];
+            return eventDate === date;
+        });
+        console.log(`Loaded ${timelineEvents.length} events for ${date}`);
+    } else {
+        timelineEvents = [];
+    }
 }
 
 function loadTimelineCameras() {
@@ -279,6 +310,9 @@ function performLoadTimelineData() {
     console.log('Current date object:', currentDate);
     console.log('Querying for date:', dateStr);
 
+    // Load events for this date
+    loadTimelineEvents(dateStr);
+
     fetch(`/api/timeline/recordings?date=${dateStr}`)
         .then(response => response.json())
         .then(segments => {
@@ -308,7 +342,7 @@ function renderTimeline() {
 
     const ctx = canvas.getContext('2d');
     const width = canvas.width = canvas.offsetWidth;
-    const height = canvas.height = 80;
+    const height = canvas.height = 85; // Increased from 80 to 85
 
     ctx.fillStyle = '#1a1a1a';
     ctx.fillRect(0, 0, width, height);
@@ -326,22 +360,18 @@ function renderTimeline() {
     let majorStep, minorStep, showMinutes;
     
     if (visibleHours >= 12) {
-        // Full day or half day: hourly markers
         majorStep = 2;
         minorStep = 1;
         showMinutes = false;
     } else if (visibleHours >= 4) {
-        // 4-12 hours: hourly major, 30-min minor
         majorStep = 1;
         minorStep = 0.5;
         showMinutes = false;
     } else if (visibleHours >= 2) {
-        // 2-4 hours: 30-min major, 10-min minor
         majorStep = 0.5;
         minorStep = 10/60;
         showMinutes = true;
     } else {
-        // < 2 hours: 10-min major, 1-min minor
         majorStep = 10/60;
         minorStep = 1/60;
         showMinutes = true;
@@ -394,8 +424,53 @@ function renderTimeline() {
         ctx.fillText(label, x + 2, 12);
     }
 
+    // Draw event markers (compact design)
+    if (timelineEvents && timelineEvents.length > 0) {
+        const eventRowHeight = 18;
+        const eventY = 5;
+        
+        timelineEvents.forEach(event => {
+            const eventTime = new Date(event.start_time);
+            const eventHours = eventTime.getHours() + eventTime.getMinutes() / 60 + eventTime.getSeconds() / 3600;
+            
+            // Check if event is in visible time range
+            if (eventHours < startHour || eventHours > endHour) return;
+            
+            // Calculate X position with zoom
+            const x = ((eventHours - startHour) / visibleHours) * width;
+            
+            // Draw subtle vertical line
+            ctx.strokeStyle = 'rgba(76, 175, 80, 0.3)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(x, eventRowHeight + 5);
+            ctx.lineTo(x, height);
+            ctx.stroke();
+            
+            // Draw event marker circle
+            ctx.fillStyle = '#4CAF50';
+            ctx.beginPath();
+            ctx.arc(x, eventY + eventRowHeight / 2, 6, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Draw icon (text emoji)
+            const icon = EVENT_ICONS[event.label] || '⚡';
+            ctx.font = '10px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillStyle = '#fff';
+            ctx.fillText(icon, x, eventY + eventRowHeight / 2);
+            
+            // Store event position for click detection
+            event._canvasX = x;
+            event._canvasY = eventY + eventRowHeight / 2;
+            event._radius = 6;
+        });
+    }
+
+    // Draw camera segments
     const camerasInView = [...new Set(timelineSegments.map(s => s.camera_id))];
-    const blockHeight = (height - 20) / Math.max(camerasInView.length, 1);
+    const blockHeight = (height - 25) / Math.max(camerasInView.length, 1); // Adjusted for event row
 
     camerasInView.forEach((cameraId, idx) => {
         const segments = timelineSegments.filter(s => s.camera_id === cameraId);
@@ -412,7 +487,7 @@ function renderTimeline() {
             if (segEndHour >= startHour && segStartHour <= endHour) {
                 const x1 = Math.max(0, ((segStartHour - startHour) / visibleHours) * width);
                 const x2 = Math.min(width, ((segEndHour - startHour) / visibleHours) * width);
-                const y = 20 + (idx * blockHeight);
+                const y = 25 + (idx * blockHeight); // Adjusted for event row
 
                 ctx.fillStyle = color;
                 ctx.fillRect(x1, y, x2 - x1, blockHeight - 2);
@@ -420,6 +495,7 @@ function renderTimeline() {
         });
     });
 
+    // Draw playhead
     if (currentTimePosition) {
         const date = new Date(currentTimePosition);
         const hour = date.getHours() + date.getMinutes() / 60 + date.getSeconds() / 3600;
@@ -438,7 +514,6 @@ function renderTimeline() {
         }
     }
 }
-
 
 function setupTimelineZoom() {
     const canvas = document.getElementById('timeline-canvas');
@@ -468,26 +543,83 @@ function setupTimelineZoom() {
     }, { passive: false });
 }
 
-
 function setupTimelineControls() {
     const canvas = document.getElementById('timeline-canvas');
     if (!canvas) return;
 
-canvas.onclick = (e) => {
-    const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const visibleHours = 24 / timelineZoomLevel;
-    const clickedHour = (x / rect.width) * visibleHours + timelineOffset;
+    // Click handler with event detection
+    canvas.addEventListener('click', (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const clickX = e.offsetX || e.clientX - rect.left;
+        const clickY = e.offsetY || e.clientY - rect.top;
+        
+        // Check if clicked on an event marker first
+        if (timelineEvents) {
+            for (const event of timelineEvents) {
+                if (event._canvasX && event._canvasY) {
+                    const dx = clickX - event._canvasX;
+                    const dy = clickY - event._canvasY;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    
+                    if (distance <= event._radius + 5) {
+                        // Clicked on event marker - seek to event time
+                        const eventTime = new Date(event.start_time);
+                        seekToTime(eventTime);
+                        return;
+                    }
+                }
+            }
+        }
+        
+        // Regular timeline click
+        const visibleHours = 24 / timelineZoomLevel;
+        const clickedHour = (clickX / rect.width) * visibleHours + timelineOffset;
 
-    const targetTime = new Date(currentDate);
-    targetTime.setHours(Math.floor(clickedHour));
-    targetTime.setMinutes((clickedHour % 1) * 60);
-    targetTime.setSeconds(0);
+        const targetTime = new Date(currentDate);
+        targetTime.setHours(Math.floor(clickedHour));
+        targetTime.setMinutes((clickedHour % 1) * 60);
+        targetTime.setSeconds(0);
 
-    console.log('Timeline clicked at hour:', clickedHour, 'Target time:', targetTime);
-    seekToTime(targetTime);
-};
+        console.log('Timeline clicked at hour:', clickedHour, 'Target time:', targetTime);
+        seekToTime(targetTime);
+    });
 
+    // Hover handler for event tooltips
+    canvas.addEventListener('mousemove', (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const mouseX = e.offsetX || e.clientX - rect.left;
+        const mouseY = e.offsetY || e.clientY - rect.top;
+        
+        let hoveredEvent = null;
+        
+        // Check if hovering over an event marker
+        if (timelineEvents) {
+            for (const event of timelineEvents) {
+                if (event._canvasX && event._canvasY) {
+                    const dx = mouseX - event._canvasX;
+                    const dy = mouseY - event._canvasY;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    
+                    if (distance <= event._radius + 5) {
+                        hoveredEvent = event;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        if (hoveredEvent) {
+            canvas.style.cursor = 'pointer';
+            showEventTooltip(hoveredEvent, e.clientX, e.clientY);
+        } else {
+            canvas.style.cursor = 'crosshair';
+            hideEventTooltip();
+        }
+    });
+
+    canvas.addEventListener('mouseleave', () => {
+        hideEventTooltip();
+    });
 
     const playPauseBtn = document.getElementById('play-pause');
     const prevBtn = document.getElementById('prev-segment');
@@ -520,6 +652,52 @@ canvas.onclick = (e) => {
             }
         }, 200);
     });
+}
+
+function showEventTooltip(event, x, y) {
+    hideEventTooltip();
+    
+    const tooltip = document.createElement('div');
+    tooltip.id = 'event-tooltip';
+    tooltip.style.position = 'fixed';
+    tooltip.style.left = (x + 10) + 'px';
+    tooltip.style.top = (y + 10) + 'px';
+    tooltip.style.background = 'rgba(0, 0, 0, 0.9)';
+    tooltip.style.color = '#fff';
+    tooltip.style.padding = '8px 12px';
+    tooltip.style.borderRadius = '6px';
+    tooltip.style.fontSize = '12px';
+    tooltip.style.zIndex = '10000';
+    tooltip.style.pointerEvents = 'none';
+    tooltip.style.maxWidth = '250px';
+    tooltip.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
+    
+    const eventTime = new Date(event.start_time);
+    const timeStr = eventTime.toLocaleTimeString();
+    
+    tooltip.innerHTML = `
+        <div style="font-weight: bold; color: #4CAF50; margin-bottom: 4px;">
+            ${EVENT_ICONS[event.label] || '⚡'} ${event.label}
+        </div>
+        <div style="font-size: 11px; color: #ccc;">
+            📹 ${event.camera_name}<br>
+            🕐 ${timeStr}<br>
+            ⏱️ ${event.duration_seconds || event.duration}s
+        </div>
+        <div style="font-size: 10px; color: #888; margin-top: 4px; font-style: italic;">
+            Click to view recording
+        </div>
+    `;
+    
+    document.body.appendChild(tooltip);
+    eventTooltip = tooltip;
+}
+
+function hideEventTooltip() {
+    if (eventTooltip) {
+        eventTooltip.remove();
+        eventTooltip = null;
+    }
 }
 
 function seekToTime(time) {
@@ -728,6 +906,7 @@ function toggleMuteAll() {
         btn.textContent = allMuted ? '🔊 Unmute All' : '🔇 Mute All';
     }
 }
+
 function updateVideoGrid() {
     const container = document.getElementById('video-grid');
     if (!container) return;
@@ -884,7 +1063,7 @@ function setupKeyboardShortcuts() {
 // Download Modal Functions
 function openDownloadModal() {
     if (!currentTimePosition) {
-        alert('Please select a time on the timeline first');
+        showError('Please select a time on the timeline first');
         return;
     }
 
@@ -904,6 +1083,7 @@ function openDownloadModal() {
 
     modal.style.display = 'block';
 }
+
 
 function closeDownloadModal() {
     const modal = document.getElementById('download-modal');
@@ -978,7 +1158,7 @@ function toggleDownloadCamera(cameraId) {
 
 function startDownload() {
     if (downloadCameras.length === 0) {
-        alert('Please select at least one camera to download');
+        showError('Please select at least one camera to download');
         return;
     }
 
@@ -1001,8 +1181,10 @@ function startDownload() {
         document.body.removeChild(a);
     });
 
+    showSuccess('Download started for ' + downloadCameras.length + ' camera(s)');
     closeDownloadModal();
 }
+
 
 // Initialize on page load
 if (document.readyState === 'loading') {

@@ -46,7 +46,7 @@
                         <button id="download-btn" class="btn btn-small">⬇ Download</button>
                     </div>
                 </div>
-                
+                <button onclick="openEventsModal()" style="background: none; border: none; color: #4CAF50; cursor: pointer; font-size: 24px; padding: 5px; flex-shrink: 0;" title="View Events">📋</button>
                 <button onclick="openCameraSettings();" style="background: none; border: none; color: #4CAF50; cursor: pointer; font-size: 24px; padding: 5px; flex-shrink: 0;" title="Camera Settings">
                     ⚙️
                 </button>
@@ -99,19 +99,21 @@
                     </form>
                 </div>
 
-                <div class="config-subsection">
-                    <h3>⚙️ Bulk Operations</h3>
-                    <div class="bulk-ops">
-                        <div class="form-group">
-                            <label for="retention-all">Retention period for all cameras (days):</label>
-                            <input type="number" id="retention-all" min="1" max="365" value="7">
-                            <button onclick="setAllRetention()" class="btn">Set Retention</button>
-                        </div>
-                        <button onclick="openDeleteAllCamerasModal()" class="btn btn-danger">Remove All Cameras</button>
-                        <button onclick="openDeleteAllRecordingsModal()" class="btn btn-danger">Delete All Recordings</button>
-                        <button onclick="cleanupOrphanedRecordings()" class="btn btn-danger">Cleanup Orphaned Recordings</button>
-                    </div>
-                </div>
+<div class="config-subsection">
+  <h3>Bulk Operations</h3>
+  <div class="bulk-ops">
+    <div class="form-group">
+      <label for="retention-all">Retention period (days):</label>
+      <input type="number" id="retention-all" min="1" max="365" value="7">
+      <button onclick="setAllRetention()" class="btn">Set Retention</button>
+    </div>
+    <button onclick="openDeleteAllCamerasModal()" class="btn btn-danger">Remove All Cameras</button>
+    <button onclick="openDeleteAllRecordingsModal()" class="btn btn-danger">Delete All Recordings</button>
+    <button onclick="openClearEventsModal()" class="btn btn-danger">Clear All Events</button>
+    <button onclick="cleanupOrphanedRecordings()" class="btn btn-danger">Cleanup Orphaned Recordings</button>
+  </div>
+</div>
+
                 <!-- Cleanup Results Display -->
                 <div id="cleanup-results" style="display: none; background: #1f1f1f; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #4CAF50;">
                     <h4 style="margin: 0 0 10px 0; color: #4CAF50;">✓ Cleanup Complete</h4>
@@ -214,11 +216,30 @@
         </div>
     </div>
 
+   <!-- Clear All Events Modal -->
+<div id="clear-events-modal" class="modal" style="z-index: 10001;">
+  <div class="modal-content small-modal" style="width: fit-content !important; max-width: 500px !important; height: auto !important; padding: 20px;">
+    <span class="close" onclick="closeClearEventsModal()">&times;</span>
+    <h2>Clear All Events</h2>
+    <p style="color: #f44336; margin: 10px 0;">This will permanently delete ALL events from ALL cameras!</p>
+    <p style="margin: 10px 0;">To confirm, enter the code: <strong id="clear-events-code" style="color: #4CAF50; font-size: 20px;"></strong></p>
+    <div class="form-group">
+      <input type="text" id="clear-events-code-input" placeholder="Enter code" maxlength="4" style="text-align: center; font-size: 18px; width: 80%; padding: 10px;">
+    </div>
+    <button id="clear-events-btn" onclick="clearAllEvents()" class="btn btn-danger" disabled style="width: 100%; padding: 12px; margin-top: 10px;">Clear All Events</button>
+  </div>
+</div>
+<!-- Toast Notification Container -->
+<div id="toast-container"></div>
+
     <!-- Load JavaScript modules -->
     <script src="/static/js/core.js"></script>
     <script src="/static/js/cameras.js"></script>
     <script src="/static/js/modals.js"></script>
+    <script src="/static/js/events.js"></script>
     <script src="/static/js/playback.js"></script>
     <script src="/static/js/recordings.js"></script>
+    <script src="/static/js/toast.js"></script>
+
 </body>
 </html>

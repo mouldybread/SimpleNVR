@@ -193,6 +193,8 @@ func main() {
 	// Event routes
 	http.HandleFunc("/api/events/trigger", triggerEventHandler)
 	http.HandleFunc("/api/events/list", listEventsHandler)
+	http.HandleFunc("/api/events/clear-all", clearAllEventsHandler)
+	http.HandleFunc("/api/events/clear-camera", clearCameraEventsHandler)
 
 	// Cleanup routes
 	http.HandleFunc("/api/recordings/cleanup-orphaned", cleanupOrphanedRecordingsHandler)

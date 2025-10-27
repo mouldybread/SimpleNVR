@@ -56,11 +56,8 @@ func triggerEventHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if camera is in event-based mode
-	if targetCamera.RecordingMode != ModeEventBased {
-		http.Error(w, "Camera is not in event-based recording mode", http.StatusBadRequest)
-		return
-	}
+	// REMOVED: Recording mode check - events can be logged for any camera
+	// Events are now universal logging, independent of recording mode
 
 	// Create event
 	event := Event{
@@ -81,12 +78,13 @@ func triggerEventHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Failed to save events: %v", err)
 	}
 
-	// Trigger recording if camera has buffer manager
-	if targetCamera.bufferManager != nil {
+	// Trigger recording ONLY if camera is in event-based mode AND has buffer manager
+	if targetCamera.RecordingMode == ModeEventBased && targetCamera.bufferManager != nil {
 		targetCamera.bufferManager.TriggerEvent(event)
+		log.Printf("Event triggered recording for camera %s", targetCamera.Name)
 	}
 
-	log.Printf("Event triggered: %s on camera %s at %s (duration: %ds)",
+	log.Printf("Event logged: %s on camera %s at %s (duration: %ds)",
 		event.Label, event.CameraName, startTime.Format(time.RFC3339), event.Duration)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -110,11 +108,96 @@ func listEventsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	nvr.mu.RUnlock()
 
-	// Sort by start time descending
+	// Sort by start time descending (most recent first)
 	sort.Slice(events, func(i, j int) bool {
 		return events[i].StartTime.After(events[j].StartTime)
 	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(events)
+}
+
+// clearAllEventsHandler - Clear all events
+func clearAllEventsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	nvr.mu.Lock()
+	count := len(nvr.events)
+	nvr.events = []Event{}
+	nvr.mu.Unlock()
+
+	// Save configuration
+	if err := nvr.save(); err != nil {
+		log.Printf("Failed to save events after clear: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "Failed to save",
+		})
+		return
+	}
+
+	log.Printf("Cleared all events (%d events deleted)", count)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"count":   count,
+	})
+}
+
+// clearCameraEventsHandler - Clear events for a specific camera
+func clearCameraEventsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		CameraName string `json:"camera_name"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	if req.CameraName == "" {
+		http.Error(w, "camera_name required", http.StatusBadRequest)
+		return
+	}
+
+	nvr.mu.Lock()
+	var filteredEvents []Event
+	deletedCount := 0
+	for _, event := range nvr.events {
+		if event.CameraName != req.CameraName {
+			filteredEvents = append(filteredEvents, event)
+		} else {
+			deletedCount++
+		}
+	}
+	nvr.events = filteredEvents
+	nvr.mu.Unlock()
+
+	if err := nvr.save(); err != nil {
+		log.Printf("Failed to save events after clearing camera events: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "Failed to save",
+		})
+		return
+	}
+
+	log.Printf("Cleared %d events for camera: %s", deletedCount, req.CameraName)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"count":   deletedCount,
+	})
 }

@@ -12,43 +12,6 @@ import (
 	"time"
 )
 
-// camerasHandler - Render camera list template
-func camerasHandler(w http.ResponseWriter, r *http.Request) {
-	nvr.mu.RLock()
-	defer nvr.mu.RUnlock()
-
-	type CameraView struct {
-		Camera
-		RetentionDisplay int
-		ModeDisplay      string
-	}
-
-	var cameras []CameraView
-	for _, id := range nvr.cameraOrder {
-		cam := nvr.cameras[id]
-		retentionDays := cam.RetentionDays
-		if retentionDays == 0 {
-			retentionDays = 7
-		}
-
-		modeDisplay := "Continuous"
-		if cam.RecordingMode == ModeEventBased {
-			modeDisplay = "Event Based"
-		} else if cam.RecordingMode == ModeNoRecording {
-			modeDisplay = "No Recording"
-		}
-
-		cameras = append(cameras, CameraView{
-			Camera:           *cam,
-			RetentionDisplay: retentionDays,
-			ModeDisplay:      modeDisplay,
-		})
-	}
-
-	if err := templates.ExecuteTemplate(w, "cameras.html", cameras); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
-}
 
 // addCameraHandler - Add a new camera manually
 func addCameraHandler(w http.ResponseWriter, r *http.Request) {
@@ -291,6 +254,7 @@ func updateRecordingModeHandler(w http.ResponseWriter, r *http.Request) {
 	camerasHandler(w, r)
 }
 
+
 // scanGo2rtcHandler - Scan go2rtc for available streams and add them
 func scanGo2rtcHandler(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
@@ -311,9 +275,30 @@ func scanGo2rtcHandler(w http.ResponseWriter, r *http.Request) {
 	json.Unmarshal(body, &streams)
 
 	now := time.Now()
+	added := 0
+	skipped := 0
+
 	for streamName := range streams {
-		id := generateID(streamName, now)
 		rtspUrl := fmt.Sprintf("rtsp://go2rtc:8554/%s", streamName)
+		
+		// Check if camera with this RTSP URL already exists
+		nvr.mu.RLock()
+		exists := false
+		for _, cam := range nvr.cameras {
+			if cam.RTSPUrl == rtspUrl {
+				exists = true
+				break
+			}
+		}
+		nvr.mu.RUnlock()
+
+		if exists {
+			log.Printf("Skipping camera %s - URL already exists: %s", streamName, rtspUrl)
+			skipped++
+			continue
+		}
+
+		id := generateID(streamName, now)
 		recordDir := filepath.Join("/recordings", id)
 		os.MkdirAll(recordDir, 0755)
 
@@ -333,7 +318,10 @@ func scanGo2rtcHandler(w http.ResponseWriter, r *http.Request) {
 		nvr.mu.Unlock()
 
 		log.Printf("Auto-added camera from go2rtc: %s with %d day retention", streamName, cam.RetentionDays)
+		added++
 	}
+
+	log.Printf("Go2RTC scan complete: %d added, %d skipped", added, skipped)
 
 	if err := nvr.save(); err != nil {
 		log.Printf("Failed to save cameras: %v", err)
@@ -341,6 +329,7 @@ func scanGo2rtcHandler(w http.ResponseWriter, r *http.Request) {
 
 	camerasHandler(w, r)
 }
+
 
 // startRecordingHandler - Start recording for a camera
 func startRecordingHandler(w http.ResponseWriter, r *http.Request) {
@@ -434,4 +423,83 @@ func reorderCamerasHandler(w http.ResponseWriter, r *http.Request) {
 	
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+// camerasHandler - Render camera list template
+func camerasHandler(w http.ResponseWriter, r *http.Request) {
+	nvr.mu.RLock()
+	defer nvr.mu.RUnlock()
+
+	type CameraView struct {
+		Camera
+		RetentionDisplay int
+		ModeDisplay      string
+		DiskUsage        string  // NEW: Disk space used
+	}
+
+	var cameras []CameraView
+	for _, id := range nvr.cameraOrder {
+		cam := nvr.cameras[id]
+		retentionDays := cam.RetentionDays
+		if retentionDays == 0 {
+			retentionDays = 7
+		}
+
+		modeDisplay := "Continuous"
+		if cam.RecordingMode == ModeEventBased {
+			modeDisplay = "Event Based"
+		} else if cam.RecordingMode == ModeNoRecording {
+			modeDisplay = "No Recording"
+		}
+
+		// Calculate disk usage for this camera
+		diskUsage := calculateDiskUsage(cam.RecordDir)
+
+		cameras = append(cameras, CameraView{
+			Camera:           *cam,
+			RetentionDisplay: retentionDays,
+			ModeDisplay:      modeDisplay,
+			DiskUsage:        diskUsage,
+		})
+	}
+
+	if err := templates.ExecuteTemplate(w, "cameras.html", cameras); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// calculateDiskUsage - Calculate total disk space used by a camera's recordings
+func calculateDiskUsage(recordDir string) string {
+	var totalSize int64
+
+	// Walk through all files in the camera's recording directory
+	err := filepath.Walk(recordDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // Skip errors
+		}
+		if !info.IsDir() && filepath.Ext(path) == ".mp4" {
+			totalSize += info.Size()
+		}
+		return nil
+	})
+
+	if err != nil {
+		return "0 B"
+	}
+
+	// Format the size in human-readable format
+	return formatBytes(totalSize)
+}
+
+// formatBytes - Convert bytes to human-readable format
+func formatBytes(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }

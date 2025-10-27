@@ -544,14 +544,10 @@ button:hover { background: #45a049; }
 
 #timeline-canvas {
     width: 100%;
-    height: 80px;
-    cursor: pointer;
-    display: block;
+    height: 85px;
+    cursor: crosshair;
     border-radius: 4px;
-}
-
-#timeline-canvas:hover {
-    opacity: 0.9;
+    background: #1a1a1a;
 }
 
 .camera-selector {
@@ -700,6 +696,7 @@ button:hover { background: #45a049; }
     gap: 15px;
     align-items: flex-start;
 }
+
 /* Camera Box Styles - 50% width minus gap */
 .camera-box {
     background: #3a3a3a;
@@ -716,45 +713,41 @@ button:hover { background: #45a049; }
 
 /* Drag handle */
 .drag-handle {
-    cursor: grab;
-    color: #666;
-    font-size: 20px;
-    padding: 0 8px;
-    user-select: none;
-    display: flex;
-    align-items: center;
-}
-
-.drag-handle:active {
-    cursor: grabbing;
-}
-
-/* Dragging states */
-.camera-box[draggable="true"] {
     cursor: move;
+    user-select: none;
+    padding: 10px 5px;
+}
+
+.drag-handle:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
 }
 
 .camera-box.dragging {
     opacity: 0.5;
-    border: 2px dashed #4CAF50;
 }
 
 .camera-box.drag-over {
-    border-top: 3px solid #4CAF50;
-    margin-top: 3px;
+    border-top: 2px solid #4CAF50;
+    transform: translateY(5px);
+    transition: transform 0.2s ease;
 }
 
+.camera-box, .camera-box * {
+    pointer-events: auto !important;
+}
 
 .camera-details {
     flex: 1;
     min-width: 0;
 }
 
+/* Updated camera box text sizes to match bulk operations */
 .camera-title {
-    font-size: 16px;
+    font-size: 18px;
     font-weight: bold;
     color: #4CAF50;
-    margin: 0 0 6px 0;
+    margin: 0 0 8px 0;
 }
 
 .camera-meta {
@@ -766,9 +759,9 @@ button:hover { background: #45a049; }
 
 .camera-rtsp, .camera-folder, .camera-status {
     display: block;
-    font-size: 11px;
+
     color: #ccc;
-    line-height: 1.4;
+    line-height: 1.5;
 }
 
 .status-recording {
@@ -783,7 +776,7 @@ button:hover { background: #45a049; }
 .recording-mode {
     display: block;
     margin: 0;
-    font-size: 11px;
+ 
     color: #ccc;
 }
 
@@ -794,37 +787,37 @@ button:hover { background: #45a049; }
 
 .camera-retention {
     margin: 8px 0 0 0;
-    padding: 6px 8px;
+    padding: 8px 10px;
     background: #2a2a2a;
     border-radius: 4px;
-    font-size: 11px;
+
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     flex-wrap: nowrap;
 }
 
 .camera-retention label {
     margin: 0;
     white-space: nowrap;
-    font-size: 11px;
+
 }
 
 .camera-retention input {
-    width: 45px;
-    padding: 3px 5px;
+    width: 50px;
+    padding: 5px 6px;
     margin: 0;
-    font-size: 11px;
+
 }
 
 .camera-retention span {
-    font-size: 11px;
+    
 }
 
 .camera-retention .btn-update {
-    padding: 3px 10px;
+    padding: 5px 12px;
     margin: 0;
-    font-size: 11px;
+    font-size: 13px;
     white-space: nowrap;
 }
 
@@ -850,10 +843,10 @@ button:hover { background: #45a049; }
 }
 
 .camera-actions button {
-    width: 130px;
+    width: 140px;
     white-space: nowrap;
-    padding: 7px 10px;
-    font-size: 12px;
+    padding: 8px 12px;
+    font-size: 13px;
 }
 
 .btn-start {
@@ -886,6 +879,15 @@ button:hover { background: #45a049; }
 
 .btn-remove:hover {
     background: #da190b;
+}
+
+.btn-warning {
+    background-color: #ff9800;
+    color: white;
+}
+
+.btn-warning:hover {
+    background-color: #f57c00;
 }
 
 /* Responsive: Single column on smaller screens */
@@ -937,23 +939,23 @@ button:hover { background: #45a049; }
     .camera-selector {
         flex-direction: column;
     }
-    
+
     .camera-box {
         flex-direction: column;
     }
-    
+
     .camera-actions {
         flex-direction: row !important;
         flex-wrap: wrap;
         margin-left: 0;
     }
-    
+
     .camera-actions button {
         width: auto !important;
         flex: 1 1 calc(50% - 3px);
         min-width: 110px;
     }
-    
+
     .camera-retention {
         flex-wrap: wrap;
     }
@@ -983,17 +985,7 @@ button:hover { background: #45a049; }
 #fullscreen-wrapper .playback-controls {
     display: none;
 }
-.camera-box, .camera-box * {
-    pointer-events: auto !important;
-}
-.camera-box.drag-over {
-    transform: translateY(5px);
-    transition: transform 0.2s ease;
-}
 
-.camera-box.dragging {
-    opacity: 0.5 !important;
-}
 /* Timeline Camera Dropdown */
 .camera-dropdown {
     position: relative;
@@ -1070,4 +1062,130 @@ button:hover { background: #45a049; }
     cursor: pointer;
     margin: 0;
     user-select: none;
+}
+
+/* Events Modal Styles */
+.event-item {
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.event-item:hover {
+  transform: translateX(5px);
+  box-shadow: 0 2px 8px rgba(76, 175, 80, 0.3);
+}
+
+#events-filter-camera {
+  background: #333;
+  border: 1px solid #555;
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+#events-filter-camera:hover {
+  border-color: #4CAF50;
+}
+
+/* Disabled button styles */
+button:disabled,
+button[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background-color: #444 !important;
+  color: #666 !important;
+}
+
+button:disabled:hover,
+button[disabled]:hover {
+  background-color: #444 !important;
+  transform: none;
+}
+
+/* Pagination button specific styles */
+#events-pagination button:disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+.camera-disk-usage {
+    display: block;
+    color: #ccc;
+    line-height: 1.5;
+}
+
+.camera-disk-usage::before {
+    content: " ";
+}
+/* Toast Notification System */
+#toast-container {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 10000;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    pointer-events: none;
+}
+
+.toast {
+    background: #2a2a2a;
+    color: #fff;
+    padding: 15px 20px;
+    border-radius: 8px;
+    border-left: 4px solid #4CAF50;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    min-width: 300px;
+    max-width: 400px;
+    opacity: 0;
+    transform: translateX(400px);
+    transition: all 0.3s ease-in-out;
+    pointer-events: auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.toast.show {
+    opacity: 1;
+    transform: translateX(0);
+}
+
+.toast.error {
+    border-left-color: #f44336;
+}
+
+.toast.success {
+    border-left-color: #4CAF50;
+}
+
+.toast.warning {
+    border-left-color: #ff9800;
+}
+
+.toast.info {
+    border-left-color: #2196F3;
+}
+
+.toast-icon {
+    font-size: 24px;
+    flex-shrink: 0;
+}
+
+.toast-message {
+    flex: 1;
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+.toast-close {
+    cursor: pointer;
+    font-size: 20px;
+    color: #999;
+    flex-shrink: 0;
+    transition: color 0.2s;
+}
+
+.toast-close:hover {
+    color: #fff;
 }

@@ -117,7 +117,7 @@ function applyRetentionToAll() {
     const days = parseInt(input.value);
     
     if (isNaN(days) || days < 1) {
-        alert('Please enter a valid number of days (minimum 1)');
+        showError('Please enter a valid number of days (minimum 1)');
         return;
     }
     
@@ -131,10 +131,11 @@ function applyRetentionToAll() {
         document.getElementById('camera-list').innerHTML = html;
         updateSectionHeight('cameras-section');
         closeSetAllRetentionModal();
+        showSuccess('Retention period updated for all cameras');
     })
     .catch(error => {
         console.error('Error updating retention for all cameras:', error);
-        alert('Failed to update retention period');
+        showError('Failed to update retention period');
     });
 }
 
@@ -143,7 +144,7 @@ function updateRetention(cameraId) {
     const days = parseInt(input.value);
     
     if (isNaN(days) || days < 1) {
-        alert('Please enter a valid number of days (minimum 1)');
+        showError('Please enter a valid number of days (minimum 1)');
         return;
     }
     
@@ -156,10 +157,11 @@ function updateRetention(cameraId) {
     .then(html => {
         document.getElementById('camera-list').innerHTML = html;
         updateSectionHeight('cameras-section');
+        showSuccess('Retention period updated');
     })
     .catch(error => {
         console.error('Error updating retention:', error);
-        alert('Failed to update retention period');
+        showError('Failed to update retention period');
     });
 }
 
@@ -182,10 +184,11 @@ function removeCamera(cameraId) {
             document.getElementById('camera-list').innerHTML = html;
             updateSectionHeight('cameras-section');
             populatePlaybackCameras();
+            showSuccess('Camera removed successfully');
         })
         .catch(error => {
             console.error('Error removing camera:', error);
-            alert('Failed to remove camera');
+            showError('Failed to remove camera');
         });
     } else {
         button.textContent = 'Click Again to Confirm';
@@ -216,10 +219,11 @@ function confirmRemoveAll() {
             document.getElementById('camera-list').innerHTML = html;
             updateSectionHeight('cameras-section');
             populatePlaybackCameras();
+            showSuccess('All cameras removed successfully');
         })
         .catch(error => {
             console.error('Error removing all cameras:', error);
-            alert('Failed to remove all cameras');
+            showError('Failed to remove all cameras');
         });
     } else {
         removeAllConfirmed = true;

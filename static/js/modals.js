@@ -1,7 +1,9 @@
 // Modal management
 
+
 // Live Stream Modal
 let currentVideo = null;
+
 
 function viewLiveStream(cameraName) {
     let modal = document.getElementById('liveModal');
@@ -28,6 +30,7 @@ function viewLiveStream(cameraName) {
     currentVideo.src = '/api/stream/' + cameraName;
 }
 
+
 function createLiveModal() {
     const modalHtml = `
         <div id="liveModal" class="modal">
@@ -50,6 +53,7 @@ function createLiveModal() {
     };
 }
 
+
 function closeLiveModal() {
     const modal = document.getElementById('liveModal');
     if (!modal) return;
@@ -64,6 +68,7 @@ function closeLiveModal() {
     }
 }
 
+
 // Retention Modal (now per-camera)
 function showRetentionModal(cameraId, currentRetention) {
     const modal = document.getElementById('retention-modal');
@@ -75,6 +80,7 @@ function showRetentionModal(cameraId, currentRetention) {
     modal.style.display = 'block';
 }
 
+
 function closeRetentionModal() {
     const modal = document.getElementById('retention-modal');
     if (!modal) return;
@@ -83,12 +89,13 @@ function closeRetentionModal() {
     modal.style.display = 'none';
 }
 
+
 function updateRetentionModal() {
     const cameraId = document.getElementById('retention-camera-id').value;
     const days = parseInt(document.getElementById('retention-days-input').value);
     
     if (isNaN(days) || days < 1) {
-        alert('Please enter a valid number of days (minimum 1)');
+        showError('Please enter a valid number of days (minimum 1)');
         return;
     }
     
@@ -110,12 +117,14 @@ function updateRetentionModal() {
             updateSectionHeight('cameras-content');
         }
         closeRetentionModal();
+        showSuccess('Retention period updated');
     })
     .catch(error => {
         console.error('Error updating retention:', error);
-        alert('Failed to update retention period: ' + error.message);
+        showError('Failed to update retention period: ' + error.message);
     });
 }
+
 
 // Recording Mode Modal
 function showModeModal(cameraId, currentMode) {
@@ -126,6 +135,7 @@ function showModeModal(cameraId, currentMode) {
         return;
     }
 
+
     document.getElementById('mode-camera-id').value = cameraId;
     
     // Set radio button selection
@@ -134,9 +144,11 @@ function showModeModal(cameraId, currentMode) {
         radio.checked = (radio.value === currentMode);
     }
 
+
     modal.classList.add('active');
     modal.style.display = 'block';
 }
+
 
 function closeModeModal() {
     const modal = document.getElementById('mode-modal');
@@ -145,6 +157,7 @@ function closeModeModal() {
     modal.classList.remove('active');
     modal.style.display = 'none';
 }
+
 
 function updateRecordingMode() {
     const cameraId = document.getElementById('mode-camera-id').value;
@@ -158,10 +171,12 @@ function updateRecordingMode() {
         }
     }
 
+
     if (!selectedMode) {
-        alert('Please select a recording mode');
+        showError('Please select a recording mode');
         return;
     }
+
 
     fetch('/api/cameras/update-mode', {
         method: 'POST',
@@ -186,12 +201,14 @@ function updateRecordingMode() {
             updateSectionHeight('cameras-content');
         }
         closeModeModal();
+        showSuccess('Recording mode updated');
     })
     .catch(error => {
         console.error('Error updating recording mode:', error);
-        alert('Failed to update recording mode: ' + error.message);
+        showError('Failed to update recording mode: ' + error.message);
     });
 }
+
 
 function createModeModal() {
     const modalHtml = `
@@ -233,6 +250,7 @@ function createModeModal() {
     };
 }
 
+
 // Camera Settings Modal
 function openCameraSettings() {
     let modal = document.getElementById('camera-settings-modal');
@@ -258,11 +276,13 @@ function openCameraSettings() {
         })
         .catch(error => {
             console.error('Failed to load cameras:', error);
+            showError('Failed to load cameras');
         });
     
     modal.classList.add('active');
     modal.style.display = 'block';
 }
+
 
 function closeCameraSettings() {
     const modal = document.getElementById('camera-settings-modal');
@@ -271,6 +291,7 @@ function closeCameraSettings() {
     modal.classList.remove('active');
     modal.style.display = 'none';
 }
+
 
 function createCameraSettingsModal() {
     const modalHtml = `
@@ -288,6 +309,7 @@ function createCameraSettingsModal() {
                     </form>
                 </div>
 
+
                 <div class="config-subsection">
                     <h3>➕ Add Camera Manually</h3>
                     <form id="modal-add-camera-form" class="form" style="display: flex; align-items: center; gap: 10px;">
@@ -299,17 +321,19 @@ function createCameraSettingsModal() {
                     </form>
                 </div>
 
+
                 <div class="config-subsection">
                     <h3>⚙️ Bulk Operations</h3>
                     <div class="bulk-ops" style="display: flex; justify-content: space-between; align-items: center; gap: 10px;">
                         <div class="form-group" style="display: flex; align-items: center; gap: 10px; margin: 0;">
-                            <label for="modal-retention-all" style="margin: 0; white-space: nowrap;">Retention period for all cameras (days):</label>
+                            <label for="modal-retention-all" style="margin: 0; white-space: nowrap;">Retention period (days):</label>
                             <input type="number" id="modal-retention-all" min="1" max="365" value="7" style="width: 80px;">
                             <button onclick="setAllRetentionFromModal()" class="btn">Set Retention</button>
                         </div>
                         <div style="display: flex; gap: 10px;">
                             <button onclick="openDeleteAllCamerasModal()" class="btn btn-danger">Remove All Cameras</button>
                             <button onclick="openDeleteAllRecordingsModal()" class="btn btn-danger">Delete All Recordings</button>
+                            <button onclick="openClearEventsModal()" class="btn btn-danger">Clear All Events</button>
                             <button onclick="cleanupOrphanedRecordings()" class="btn btn-danger">Cleanup Orphaned Recordings</button>
                         </div>
                     </div>
@@ -320,6 +344,7 @@ function createCameraSettingsModal() {
                     <h4 style="margin: 0 0 10px 0; color: #4CAF50;">✓ Cleanup Complete</h4>
                     <p id="modal-cleanup-results-text" style="margin: 0; color: #ccc;"></p>
                 </div>
+
 
                 <div class="config-subsection">
                     <h3>📹 Your Cameras</h3>
@@ -343,6 +368,7 @@ function createCameraSettingsModal() {
     };
 }
 
+
 function setupModalCameraForms() {
     const addForm = document.getElementById('modal-add-camera-form');
     if (addForm) {
@@ -356,12 +382,25 @@ function setupModalCameraForms() {
             })
             .then(response => response.text())
             .then(html => {
+                // Update BOTH lists
                 document.getElementById('modal-camera-list').innerHTML = html;
+                const mainList = document.getElementById('camera-list');
+                if (mainList) {
+                    mainList.innerHTML = html;
+                }
                 addForm.reset();
+                showSuccess('Camera added successfully');
+                
+                // Re-initialize drag and drop
+                setTimeout(() => {
+                    if (typeof initializeDragAndDrop === 'function') {
+                        initializeDragAndDrop();
+                    }
+                }, 50);
             })
             .catch(error => {
                 console.error('Error adding camera:', error);
-                alert('Failed to add camera');
+                showError('Failed to add camera');
             });
         };
     }
@@ -378,20 +417,35 @@ function setupModalCameraForms() {
             })
             .then(response => response.text())
             .then(html => {
+                // Update BOTH lists
                 document.getElementById('modal-camera-list').innerHTML = html;
+                const mainList = document.getElementById('camera-list');
+                if (mainList) {
+                    mainList.innerHTML = html;
+                }
+                showSuccess('Go2RTC streams imported successfully');
+                
+                // Re-initialize drag and drop
+                setTimeout(() => {
+                    if (typeof initializeDragAndDrop === 'function') {
+                        initializeDragAndDrop();
+                    }
+                }, 50);
             })
             .catch(error => {
                 console.error('Error scanning go2rtc:', error);
-                alert('Failed to scan go2rtc');
+                showError('Failed to scan go2rtc');
             });
         };
     }
 }
 
+
+
 function setAllRetentionFromModal() {
     const days = parseInt(document.getElementById('modal-retention-all').value);
     if (isNaN(days) || days < 1) {
-        alert('Please enter a valid number of days (minimum 1)');
+        showError('Please enter a valid number of days (minimum 1)');
         return;
     }
     
@@ -403,12 +457,142 @@ function setAllRetentionFromModal() {
     .then(response => response.text())
     .then(html => {
         document.getElementById('modal-camera-list').innerHTML = html;
+        showSuccess('Retention period updated for all cameras');
     })
     .catch(error => {
         console.error('Error updating retention:', error);
-        alert('Failed to update retention');
+        showError('Failed to update retention');
     });
 }
+
+
+// Clear All Events functionality
+let clearEventsCode;
+let clearEventsConfirmCount = 0;
+
+
+// Open clear events modal
+function openClearEventsModal() {
+    // Generate random 4-digit code
+    clearEventsCode = (Math.floor(1000 + Math.random() * 9000)).toString();
+    
+    document.getElementById('clear-events-code').textContent = clearEventsCode;
+    document.getElementById('clear-events-code-input').value = '';
+    document.getElementById('clear-events-btn').disabled = true;
+    clearEventsConfirmCount = 0;
+    
+    const modal = document.getElementById('clear-events-modal');
+    modal.classList.add('active');
+    modal.style.display = 'block';
+    
+    // Focus on input
+    setTimeout(() => {
+        document.getElementById('clear-events-code-input').focus();
+    }, 100);
+}
+
+
+// Close clear events modal
+function closeClearEventsModal() {
+    const modal = document.getElementById('clear-events-modal');
+    modal.classList.remove('active');
+    modal.style.display = 'none';
+    clearEventsCode = '';
+    clearEventsConfirmCount = 0;
+    
+    const btn = document.getElementById('clear-events-btn');
+    btn.textContent = 'Clear All Events';
+    btn.classList.remove('confirm');
+    btn.disabled = true;
+}
+
+
+// Clear all events
+function clearAllEvents() {
+    const btn = document.getElementById('clear-events-btn');
+    
+    if (clearEventsConfirmCount === 0) {
+        // First press
+        btn.textContent = 'Click Again to Confirm';
+        btn.classList.add('confirm');
+        clearEventsConfirmCount = 1;
+        
+        // Reset after 3 seconds
+        setTimeout(() => {
+            if (clearEventsConfirmCount === 1) {
+                btn.textContent = 'Click to Confirm';
+                btn.classList.remove('confirm');
+                clearEventsConfirmCount = 0;
+            }
+        }, 3000);
+        return;
+    }
+    
+    // Second press - actually clear
+    btn.disabled = true;
+    btn.textContent = 'Clearing...';
+    
+    fetch('/api/events/clear-all', {
+        method: 'POST'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showSuccess(`Successfully deleted ${data.count} events`);
+            closeClearEventsModal();
+            
+            // Refresh events if modal is open
+            if (typeof refreshEventsList === 'function') {
+                refreshEventsList();
+            }
+        } else {
+            showError('Failed to clear events');
+        }
+    })
+    .catch(error => {
+        console.error('Error clearing events:', error);
+        showError('Failed to clear events');
+    })
+    .finally(() => {
+        btn.disabled = false;
+        btn.textContent = 'Clear All Events';
+        btn.classList.remove('confirm');
+    });
+}
+
+
+
+
+// Setup event listeners on page load
+document.addEventListener('DOMContentLoaded', () => {
+    // Clear events code input validation
+    const clearEventsInput = document.getElementById('clear-events-code-input');
+    if (clearEventsInput) {
+        clearEventsInput.oninput = () => {
+            const btn = document.getElementById('clear-events-btn');
+            if (clearEventsInput.value === clearEventsCode) {
+                btn.disabled = false;
+                btn.textContent = 'Click to Confirm';
+                btn.classList.remove('confirm');
+                clearEventsConfirmCount = 0;
+            } else {
+                btn.disabled = true;
+                btn.textContent = 'Clear All Events';
+            }
+        };
+    }
+    
+    // Close clear events modal on outside click
+    const clearEventsModal = document.getElementById('clear-events-modal');
+    if (clearEventsModal) {
+        clearEventsModal.onclick = (e) => {
+            if (e.target === clearEventsModal) {
+                closeClearEventsModal();
+            }
+        };
+    }
+});
+
 
 // Close modals when clicking outside
 window.onclick = function(event) {

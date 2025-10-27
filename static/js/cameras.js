@@ -62,11 +62,18 @@ function setupForms() {
                 if (typeof updateSectionHeight === 'function') {
                     updateSectionHeight('cameras-content');
                 }
+                
+                // Reload timeline camera selector
+                if (typeof loadTimelineCameras === 'function') {
+                    loadTimelineCameras();
+                }
+                
                 addForm.reset();
+                showSuccess('Camera added successfully');
             })
             .catch(error => {
                 console.error('Error adding camera:', error);
-                alert('Failed to add camera: ' + error.message);
+                showError('Failed to add camera: ' + error.message);
             });
         };
     }
@@ -90,14 +97,22 @@ function setupForms() {
                 if (typeof updateSectionHeight === 'function') {
                     updateSectionHeight('cameras-content');
                 }
+                
+                // Reload timeline camera selector
+                if (typeof loadTimelineCameras === 'function') {
+                    loadTimelineCameras();
+                }
+                
+                showSuccess('Go2RTC streams imported successfully');
             })
             .catch(error => {
                 console.error('Error scanning go2rtc:', error);
-                alert('Failed to scan go2rtc streams: ' + error.message);
+                showError('Failed to scan go2rtc streams: ' + error.message);
             });
         };
     }
 }
+
 
 // Setup delete all cameras modal
 function setupDeleteCamerasModal() {
@@ -132,7 +147,7 @@ function updateRetention(cameraId) {
     const days = parseInt(input.value);
     
     if (isNaN(days) || days < 1) {
-        alert('Please enter a valid number of days (minimum 1)');
+        showError('Please enter a valid number of days (minimum 1)');
         return;
     }
     
@@ -157,10 +172,11 @@ function updateRetention(cameraId) {
         if (typeof updateSectionHeight === 'function') {
             updateSectionHeight('cameras-content');
         }
+        showSuccess('Retention period updated');
     })
     .catch(error => {
         console.error('Error updating retention:', error);
-        alert('Failed to update retention period: ' + error.message);
+        showError('Failed to update retention period: ' + error.message);
     });
 }
 
@@ -187,10 +203,11 @@ function startRecording(cameraId) {
         if (typeof updateSectionHeight === 'function') {
             updateSectionHeight('cameras-content');
         }
+        showSuccess('Recording started');
     })
     .catch(error => {
         console.error('Error starting recording:', error);
-        alert('Failed to start recording: ' + error.message);
+        showError('Failed to start recording: ' + error.message);
     });
 }
 
@@ -217,10 +234,11 @@ function stopRecording(cameraId) {
         if (typeof updateSectionHeight === 'function') {
             updateSectionHeight('cameras-content');
         }
+        showSuccess('Recording stopped');
     })
     .catch(error => {
         console.error('Error stopping recording:', error);
-        alert('Failed to stop recording: ' + error.message);
+        showError('Failed to stop recording: ' + error.message);
     });
 }
 
@@ -229,7 +247,7 @@ function setAllRetention() {
     const days = parseInt(input.value);
     
     if (isNaN(days) || days < 1) {
-        alert('Please enter a valid number of days (minimum 1)');
+        showError('Please enter a valid number of days (minimum 1)');
         return;
     }
     
@@ -251,10 +269,11 @@ function setAllRetention() {
         if (typeof updateSectionHeight === 'function') {
             updateSectionHeight('cameras-content');
         }
+        showSuccess('Retention period updated for all cameras');
     })
     .catch(error => {
         console.error('Error updating retention for all cameras:', error);
-        alert('Failed to update retention for all cameras: ' + error.message);
+        showError('Failed to update retention for all cameras: ' + error.message);
     });
 }
 
@@ -285,10 +304,17 @@ function removeCamera(cameraId) {
             if (typeof updateSectionHeight === 'function') {
                 updateSectionHeight('cameras-content');
             }
+            
+            // Reload timeline camera selector
+            if (typeof loadTimelineCameras === 'function') {
+                loadTimelineCameras();
+            }
+            
+            showSuccess('Camera removed successfully');
         })
         .catch(error => {
             console.error('Error removing camera:', error);
-            alert('Failed to remove camera: ' + error.message);
+            showError('Failed to remove camera: ' + error.message);
         });
     } else {
         button.textContent = 'Click Again to Confirm';
@@ -299,6 +325,28 @@ function removeCamera(cameraId) {
             delete removeConfirmTimers[cameraId];
         }, 3000);
     }
+}
+
+
+// Clear events for a specific camera
+function clearCameraEvents(cameraName) {
+    fetch('/api/events/clear-camera', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ camera_name: cameraName })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showSuccess(`Successfully deleted ${data.count} event(s) for ${cameraName}`);
+        } else {
+            showError('Failed to clear events: ' + (data.error || 'Unknown error'));
+        }
+    })
+    .catch(error => {
+        console.error('Error clearing events:', error);
+        showError('Failed to clear events');
+    });
 }
 
 // Open delete all cameras modal
@@ -371,12 +419,18 @@ function removeAllCameras() {
         if (typeof updateSectionHeight === 'function') {
             updateSectionHeight('cameras-content');
         }
-        alert('Successfully deleted all cameras');
+        
+        // Reload timeline camera selector
+        if (typeof loadTimelineCameras === 'function') {
+            loadTimelineCameras();
+        }
+        
+        showSuccess('Successfully deleted all cameras');
         closeDeleteAllCamerasModal();
     })
     .catch(error => {
         console.error('Error removing all cameras:', error);
-        alert('Failed to remove all cameras: ' + error.message);
+        showError('Failed to remove all cameras: ' + error.message);
     })
     .finally(() => {
         btn.disabled = false;
@@ -384,6 +438,7 @@ function removeAllCameras() {
         btn.classList.remove('confirm');
     });
 }
+
 
 // Cleanup orphaned recordings from deleted cameras
 function cleanupOrphanedRecordings() {
@@ -436,47 +491,69 @@ function cleanupOrphanedRecordings() {
         btn.disabled = false;
         btn.textContent = 'Cleanup Orphaned Recordings';
         
+        const sizeMB = data.size_mb.toFixed(2);
+        const message = `Deleted ${data.files_deleted} orphaned file(s), freed ${sizeMB} MB`;
+        
         if (resultsDiv && resultsText) {
-            const sizeMB = data.size_mb.toFixed(2);
-            resultsText.innerHTML = `Deleted <strong>${data.count}</strong> orphaned recording(s), freed <strong>${sizeMB} MB</strong> of disk space.`;
+            resultsText.innerHTML = `Deleted <strong>${data.files_deleted}</strong> orphaned file(s), freed <strong>${sizeMB} MB</strong>`;
             resultsDiv.style.display = 'block';
         }
         if (modalResultsDiv && modalResultsText) {
-            const sizeMB = data.size_mb.toFixed(2);
-            modalResultsText.innerHTML = `Deleted <strong>${data.count}</strong> orphaned recording(s), freed <strong>${sizeMB} MB</strong> of disk space.`;
+            modalResultsText.innerHTML = `Deleted <strong>${data.files_deleted}</strong> orphaned file(s), freed <strong>${sizeMB} MB</strong>`;
             modalResultsDiv.style.display = 'block';
         }
+        
+        showSuccess(message);
     })
     .catch(error => {
         console.error('Error cleaning up orphaned recordings:', error);
-        alert('Failed to cleanup orphaned recordings: ' + error.message);
+        showError('Failed to cleanup orphaned recordings: ' + error.message);
         btn.disabled = false;
         btn.textContent = 'Cleanup Orphaned Recordings';
     });
 }
 
-// Drag and Drop functionality for camera reordering
-let draggedElement = null;
+// Initialize drag and drop for camera reordering
+function initializeDragAndDrop() {
+    const container = document.getElementById('modal-camera-list') || document.getElementById('camera-list');
+    if (!container) return;
+
+    const dragHandles = container.querySelectorAll('.drag-handle[draggable="true"]');
+    if (dragHandles.length === 0) return;
+
+    dragHandles.forEach(handle => {
+        handle.addEventListener('dragstart', handleDragStart);
+        handle.addEventListener('dragend', handleDragEnd);
+        
+        const box = handle.closest('.camera-box');
+        if (box) {
+            box.addEventListener('dragover', handleDragOver);
+            box.addEventListener('dragleave', handleDragLeave);
+            box.addEventListener('drop', handleDrop);
+        }
+    });
+}
 
 function handleDragStart(e) {
-    draggedElement = this;
-    this.classList.add('dragging');
-    this.style.opacity = '0.5';
+    const draggedBox = e.target.closest('.camera-box');
+    if (!draggedBox) return;
+    
+    draggedBox.classList.add('dragging');
     e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/html', this.innerHTML);
+    e.dataTransfer.setData('text/html', draggedBox.innerHTML);
 }
 
 function handleDragEnd(e) {
-    this.classList.remove('dragging');
-    this.style.opacity = '1';
+    const draggedBox = e.target.closest('.camera-box');
+    if (!draggedBox) return;
     
-    // Remove all drag-over highlights
+    draggedBox.classList.remove('dragging');
+    
     const container = document.getElementById('modal-camera-list') || document.getElementById('camera-list');
-    if (container) {
-        container.querySelectorAll('.camera-box').forEach(box => {
-            box.classList.remove('drag-over');
-        });
-    }
+    const allBoxes = container.querySelectorAll('.camera-box');
+    allBoxes.forEach(box => {
+        box.classList.remove('drag-over');
+    });
 }
 
 function handleDragOver(e) {
@@ -485,42 +562,39 @@ function handleDragOver(e) {
     }
     e.dataTransfer.dropEffect = 'move';
     
-    // Add visual feedback - highlight drop target
-    if (draggedElement && draggedElement !== this) {
-        // Remove highlight from all other boxes first
-        const container = document.getElementById('modal-camera-list') || document.getElementById('camera-list');
-        if (container) {
-            container.querySelectorAll('.camera-box').forEach(box => {
-                if (box !== this && box !== draggedElement) {
-                    box.classList.remove('drag-over');
-                }
-            });
-        }
-        this.classList.add('drag-over');
-    }
+    const targetBox = e.currentTarget;
+    targetBox.classList.add('drag-over');
     
     return false;
 }
 
+function handleDragLeave(e) {
+    // Only remove highlight if we're actually leaving the box
+    // (not entering a child element)
+    const relatedTarget = e.relatedTarget;
+    if (!relatedTarget || !e.currentTarget.contains(relatedTarget)) {
+        e.currentTarget.classList.remove('drag-over');
+    }
+}
 
 function handleDrop(e) {
     if (e.stopPropagation) {
         e.stopPropagation();
     }
     
-    // Remove drag-over highlight
-    this.classList.remove('drag-over');
+    const container = document.getElementById('modal-camera-list') || document.getElementById('camera-list');
+    const draggingBox = container.querySelector('.dragging');
+    const targetBox = e.currentTarget;
     
-    if (draggedElement && draggedElement !== this) {
-        const container = this.parentNode;
-        const allBoxes = [...container.querySelectorAll('.camera-box[draggable="true"]')];
-        const draggedIndex = allBoxes.indexOf(draggedElement);
-        const targetIndex = allBoxes.indexOf(this);
+    if (draggingBox && targetBox && draggingBox !== targetBox) {
+        const allBoxes = Array.from(container.querySelectorAll('.camera-box'));
+        const draggingIndex = allBoxes.indexOf(draggingBox);
+        const targetIndex = allBoxes.indexOf(targetBox);
         
-        if (draggedIndex < targetIndex) {
-            container.insertBefore(draggedElement, this.nextSibling);
+        if (draggingIndex < targetIndex) {
+            targetBox.parentNode.insertBefore(draggingBox, targetBox.nextSibling);
         } else {
-            container.insertBefore(draggedElement, this);
+            targetBox.parentNode.insertBefore(draggingBox, targetBox);
         }
         
         saveNewOrder();
@@ -529,26 +603,11 @@ function handleDrop(e) {
     return false;
 }
 
-function initializeDragAndDrop() {
-    const container = document.getElementById('modal-camera-list') || document.getElementById('camera-list');
-    if (!container) return;
-
-    const cameraBoxes = container.querySelectorAll('.camera-box[draggable="true"]');
-    if (cameraBoxes.length === 0) return;
-
-    cameraBoxes.forEach(box => {
-        box.addEventListener('dragstart', handleDragStart);
-        box.addEventListener('dragend', handleDragEnd);
-        box.addEventListener('dragover', handleDragOver);
-        box.addEventListener('drop', handleDrop);
-    });
-}
-
 function saveNewOrder() {
     const container = document.getElementById('modal-camera-list') || document.getElementById('camera-list');
     if (!container) return;
 
-    const cameraBoxes = container.querySelectorAll('.camera-box[draggable="true"]');
+    const cameraBoxes = container.querySelectorAll('.camera-box');
     const order = Array.from(cameraBoxes).map(box => box.dataset.cameraId);
 
     fetch('/api/cameras/reorder', {
@@ -561,13 +620,34 @@ function saveNewOrder() {
     .then(response => {
         if (!response.ok) throw new Error('Failed to save order');
         
-        // Refresh timeline camera selector immediately
+        // Refresh the camera list to get updated HTML
+        return fetch('/api/cameras');
+    })
+    .then(response => response.text())
+    .then(html => {
+        // Update both lists
+        const mainList = document.getElementById('camera-list');
+        if (mainList) {
+            mainList.innerHTML = html;
+        }
+        
+        const modalList = document.getElementById('modal-camera-list');
+        if (modalList) {
+            modalList.innerHTML = html;
+        }
+        
+        // CRITICAL: Re-initialize drag and drop after HTML update
+        setTimeout(() => {
+            initializeDragAndDrop();
+        }, 50);
+        
+        // Refresh timeline camera selector
         if (typeof loadTimelineCameras === 'function') {
             loadTimelineCameras();
         }
     })
     .catch(error => {
         console.error('Error saving camera order:', error);
-        alert('Failed to save camera order. Please try again.');
+        showError('Failed to save camera order. Please try again.');
     });
 }
