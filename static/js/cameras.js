@@ -454,3 +454,120 @@ function cleanupOrphanedRecordings() {
         btn.textContent = 'Cleanup Orphaned Recordings';
     });
 }
+
+// Drag and Drop functionality for camera reordering
+let draggedElement = null;
+
+function handleDragStart(e) {
+    draggedElement = this;
+    this.classList.add('dragging');
+    this.style.opacity = '0.5';
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/html', this.innerHTML);
+}
+
+function handleDragEnd(e) {
+    this.classList.remove('dragging');
+    this.style.opacity = '1';
+    
+    // Remove all drag-over highlights
+    const container = document.getElementById('modal-camera-list') || document.getElementById('camera-list');
+    if (container) {
+        container.querySelectorAll('.camera-box').forEach(box => {
+            box.classList.remove('drag-over');
+        });
+    }
+}
+
+function handleDragOver(e) {
+    if (e.preventDefault) {
+        e.preventDefault();
+    }
+    e.dataTransfer.dropEffect = 'move';
+    
+    // Add visual feedback - highlight drop target
+    if (draggedElement && draggedElement !== this) {
+        // Remove highlight from all other boxes first
+        const container = document.getElementById('modal-camera-list') || document.getElementById('camera-list');
+        if (container) {
+            container.querySelectorAll('.camera-box').forEach(box => {
+                if (box !== this && box !== draggedElement) {
+                    box.classList.remove('drag-over');
+                }
+            });
+        }
+        this.classList.add('drag-over');
+    }
+    
+    return false;
+}
+
+
+function handleDrop(e) {
+    if (e.stopPropagation) {
+        e.stopPropagation();
+    }
+    
+    // Remove drag-over highlight
+    this.classList.remove('drag-over');
+    
+    if (draggedElement && draggedElement !== this) {
+        const container = this.parentNode;
+        const allBoxes = [...container.querySelectorAll('.camera-box[draggable="true"]')];
+        const draggedIndex = allBoxes.indexOf(draggedElement);
+        const targetIndex = allBoxes.indexOf(this);
+        
+        if (draggedIndex < targetIndex) {
+            container.insertBefore(draggedElement, this.nextSibling);
+        } else {
+            container.insertBefore(draggedElement, this);
+        }
+        
+        saveNewOrder();
+    }
+    
+    return false;
+}
+
+function initializeDragAndDrop() {
+    const container = document.getElementById('modal-camera-list') || document.getElementById('camera-list');
+    if (!container) return;
+
+    const cameraBoxes = container.querySelectorAll('.camera-box[draggable="true"]');
+    if (cameraBoxes.length === 0) return;
+
+    cameraBoxes.forEach(box => {
+        box.addEventListener('dragstart', handleDragStart);
+        box.addEventListener('dragend', handleDragEnd);
+        box.addEventListener('dragover', handleDragOver);
+        box.addEventListener('drop', handleDrop);
+    });
+}
+
+function saveNewOrder() {
+    const container = document.getElementById('modal-camera-list') || document.getElementById('camera-list');
+    if (!container) return;
+
+    const cameraBoxes = container.querySelectorAll('.camera-box[draggable="true"]');
+    const order = Array.from(cameraBoxes).map(box => box.dataset.cameraId);
+
+    fetch('/api/cameras/reorder', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ order: order })
+    })
+    .then(response => {
+        if (!response.ok) throw new Error('Failed to save order');
+        
+        // Refresh timeline camera selector immediately
+        if (typeof loadTimelineCameras === 'function') {
+            loadTimelineCameras();
+        }
+    })
+    .catch(error => {
+        console.error('Error saving camera order:', error);
+        alert('Failed to save camera order. Please try again.');
+    });
+}

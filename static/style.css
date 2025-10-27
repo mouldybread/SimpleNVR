@@ -1,16 +1,29 @@
-body { 
-    font-family: sans-serif; 
+/* ===== VIEWPORT CONSTRAINTS - CRITICAL FOR NO-SCROLL LAYOUT ===== */
+html, body {
+    height: 100%;
     margin: 0;
     padding: 0;
-    background: #1a1a1a; 
-    color: #fff; 
+    overflow: hidden;
 }
 
-/* FIXED: Remove default container styling, apply per-section */
+body { 
+    font-family: sans-serif; 
+    background: #1a1a1a; 
+    color: #fff;
+    display: flex;
+    flex-direction: column;
+}
+
+/* FIXED: Container with flexbox layout */
 .container { 
     width: 100%;
     margin: 0;
     padding: 0;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
 }
 
 /* Apply 1200px constraint only to config and cameras sections */
@@ -23,7 +36,22 @@ body {
 
 h1 { color: #4CAF50; }
 
-.section { background: #2a2a2a; padding: 20px; margin: 20px 0; border-radius: 8px; }
+.section { 
+    background: #2a2a2a; 
+    padding: 20px; 
+    margin: 20px 0; 
+    border-radius: 8px;
+}
+
+/* Playback section needs special flex treatment */
+#playback-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
+    margin: 20px;
+}
 
 .section-header {
     display: flex;
@@ -65,6 +93,15 @@ h1 { color: #4CAF50; }
     max-height: 0 !important;
     opacity: 0;
     margin-top: 0;
+}
+
+/* CRITICAL: Playback section content needs flex layout */
+#playback-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
 }
 
 .config-subsection {
@@ -411,7 +448,8 @@ button:hover { background: #45a049; }
     border-radius: 8px;
     margin-bottom: 10px;
     flex-wrap: wrap;
-    flex: 0 0 auto;  /* Don't grow or shrink */
+    align-items: center;
+    flex: 0 0 auto;
 }
 
 .control-group {
@@ -424,6 +462,7 @@ button:hover { background: #45a049; }
     font-weight: 600;
     color: #ccc;
     font-size: 14px;
+    margin: 0;
 }
 
 .btn-small {
@@ -435,6 +474,7 @@ button:hover { background: #45a049; }
     cursor: pointer;
     transition: all 0.2s;
     font-size: 14px;
+    margin: 0 3px;
 }
 
 .btn-small:hover {
@@ -499,7 +539,7 @@ button:hover { background: #45a049; }
     padding: 10px;
     margin-bottom: 10px;
     border: 1px solid #333;
-    flex: 0 0 100px;  /* Fixed 100px height, won't grow or shrink */
+    flex: 0 0 100px;
 }
 
 #timeline-canvas {
@@ -519,7 +559,7 @@ button:hover { background: #45a049; }
     padding: 15px;
     border-radius: 8px;
     margin-bottom: 10px;
-    flex: 0 0 auto;  /* Don't grow or shrink */
+    flex: 0 0 auto;
 }
 
 .camera-selector h3 {
@@ -545,11 +585,13 @@ button:hover { background: #45a049; }
     padding: 5px 10px;
     background: #2a2a2a;
     border-radius: 4px;
-    transition: background 0.2s;
+    transition: all 0.2s;
+    border: 2px solid transparent;
 }
 
 .camera-checkbox:hover {
     background: #333;
+    border-color: #444;
 }
 
 .camera-checkbox input[type="checkbox"] {
@@ -580,40 +622,6 @@ button:hover { background: #45a049; }
     outline: none;
     border-color: #4CAF50;
     box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.2);
-}
-
-/* Responsive design */
-@media (max-width: 768px) {
-    .playback-container {
-        flex-direction: column;
-    }
-
-    .playback-sidebar {
-        flex: 0 0 auto;
-        max-height: 300px;
-    }
-
-    .playback-player {
-        min-height: 400px;
-    }
-    
-    .timeline-controls {
-        flex-direction: column;
-        gap: 10px;
-    }
-    
-    .control-group {
-        width: 100%;
-        justify-content: space-between;
-    }
-    
-    .video-grid {
-        grid-template-columns: 1fr !important;
-    }
-    
-    #timeline-camera-selector {
-        flex-direction: column;
-    }
 }
 
 /* Delete All Recordings Modal Styles */
@@ -683,66 +691,84 @@ button:hover { background: #45a049; }
     animation: pulse 0.5s;
 }
 
-/* FIXED: Timeline legend with fixed sizing */
-.timeline-legend {
+/* Camera List - Both in main page and modal - Flex with wrapping to get 2 per row */
+#camera-list,
+#modal-camera-list {
     display: flex;
+    flex-direction: row;
     flex-wrap: wrap;
     gap: 15px;
-    padding: 10px;
-    background: #1a1a1a;
-    border-radius: 4px;
-    border: 1px solid #333;
-    flex: 0 0 auto;  /* Don't grow or shrink */
-    min-height: 40px;
-    max-height: 60px;
-    overflow: hidden;
+    align-items: flex-start;
 }
-
-.legend-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.legend-color {
-    width: 16px;
-    height: 16px;
-    border-radius: 3px;
-    display: inline-block;
-}
-
-.legend-item span:not(.legend-color) {
-    color: #fff;
-    font-size: 14px;
-}
-
-/* Camera Box Styles - Original Design */
+/* Camera Box Styles - 50% width minus gap */
 .camera-box {
     background: #3a3a3a;
     border-radius: 8px;
-    padding: 20px;
-    margin-bottom: 15px;
+    padding: 15px;
     border-left: 4px solid #4CAF50;
+    display: flex;
+    flex-direction: row;
+    gap: 15px;
+    align-items: flex-start;
+    width: calc(50% - 7.5px);
+    box-sizing: border-box;
+}
+
+/* Drag handle */
+.drag-handle {
+    cursor: grab;
+    color: #666;
+    font-size: 20px;
+    padding: 0 8px;
+    user-select: none;
+    display: flex;
+    align-items: center;
+}
+
+.drag-handle:active {
+    cursor: grabbing;
+}
+
+/* Dragging states */
+.camera-box[draggable="true"] {
+    cursor: move;
+}
+
+.camera-box.dragging {
+    opacity: 0.5;
+    border: 2px dashed #4CAF50;
+}
+
+.camera-box.drag-over {
+    border-top: 3px solid #4CAF50;
+    margin-top: 3px;
+}
+
+
+.camera-details {
+    flex: 1;
+    min-width: 0;
 }
 
 .camera-title {
-    font-size: 20px;
+    font-size: 16px;
     font-weight: bold;
     color: #4CAF50;
-    margin-bottom: 10px;
+    margin: 0 0 6px 0;
 }
 
 .camera-meta {
     display: flex;
     flex-direction: column;
-    gap: 5px;
-    margin-bottom: 15px;
-    font-size: 13px;
-    color: #ccc;
+    gap: 3px;
+    margin-bottom: 8px;
 }
 
 .camera-rtsp, .camera-folder, .camera-status {
     display: block;
+    font-size: 11px;
+    color: #ccc;
+    line-height: 1.4;
 }
 
 .status-recording {
@@ -754,36 +780,10 @@ button:hover { background: #45a049; }
     color: #999;
 }
 
-.camera-retention {
-    margin: 15px 0;
-    padding: 10px;
-    background: #2a2a2a;
-    border-radius: 4px;
-    font-size: 14px;
-}
-
-.camera-retention input {
-    margin: 0 5px;
-    padding: 5px;
-}
-
-.btn-update {
-    background: #4CAF50;
-    color: white;
-    border: none;
-    padding: 5px 15px;
-    border-radius: 4px;
-    cursor: pointer;
-    margin-left: 5px;
-}
-
-.btn-update:hover {
-    background: #45a049;
-}
-
 .recording-mode {
-    margin: 10px 0;
-    font-size: 14px;
+    display: block;
+    margin: 0;
+    font-size: 11px;
     color: #ccc;
 }
 
@@ -792,19 +792,68 @@ button:hover { background: #45a049; }
     font-weight: 600;
 }
 
+.camera-retention {
+    margin: 8px 0 0 0;
+    padding: 6px 8px;
+    background: #2a2a2a;
+    border-radius: 4px;
+    font-size: 11px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: nowrap;
+}
+
+.camera-retention label {
+    margin: 0;
+    white-space: nowrap;
+    font-size: 11px;
+}
+
+.camera-retention input {
+    width: 45px;
+    padding: 3px 5px;
+    margin: 0;
+    font-size: 11px;
+}
+
+.camera-retention span {
+    font-size: 11px;
+}
+
+.camera-retention .btn-update {
+    padding: 3px 10px;
+    margin: 0;
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+.btn-update {
+    background: #4CAF50;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.btn-update:hover {
+    background: #45a049;
+}
+
+/* Camera actions - stacked vertically on the right */
 .camera-actions {
     display: flex;
-    gap: 10px;
-    margin-top: 15px;
-    flex-wrap: wrap;
+    flex-direction: column;
+    gap: 5px;
+    margin-left: auto;
+    flex-shrink: 0;
 }
 
-.btn-view {
-    background: #2196F3;
-}
-
-.btn-view:hover {
-    background: #0b7dda;
+.camera-actions button {
+    width: 130px;
+    white-space: nowrap;
+    padding: 7px 10px;
+    font-size: 12px;
 }
 
 .btn-start {
@@ -839,63 +888,75 @@ button:hover { background: #45a049; }
     background: #da190b;
 }
 
-/* FIXED: Full viewport layout - no scrolling, everything fits on screen */
-html, body {
-    height: 100%;
-    margin: 0;
-    padding: 0;
-    overflow: hidden;
+/* Responsive: Single column on smaller screens */
+@media (max-width: 1400px) {
+    #camera-list {
+        grid-template-columns: 1fr;
+    }
 }
 
-body {
-    display: flex;
-    flex-direction: column;
-}
+@media (max-width: 768px) {
+    .playback-container {
+        flex-direction: column;
+    }
 
-/* Make playback section fit exactly in viewport */
-#playback-section {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    min-height: 0;
-}
+    .playback-sidebar {
+        flex: 0 0 auto;
+        max-height: 300px;
+    }
 
-#playback-section .container {
-    max-width: 100%;
-    padding: 10px;
-    box-sizing: border-box;
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-}
+    .playback-player {
+        min-height: 400px;
+    }
 
-#playback-section .section {
-    margin: 0;
-    border-radius: 0;
-    padding: 10px;
-    box-sizing: border-box;
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-}
+    .timeline-controls {
+        flex-direction: column;
+        gap: 10px;
+        align-items: stretch;
+    }
 
-.section {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-height: 0;
-    overflow: hidden;
-    box-sizing: border-box;
-}
+    .control-group {
+        width: 100%;
+        justify-content: space-between;
+    }
 
-.section-content {
-    flex: 1;
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-    box-sizing: border-box;
+    .control-group[style*="margin-left: auto"] {
+        margin-left: 0 !important;
+        flex-wrap: wrap;
+        gap: 5px;
+    }
+
+    .video-grid {
+        grid-template-columns: 1fr !important;
+    }
+
+    #timeline-camera-selector {
+        flex-direction: column;
+    }
+
+    .camera-selector {
+        flex-direction: column;
+    }
+    
+    .camera-box {
+        flex-direction: column;
+    }
+    
+    .camera-actions {
+        flex-direction: row !important;
+        flex-wrap: wrap;
+        margin-left: 0;
+    }
+    
+    .camera-actions button {
+        width: auto !important;
+        flex: 1 1 calc(50% - 3px);
+        min-width: 110px;
+    }
+    
+    .camera-retention {
+        flex-wrap: wrap;
+    }
 }
 
 /* FIXED: Ensure timeline is always visible with proper flex constraints */
@@ -904,15 +965,109 @@ body {
     display: flex;
     flex-direction: column;
     min-height: 0;
-    max-height: 100%;  /* Don't exceed parent */
+    max-height: 100%;
     overflow: hidden;
     box-sizing: border-box;
 }
 
 #video-grid {
-    flex: 1 1 auto;  /* Allow to grow and shrink */
+    flex: 1 1 auto;
     min-height: 0;
-    max-height: 100%;  /* Don't exceed container */
+    max-height: 100%;
     box-sizing: border-box;
     overflow: hidden;
+    margin-bottom: 15px;
+}
+
+/* CRITICAL FIX: Hide old playback-controls div if it exists inside fullscreen-wrapper */
+#fullscreen-wrapper .playback-controls {
+    display: none;
+}
+.camera-box, .camera-box * {
+    pointer-events: auto !important;
+}
+.camera-box.drag-over {
+    transform: translateY(5px);
+    transition: transform 0.2s ease;
+}
+
+.camera-box.dragging {
+    opacity: 0.5 !important;
+}
+/* Timeline Camera Dropdown */
+.camera-dropdown {
+    position: relative;
+    display: inline-block;
+    min-width: 250px;
+}
+
+.dropdown-toggle {
+    width: 100%;
+    padding: 10px 15px;
+    background: #2a2a2a;
+    border: 1px solid #444;
+    border-radius: 6px;
+    color: #fff;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 14px;
+    transition: all 0.2s;
+}
+
+.dropdown-toggle:hover {
+    background: #333;
+    border-color: #555;
+}
+
+.dropdown-arrow {
+    transition: transform 0.2s;
+    font-size: 12px;
+}
+
+.dropdown-menu.show + .dropdown-toggle .dropdown-arrow {
+    transform: rotate(180deg);
+}
+
+.dropdown-menu {
+    position: absolute;
+    top: calc(100% + 5px);
+    left: 0;
+    width: 100%;
+    max-height: 400px;
+    overflow-y: auto;
+    background: #2a2a2a;
+    border: 1px solid #444;
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    display: none;
+    z-index: 1000;
+}
+
+.dropdown-menu.show {
+    display: block;
+}
+
+.dropdown-option {
+    padding: 10px 15px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    transition: background 0.2s;
+}
+
+.dropdown-option:hover {
+    background: #333;
+}
+
+.dropdown-option input[type="checkbox"] {
+    margin: 0;
+    cursor: pointer;
+}
+
+.dropdown-option label {
+    cursor: pointer;
+    margin: 0;
+    user-select: none;
 }

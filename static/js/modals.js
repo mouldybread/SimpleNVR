@@ -236,7 +236,6 @@ function createModeModal() {
 // Camera Settings Modal
 function openCameraSettings() {
     let modal = document.getElementById('camera-settings-modal');
-    
     if (!modal) {
         createCameraSettingsModal();
         modal = document.getElementById('camera-settings-modal');
@@ -247,6 +246,15 @@ function openCameraSettings() {
         .then(response => response.text())
         .then(html => {
             document.getElementById('modal-camera-list').innerHTML = html;
+            
+            // CRITICAL: Initialize drag and drop after cameras are loaded
+            setTimeout(() => {
+                if (typeof initializeDragAndDrop === 'function') {
+                    initializeDragAndDrop();
+                } else {
+                    console.error('initializeDragAndDrop function not found!');
+                }
+            }, 100);
         })
         .catch(error => {
             console.error('Failed to load cameras:', error);

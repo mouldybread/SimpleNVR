@@ -1,19 +1,20 @@
 {{ range . }}
-<div class="camera-box">
-    <div class="camera-title">{{ .Name }}</div>
-    <div class="camera-meta">
-        <span class="camera-rtsp">RTSP: {{ .RTSPUrl }}</span>
-        <span class="camera-folder">Folder: {{ .RecordDir }}</span>
-        <span class="camera-status">Status: <span class="{{ if .IsRecording }}status-recording{{ else }}status-idle{{ end }}">{{ if .IsRecording }}Recording{{ else }}Idle{{ end }}</span></span>
-    </div>
-    <div class="camera-retention">
-        Keep recordings for:
-        <input type="number" id="retention-{{ .ID }}" value="{{ .RetentionDisplay }}" min="1" style="width: 60px;">
-        days
-        <button onclick="updateRetention('{{ .ID }}')" class="btn-update">Update</button>
-    </div>
-    <div class="recording-mode">
-        Recording Mode: <span id="mode-display-{{ .ID }}">{{ .ModeDisplay }}</span>
+<div class="camera-box" draggable="true" data-camera-id="{{ .ID }}">
+    <div class="drag-handle">⋮⋮</div>
+    <div class="camera-details">
+        <div class="camera-title">{{ .Name }}</div>
+        <div class="camera-meta">
+            <span class="camera-rtsp">RTSP: {{ .RTSPUrl }}</span>
+            <span class="camera-folder">Folder: {{ .RecordDir }}</span>
+            <span class="camera-status">Status: <span class="{{ if .IsRecording }}status-recording{{ else }}status-idle{{ end }}">{{ if .IsRecording }}Recording{{ else }}Idle{{ end }}</span></span>
+            <span class="recording-mode">Recording Mode: <span>{{ .ModeDisplay }}</span></span>
+        </div>
+        <div class="camera-retention">
+            <label>Keep recordings for:</label>
+            <input type="number" id="retention-{{ .ID }}" value="{{ .RetentionDisplay }}" min="1">
+            <span>days</span>
+            <button onclick="updateRetention('{{ .ID }}')" class="btn-update">Update</button>
+        </div>
     </div>
     <div class="camera-actions">
         <button onclick="viewLiveStream('{{ .Name }}')" class="btn btn-view">View Live</button>

@@ -1,5 +1,6 @@
 // Enhanced Timeline-based Playback System
 // FIXED: All issues + Firefox compatibility + Download feature with camera selection
+// FIXED: Stable color mapping - colors persist across camera reordering
 
 // State
 let selectedCameras = [];
@@ -23,13 +24,48 @@ let downloadStartTime = null;
 let downloadEndTime = null;
 let downloadCameras = [];
 
+// Camera color mapping for UI consistency - stable colors by camera ID
+let cameraColorMap = {};
+const COLORS = [
+    '#3b82f6',  // Blue
+    '#10b981',  // Green
+    '#f59e0b',  // Orange
+    '#ef4444',  // Red
+    '#8b5cf6',  // Purple
+    '#ec4899',  // Pink
+    '#06b6d4',  // Cyan
+    '#84cc16',  // Lime
+    '#f97316',  // Deep Orange
+    '#14b8a6',  // Teal
+    '#a855f7',  // Light Purple
+    '#f43f5e',  // Rose
+    '#0ea5e9',  // Sky Blue
+    '#eab308',  // Yellow
+    '#6366f1',  // Indigo
+    '#d946ef'   // Fuchsia
+];
+
+// Timeline zoom state
+let timelineZoomLevel = 1.0; // 1.0 = full 24 hours, 2.0 = 12 hours, etc.
+let timelineOffset = 0; // Hours offset from start of day
+
+let nextColorIndex = 0;
+
 const CHUNK_SIZE_MS = 10 * 60 * 1000;
+
+// Helper function to get cameras in configured order, filtered to selected ones
+function getOrderedSelectedCameras() {
+    return allCameras
+        .filter(cam => selectedCameras.includes(cam.id))
+        .map(cam => cam.id);
+}
 
 function initializeTimelinePlayback() {
     loadTimelineCameras();
     setupDatePicker();
     setupKeyboardShortcuts();
     setupTimelineControls();
+    setupTimelineZoom(); 
 }
 
 function loadTimelineCameras() {
@@ -39,12 +75,10 @@ function loadTimelineCameras() {
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
             
-            // FIXED: Changed from .camera-card to .camera-box
             const cameraBoxes = doc.querySelectorAll('.camera-box');
             allCameras = [];
             
             cameraBoxes.forEach(box => {
-                // FIXED: Changed from .camera-name to .camera-title
                 const nameEl = box.querySelector('.camera-title');
                 const buttons = box.querySelectorAll('button[onclick*="removeCamera"]');
                 
@@ -81,6 +115,14 @@ function loadTimelineCameras() {
                 selectedCameras = allCameras.slice(0, 4).map(c => c.id);
             }
 
+            // Initialize color map for previously selected cameras
+            selectedCameras.forEach(cameraId => {
+                if (!cameraColorMap[cameraId]) {
+                    cameraColorMap[cameraId] = COLORS[nextColorIndex % COLORS.length];
+                    nextColorIndex++;
+                }
+            });
+
             renderCameraSelector();
             loadTimelineData();
         })
@@ -93,22 +135,96 @@ function renderCameraSelector() {
     const container = document.getElementById('timeline-camera-selector');
     if (!container) return;
 
-    container.innerHTML = '';
+    // Create dropdown structure
+    container.innerHTML = `
+        <div class="camera-dropdown">
+            <button class="dropdown-toggle" id="camera-dropdown-toggle" type="button">
+                <span id="dropdown-label">Select Cameras</span>
+                <span class="dropdown-arrow">▼</span>
+            </button>
+            <div class="dropdown-menu" id="camera-dropdown-menu">
+                <!-- Options will be populated here -->
+            </div>
+        </div>
+    `;
 
+    const toggle = document.getElementById('camera-dropdown-toggle');
+    const menu = document.getElementById('camera-dropdown-menu');
+    
+    // Populate dropdown options
     allCameras.forEach(cam => {
-        const label = document.createElement('label');
-        label.className = 'camera-checkbox';
-
+        const option = document.createElement('div');
+        option.className = 'dropdown-option';
+        option.dataset.cameraId = cam.id;
+        
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
-        checkbox.value = cam.id;
         checkbox.checked = selectedCameras.includes(cam.id);
-        checkbox.onchange = () => toggleCamera(cam.id);
-
-        label.appendChild(checkbox);
-        label.appendChild(document.createTextNode(' ' + cam.name));
-        container.appendChild(label);
+        checkbox.id = `timeline-cam-${cam.id}`;
+        
+        const label = document.createElement('label');
+        label.htmlFor = `timeline-cam-${cam.id}`;
+        label.textContent = cam.name;
+        
+        // Apply camera color if assigned
+        if (cameraColorMap[cam.id]) {
+            label.style.backgroundColor = cameraColorMap[cam.id];
+            label.style.padding = '4px 10px';
+            label.style.borderRadius = '4px';
+            label.style.color = '#fff';
+            label.style.marginLeft = '8px';
+            label.style.cursor = 'pointer';
+        }
+        
+        option.appendChild(checkbox);
+        option.appendChild(label);
+        
+        option.onclick = (e) => {
+            if (e.target === checkbox) return;
+            e.stopPropagation();
+            checkbox.checked = !checkbox.checked;
+            toggleCamera(cam.id);
+        };
+        
+        checkbox.onchange = (e) => {
+            e.stopPropagation();
+            toggleCamera(cam.id);
+        };
+        
+        menu.appendChild(option);
     });
+    
+    // Toggle dropdown
+    toggle.onclick = (e) => {
+        e.stopPropagation();
+        menu.classList.toggle('show');
+    };
+    
+    // Close dropdown when clicking outside
+    const closeHandler = (e) => {
+        if (!container.contains(e.target)) {
+            menu.classList.remove('show');
+        }
+    };
+    document.removeEventListener('click', closeHandler);
+    document.addEventListener('click', closeHandler);
+    
+    updateDropdownLabel();
+}
+
+function updateDropdownLabel() {
+    const label = document.getElementById('dropdown-label');
+    if (!label) return;
+    
+    const count = selectedCameras.length;
+    if (count === 0) {
+        label.textContent = 'Select Cameras';
+    } else if (count === 1) {
+        const cam = allCameras.find(c => c.id === selectedCameras[0]);
+        label.textContent = cam ? cam.name : '1 camera';
+    } else {
+        label.textContent = `${count} cameras selected`;
+    }
 }
 
 function toggleCamera(cameraId) {
@@ -116,12 +232,18 @@ function toggleCamera(cameraId) {
         selectedCameras = selectedCameras.filter(id => id !== cameraId);
     } else {
         selectedCameras.push(cameraId);
+        
+        if (!cameraColorMap[cameraId]) {
+            cameraColorMap[cameraId] = COLORS[nextColorIndex % COLORS.length];
+            nextColorIndex++;
+        }
     }
 
     localStorage.setItem('selectedCameras', JSON.stringify(selectedCameras));
     console.log('Saved camera selection to localStorage:', selectedCameras);
 
     gridLayout = selectedCameras.length;
+    updateDropdownLabel();
     loadTimelineData();
     updateVideoGrid();
 }
@@ -195,103 +317,177 @@ function renderTimeline() {
     ctx.fillStyle = '#888';
     ctx.font = '10px monospace';
 
-    for (let hour = 0; hour < 24; hour++) {
-        const x = (hour / 24) * width;
+    // Calculate visible time range based on zoom
+    const visibleHours = 24 / timelineZoomLevel;
+    const startHour = timelineOffset;
+    const endHour = startHour + visibleHours;
+
+    // Adaptive time markers based on zoom level
+    let majorStep, minorStep, showMinutes;
+    
+    if (visibleHours >= 12) {
+        // Full day or half day: hourly markers
+        majorStep = 2;
+        minorStep = 1;
+        showMinutes = false;
+    } else if (visibleHours >= 4) {
+        // 4-12 hours: hourly major, 30-min minor
+        majorStep = 1;
+        minorStep = 0.5;
+        showMinutes = false;
+    } else if (visibleHours >= 2) {
+        // 2-4 hours: 30-min major, 10-min minor
+        majorStep = 0.5;
+        minorStep = 10/60;
+        showMinutes = true;
+    } else {
+        // < 2 hours: 10-min major, 1-min minor
+        majorStep = 10/60;
+        minorStep = 1/60;
+        showMinutes = true;
+    }
+
+    // Draw minor markers
+    ctx.strokeStyle = '#333';
+    const startMinutes = Math.floor(startHour * 60);
+    const endMinutes = Math.ceil(endHour * 60);
+    const minorStepMinutes = minorStep * 60;
+    
+    for (let minutes = Math.ceil(startMinutes / minorStepMinutes) * minorStepMinutes; 
+         minutes <= endMinutes; 
+         minutes += minorStepMinutes) {
+        const hour = minutes / 60;
+        const x = ((hour - startHour) / visibleHours) * width;
+        
+        ctx.beginPath();
+        ctx.moveTo(x, height - 10);
+        ctx.lineTo(x, height);
+        ctx.stroke();
+    }
+
+    // Draw major markers with labels
+    ctx.strokeStyle = '#555';
+    const majorStepMinutes = majorStep * 60;
+    
+    for (let minutes = Math.ceil(startMinutes / majorStepMinutes) * majorStepMinutes; 
+         minutes <= endMinutes; 
+         minutes += majorStepMinutes) {
+        const hour = minutes / 60;
+        const x = ((hour - startHour) / visibleHours) * width;
+        
         ctx.beginPath();
         ctx.moveTo(x, 0);
         ctx.lineTo(x, height);
         ctx.stroke();
 
-        ctx.fillText(hour.toString().padStart(2, '0'), x + 2, 12);
+        // Format label
+        let label;
+        if (showMinutes) {
+            const h = Math.floor(hour);
+            const m = Math.round((hour - h) * 60);
+            label = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+        } else {
+            label = Math.floor(hour).toString().padStart(2, '0');
+        }
+        
+        ctx.fillStyle = '#888';
+        ctx.fillText(label, x + 2, 12);
     }
 
-    const cameraColors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
     const camerasInView = [...new Set(timelineSegments.map(s => s.camera_id))];
-
     const blockHeight = (height - 20) / Math.max(camerasInView.length, 1);
 
     camerasInView.forEach((cameraId, idx) => {
         const segments = timelineSegments.filter(s => s.camera_id === cameraId);
-        const color = cameraColors[idx % cameraColors.length];
+        const color = cameraColorMap[cameraId] || '#888';
 
         segments.forEach(segment => {
             const startDate = new Date(segment.start_time);
             const endDate = new Date(segment.end_time);
 
-            const startHour = startDate.getHours() + startDate.getMinutes() / 60;
-            const endHour = endDate.getHours() + endDate.getMinutes() / 60;
+            const segStartHour = startDate.getHours() + startDate.getMinutes() / 60;
+            const segEndHour = endDate.getHours() + endDate.getMinutes() / 60;
 
-            const x1 = (startHour / 24) * width;
-            const x2 = (endHour / 24) * width;
-            const y = 20 + (idx * blockHeight);
+            // Only render if segment is visible in current zoom window
+            if (segEndHour >= startHour && segStartHour <= endHour) {
+                const x1 = Math.max(0, ((segStartHour - startHour) / visibleHours) * width);
+                const x2 = Math.min(width, ((segEndHour - startHour) / visibleHours) * width);
+                const y = 20 + (idx * blockHeight);
 
-            ctx.fillStyle = color;
-            ctx.fillRect(x1, y, x2 - x1, blockHeight - 2);
+                ctx.fillStyle = color;
+                ctx.fillRect(x1, y, x2 - x1, blockHeight - 2);
+            }
         });
     });
 
     if (currentTimePosition) {
         const date = new Date(currentTimePosition);
         const hour = date.getHours() + date.getMinutes() / 60 + date.getSeconds() / 3600;
-        const x = (hour / 24) * width;
+        
+        // Only draw playhead if it's in visible range
+        if (hour >= startHour && hour <= endHour) {
+            const x = ((hour - startHour) / visibleHours) * width;
 
-        ctx.strokeStyle = '#fff';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, height);
-        ctx.stroke();
-        ctx.lineWidth = 1;
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, height);
+            ctx.stroke();
+            ctx.lineWidth = 1;
+        }
     }
-
-    renderTimelineLegend(camerasInView, cameraColors);
 }
 
-function renderTimelineLegend(camerasInView, cameraColors) {
-    const legendContainer = document.getElementById('timeline-legend');
-    if (!legendContainer) return;
 
-    legendContainer.innerHTML = '';
+function setupTimelineZoom() {
+    const canvas = document.getElementById('timeline-canvas');
+    if (!canvas) return;
 
-    camerasInView.forEach((cameraId, idx) => {
-        const camera = allCameras.find(c => c.id === cameraId);
-        if (!camera) return;
-
-        const color = cameraColors[idx % cameraColors.length];
-
-        const legendItem = document.createElement('div');
-        legendItem.className = 'legend-item';
-
-        const colorBox = document.createElement('span');
-        colorBox.className = 'legend-color';
-        colorBox.style.backgroundColor = color;
-
-        const label = document.createElement('span');
-        label.textContent = camera.name;
-
-        legendItem.appendChild(colorBox);
-        legendItem.appendChild(label);
-        legendContainer.appendChild(legendItem);
-    });
+    canvas.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        
+        const rect = canvas.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseHour = (mouseX / rect.width) * (24 / timelineZoomLevel) + timelineOffset;
+        
+        // Zoom in/out
+        const zoomDelta = e.deltaY > 0 ? 0.8 : 1.25;
+        const newZoomLevel = Math.max(1.0, Math.min(24.0, timelineZoomLevel * zoomDelta));
+        
+        if (newZoomLevel !== timelineZoomLevel) {
+            timelineZoomLevel = newZoomLevel;
+            
+            // Adjust offset to keep mouse position centered
+            const visibleHours = 24 / timelineZoomLevel;
+            timelineOffset = mouseHour - (mouseX / rect.width) * visibleHours;
+            timelineOffset = Math.max(0, Math.min(24 - visibleHours, timelineOffset));
+            
+            renderTimeline();
+        }
+    }, { passive: false });
 }
+
 
 function setupTimelineControls() {
     const canvas = document.getElementById('timeline-canvas');
     if (!canvas) return;
 
-    canvas.onclick = (e) => {
-        const rect = canvas.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const clickedHour = (x / rect.width) * 24;
+canvas.onclick = (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const visibleHours = 24 / timelineZoomLevel;
+    const clickedHour = (x / rect.width) * visibleHours + timelineOffset;
 
-        const targetTime = new Date(currentDate);
-        targetTime.setHours(Math.floor(clickedHour));
-        targetTime.setMinutes((clickedHour % 1) * 60);
-        targetTime.setSeconds(0);
+    const targetTime = new Date(currentDate);
+    targetTime.setHours(Math.floor(clickedHour));
+    targetTime.setMinutes((clickedHour % 1) * 60);
+    targetTime.setSeconds(0);
 
-        console.log('Timeline clicked at hour:', clickedHour, 'Target time:', targetTime);
-        seekToTime(targetTime);
-    };
+    console.log('Timeline clicked at hour:', clickedHour, 'Target time:', targetTime);
+    seekToTime(targetTime);
+};
+
 
     const playPauseBtn = document.getElementById('play-pause');
     const prevBtn = document.getElementById('prev-segment');
@@ -361,7 +557,9 @@ function performSeek(time) {
     console.log('Seeking to:', time.toISOString(), '(Local:', time.toString(), ')');
     console.log('Searching through', timelineSegments.length, 'segments');
 
-    selectedCameras.forEach((cameraId, idx) => {
+    const orderedSelectedCameras = getOrderedSelectedCameras();
+
+    orderedSelectedCameras.forEach((cameraId, idx) => {
         const timeoutId = setTimeout(() => {
             pendingVideoTimeouts = pendingVideoTimeouts.filter(id => id !== timeoutId);
 
@@ -530,7 +728,6 @@ function toggleMuteAll() {
         btn.textContent = allMuted ? '🔊 Unmute All' : '🔇 Mute All';
     }
 }
-
 function updateVideoGrid() {
     const container = document.getElementById('video-grid');
     if (!container) return;
@@ -547,7 +744,8 @@ function updateVideoGrid() {
     container.innerHTML = '';
     videoPlayers = [];
 
-    const numCameras = selectedCameras.length;
+    const orderedSelectedCameras = getOrderedSelectedCameras();
+    const numCameras = orderedSelectedCameras.length;
 
     if (numCameras === 0) {
         container.innerHTML = '<div style="padding: 40px; text-align: center; color: #888; font-size: 18px;">Select cameras to begin playback</div>';
@@ -574,15 +772,11 @@ function updateVideoGrid() {
     container.style.gap = '10px';
     container.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
 
-    const cameraColors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
-    const camerasInView = [...new Set(timelineSegments.map(s => s.camera_id))];
-
-    selectedCameras.forEach((cameraId, idx) => {
+    orderedSelectedCameras.forEach((cameraId, idx) => {
         const camera = allCameras.find(c => c.id === cameraId);
         if (!camera) return;
 
-        const colorIdx = camerasInView.indexOf(cameraId);
-        const color = colorIdx >= 0 ? cameraColors[colorIdx % cameraColors.length] : '#888';
+        const color = cameraColorMap[cameraId] || '#888';
 
         const wrapper = document.createElement('div');
         wrapper.className = 'video-cell';

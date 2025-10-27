@@ -188,7 +188,8 @@ func main() {
 	http.HandleFunc("/api/recordings/delete-all", deleteAllRecordingsHandler)
 	http.HandleFunc("/api/download", handleDownload)
 	http.HandleFunc("/recordings/", serveRecordingHandler)
-
+	http.HandleFunc("/api/cameras/reorder", reorderCamerasHandler)
+	
 	// Event routes
 	http.HandleFunc("/api/events/trigger", triggerEventHandler)
 	http.HandleFunc("/api/events/list", listEventsHandler)

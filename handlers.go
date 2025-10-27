@@ -391,3 +391,47 @@ func stopRecordingHandler(w http.ResponseWriter, r *http.Request) {
 
 	camerasHandler(w, r)
 }
+
+// reorderCamerasHandler - Reorder cameras
+func reorderCamerasHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var data struct {
+		Order []string `json:"order"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	nvr.mu.Lock()
+	
+	// Validate that all IDs exist
+	for _, id := range data.Order {
+		if _, exists := nvr.cameras[id]; !exists {
+			nvr.mu.Unlock()
+			http.Error(w, fmt.Sprintf("Camera ID %s not found", id), http.StatusBadRequest)
+			return
+		}
+	}
+	
+	// Update camera order
+	nvr.cameraOrder = data.Order
+	nvr.mu.Unlock()
+
+	// Save to disk
+	if err := nvr.save(); err != nil {
+		log.Printf("Failed to save camera order: %v", err)
+		http.Error(w, "Failed to save order", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("Updated camera order: %v", data.Order)
+	
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
