@@ -807,7 +807,7 @@ function updateVideoGrid() {
 
         const video = document.createElement('video');
         video.className = 'timeline-video';
-        video.controls = true;
+        video.controls = false;
         video.muted = true;
         video.style.width = '100%';
         video.style.height = '100%';
