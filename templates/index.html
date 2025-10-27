@@ -8,18 +8,17 @@
 </head>
 <body>
     <div class="container">
-        <header>
-            <h1>📹 SimpleNVR</h1>
-        </header>
 
         <!-- Timeline Playback Section -->
         <section class="section" id="playback-section">
-            <div class="section-header" onclick="toggleSection('playback-content')">
-                <h2>🎬 Timeline Playback</h2>
-                <span class="toggle-icon" id="playback-content-icon">▼</span>
+            <div class="section-header" onclick="toggleSection('playback-content')" style="padding: 0px 20px;">
+                <h1 style="margin: 0; line-height: 1;">📹 Simple NVR</h1>
+                <button onclick="event.stopPropagation(); openCameraSettings();" style="background: none; border: none; color: #4CAF50; cursor: pointer; font-size: 24px; padding: 5px; margin-left: auto;" title="Camera Settings">
+                    ⚙️
+                </button>
             </div>
             <div class="section-content" id="playback-content">
-                <!-- Controls Bar -->
+                <!-- Controls Bar with Playback Controls -->
                 <div class="timeline-controls">
                     <div class="control-group">
                         <label>Date:</label>
@@ -36,28 +35,28 @@
                             <option value="4">4x</option>
                         </select>
                     </div>
+
+                    <!-- Playback controls moved here and right-aligned -->
+                    <div class="control-group" style="margin-left: auto;">
+                        <button id="prev-segment" class="btn btn-small">⏮ Previous</button>
+                        <button id="play-pause" class="btn btn-small">▶ Play</button>
+                        <button id="next-segment" class="btn btn-small">Next ⏭</button>
+                        <button id="mute-all-btn" class="btn btn-small">🔇 Mute All</button>
+                        <button id="fullscreen-btn" class="btn btn-small">⛶ Fullscreen</button>
+                        <button id="download-btn" class="btn btn-small">⬇ Download</button>
+                    </div>
                 </div>
 
-                <!-- Camera Selector -->
-                <div class="camera-selector">
-                    <h3>Select Cameras:</h3>
-                    <div id="timeline-camera-selector"></div>
+                <!-- Camera Selector - Inline with label -->
+                <div class="camera-selector" style="display: flex; align-items: center; gap: 15px;">
+                    <h3 style="margin: 0;">Select Cameras:</h3>
+                    <div id="timeline-camera-selector" style="display: flex; flex-wrap: wrap; gap: 15px; flex: 1;"></div>
                 </div>
 
-                <!-- Fullscreen Wrapper - includes video grid, controls, and timeline -->
+                <!-- Fullscreen Wrapper - includes video grid and timeline -->
                 <div id="fullscreen-wrapper">
                     <!-- Video Grid -->
                     <div id="video-grid" class="video-grid"></div>
-
-                    <!-- Playback Controls -->
-                    <div class="playback-controls">
-                        <button id="prev-segment" class="btn">⏮ Previous</button>
-                        <button id="play-pause" class="btn">▶ Play</button>
-                        <button id="next-segment" class="btn">Next ⏭</button>
-                        <button id="mute-all-btn" class="btn">🔇 Mute All</button>
-                        <button id="fullscreen-btn" class="btn">⛶ Fullscreen</button>
-                        <button id="download-btn" class="btn">⬇ Download</button>
-                    </div>
 
                     <!-- Timeline Canvas -->
                     <div class="timeline-container">
@@ -71,7 +70,7 @@
         </section>
 
         <!-- Camera Management Section -->
-        <section class="section">
+        <section class="section" style="display: none;">
             <div class="section-header" onclick="toggleSection('cameras-content')">
                 <h2>📷 Camera Management</h2>
                 <span class="toggle-icon" id="cameras-content-icon">▼</span>
@@ -154,8 +153,8 @@
     </div>
 
     <!-- Delete All Recordings Modal -->
-    <div id="delete-recordings-modal" class="modal">
-        <div class="modal-content small-modal">
+    <div id="delete-recordings-modal" class="modal" style="z-index: 10001;">
+        <div class="modal-content small-modal" style="width: fit-content !important; max-width: 500px !important; height: auto !important; padding: 20px;">
             <span class="close" onclick="closeDeleteRecordingsModal()">&times;</span>
             <h2>⚠️ Delete All Recordings</h2>
             <p style="color: #f44336; margin: 10px 0;">This will permanently delete ALL recordings from ALL cameras!</p>
@@ -168,16 +167,16 @@
     </div>
 
     <!-- Delete All Cameras Modal -->
-    <div id="delete-cameras-modal" class="modal">
-        <div class="modal-content small-modal">
+    <div id="delete-cameras-modal" class="modal" style="z-index: 10001;">
+        <div class="modal-content small-modal" style="width: fit-content !important; max-width: 500px !important; height: auto !important; padding: 20px;">
             <span class="close" onclick="closeDeleteAllCamerasModal()">&times;</span>
             <h2>⚠️ Delete All Cameras</h2>
             <p style="color: #f44336; margin: 10px 0;">This will permanently delete ALL cameras!</p>
             <p style="margin: 10px 0;">To confirm, enter the code: <strong id="delete-cameras-code" style="color: #4CAF50; font-size: 20px;"></strong></p>
             <div class="form-group">
-                <input type="text" id="delete-cameras-code-input" placeholder="Enter code" maxlength="4" style="text-align: center; font-size: 18px;">
+                <input type="text" id="delete-cameras-code-input" placeholder="Enter code" maxlength="4" style="text-align: center; font-size: 18px; width: 80%; padding: 10px;">
             </div>
-            <button id="delete-cameras-btn" onclick="removeAllCameras()" class="btn btn-danger" disabled>Delete All Cameras</button>
+            <button id="delete-cameras-btn" onclick="removeAllCameras()" class="btn btn-danger" disabled style="width: 100%; padding: 12px; margin-top: 10px;">Delete All Cameras</button>
         </div>
     </div>
 

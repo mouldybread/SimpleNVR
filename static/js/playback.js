@@ -22,6 +22,7 @@ let pendingVideoTimeouts = [];
 let downloadStartTime = null;
 let downloadEndTime = null;
 let downloadCameras = [];
+
 const CHUNK_SIZE_MS = 10 * 60 * 1000;
 
 function initializeTimelinePlayback() {
@@ -37,12 +38,15 @@ function loadTimelineCameras() {
         .then(html => {
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
-            const cameraCards = doc.querySelectorAll('.camera-card');
             
+            // FIXED: Changed from .camera-card to .camera-box
+            const cameraBoxes = doc.querySelectorAll('.camera-box');
             allCameras = [];
-            cameraCards.forEach(card => {
-                const nameEl = card.querySelector('.camera-name');
-                const buttons = card.querySelectorAll('button[onclick*="removeCamera"]');
+            
+            cameraBoxes.forEach(box => {
+                // FIXED: Changed from .camera-name to .camera-title
+                const nameEl = box.querySelector('.camera-title');
+                const buttons = box.querySelectorAll('button[onclick*="removeCamera"]');
                 
                 if (buttons.length > 0) {
                     const onclickAttr = buttons[0].getAttribute('onclick');
@@ -90,17 +94,17 @@ function renderCameraSelector() {
     if (!container) return;
 
     container.innerHTML = '';
-    
+
     allCameras.forEach(cam => {
         const label = document.createElement('label');
         label.className = 'camera-checkbox';
-        
+
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
         checkbox.value = cam.id;
         checkbox.checked = selectedCameras.includes(cam.id);
         checkbox.onchange = () => toggleCamera(cam.id);
-        
+
         label.appendChild(checkbox);
         label.appendChild(document.createTextNode(' ' + cam.name));
         container.appendChild(label);
@@ -137,7 +141,7 @@ function loadTimelineData() {
     if (loadDataTimeoutId) {
         clearTimeout(loadDataTimeoutId);
     }
-    
+
     loadDataTimeoutId = setTimeout(() => {
         performLoadTimelineData();
     }, 200);
@@ -148,16 +152,16 @@ function performLoadTimelineData() {
     const month = String(currentDate.getMonth() + 1).padStart(2, '0');
     const day = String(currentDate.getDate()).padStart(2, '0');
     const dateStr = `${year}-${month}-${day}`;
-    
+
     console.log('=== TIMELINE LOAD ===');
     console.log('Current date object:', currentDate);
     console.log('Querying for date:', dateStr);
-    
+
     fetch(`/api/timeline/recordings?date=${dateStr}`)
         .then(response => response.json())
         .then(segments => {
             console.log('API returned', segments.length, 'segments');
-            
+
             timelineSegments = segments.filter(s => {
                 const include = selectedCameras.includes(s.camera_id);
                 if (include) {
@@ -166,7 +170,7 @@ function performLoadTimelineData() {
                 }
                 return include;
             });
-            
+
             console.log('Filtered to', timelineSegments.length, 'visible segments');
             renderTimeline();
             updateVideoGrid();
@@ -197,11 +201,13 @@ function renderTimeline() {
         ctx.moveTo(x, 0);
         ctx.lineTo(x, height);
         ctx.stroke();
+
         ctx.fillText(hour.toString().padStart(2, '0'), x + 2, 12);
     }
 
     const cameraColors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
     const camerasInView = [...new Set(timelineSegments.map(s => s.camera_id))];
+
     const blockHeight = (height - 20) / Math.max(camerasInView.length, 1);
 
     camerasInView.forEach((cameraId, idx) => {
@@ -322,15 +328,16 @@ function setupTimelineControls() {
 
 function seekToTime(time) {
     const timeMs = time.getTime();
+
     if (lastSeekTime === timeMs && seekTimeoutId) {
         console.log('Skipping duplicate seek to same time');
         return;
     }
-    
+
     if (seekTimeoutId) {
         clearTimeout(seekTimeoutId);
     }
-    
+
     if (isUpdatingGrid) {
         pendingSeekTime = timeMs;
         console.log('Grid is updating, deferring seek');
@@ -339,7 +346,7 @@ function seekToTime(time) {
 
     lastSeekTime = timeMs;
     currentTimePosition = timeMs;
-    
+
     seekTimeoutId = setTimeout(() => {
         performSeek(time);
         seekTimeoutId = null;
@@ -349,7 +356,7 @@ function seekToTime(time) {
 function performSeek(time) {
     pendingVideoTimeouts.forEach(timeoutId => clearTimeout(timeoutId));
     pendingVideoTimeouts = [];
-    
+
     console.log('=== SEEK DEBUG ===');
     console.log('Seeking to:', time.toISOString(), '(Local:', time.toString(), ')');
     console.log('Searching through', timelineSegments.length, 'segments');
@@ -357,42 +364,40 @@ function performSeek(time) {
     selectedCameras.forEach((cameraId, idx) => {
         const timeoutId = setTimeout(() => {
             pendingVideoTimeouts = pendingVideoTimeouts.filter(id => id !== timeoutId);
-            
+
             if (!videoPlayers[idx]) {
                 console.warn(`Video player at index ${idx} does not exist, skipping`);
                 return;
             }
 
             console.log(`\n--- Camera ${cameraId} ---`);
-            
+
             const segment = timelineSegments.find(s => {
                 if (s.camera_id !== cameraId) return false;
-                
+
                 const segStart = new Date(s.start_time);
                 const segEnd = new Date(s.end_time);
-                
                 const timeMs = time.getTime();
                 const startMs = segStart.getTime();
                 const endMs = segEnd.getTime();
-                
+
                 const matches = timeMs >= startMs && timeMs < endMs;
-                
+
                 console.log(`Segment: ${s.file_path}`);
                 console.log(`  Start: ${segStart.toISOString()} (${segStart.toString()})`);
-                console.log(`  End:   ${segEnd.toISOString()} (${segEnd.toString()})`);
-                console.log(`  Time:  ${time.toISOString()} (${time.toString()})`);
+                console.log(`  End: ${segEnd.toISOString()} (${segEnd.toString()})`);
+                console.log(`  Time: ${time.toISOString()} (${time.toString()})`);
                 console.log(`  Match: ${matches} (${timeMs} >= ${startMs} && ${timeMs} < ${endMs})`);
-                
+
                 return matches;
             });
 
             const video = videoPlayers[idx];
-            
+
             if (segment) {
                 const filePath = segment.file_path;
-                
                 console.log(`✓ MATCH FOUND: Loading ${filePath}`);
-                
+
                 const videoCell = video.parentElement;
                 if (videoCell) {
                     const message = videoCell.querySelector('.no-video-message');
@@ -400,24 +405,24 @@ function performSeek(time) {
                         message.style.display = 'none';
                     }
                 }
-                
+
                 video.style.display = 'block';
                 video.pause();
                 video.removeAttribute('src');
-                
+
                 setTimeout(() => {
                     video.src = filePath;
-                    
+
                     const segmentStart = new Date(segment.start_time).getTime();
                     const offset = (time.getTime() - segmentStart) / 1000;
-                    
                     console.log(`Offset within segment: ${offset.toFixed(2)}s`);
-                    
+
                     const metadataHandler = () => {
                         const seekTime = Math.max(0, Math.min(offset, video.duration));
                         console.log(`Video loaded, duration: ${video.duration}s, seeking to ${seekTime.toFixed(2)}s`);
+
                         video.currentTime = seekTime;
-                        
+
                         if (isPlaying) {
                             const playPromise = video.play();
                             if (playPromise !== undefined) {
@@ -426,12 +431,14 @@ function performSeek(time) {
                                 });
                             }
                         }
+
                         video.removeEventListener('loadedmetadata', metadataHandler);
                     };
-                    
+
                     const errorHandler = (e) => {
                         console.error(`✗ Video load error for ${filePath}:`, video.error);
                         video.style.display = 'none';
+
                         const videoCell = video.parentElement;
                         if (videoCell) {
                             const message = videoCell.querySelector('.no-video-message');
@@ -439,19 +446,19 @@ function performSeek(time) {
                                 message.style.display = 'block';
                             }
                         }
+
                         video.removeEventListener('error', errorHandler);
                     };
-                    
+
                     video.addEventListener('loadedmetadata', metadataHandler);
                     video.addEventListener('error', errorHandler);
                 }, 10);
             } else {
                 console.log(`✗ No segment found for camera ${cameraId} at ${time}`);
-                
                 video.pause();
                 video.removeAttribute('src');
                 video.style.display = 'none';
-                
+
                 const videoCell = video.parentElement;
                 if (videoCell) {
                     const message = videoCell.querySelector('.no-video-message');
@@ -461,12 +468,12 @@ function performSeek(time) {
                 }
             }
         }, idx * 150);
-        
+
         pendingVideoTimeouts.push(timeoutId);
     });
 
     renderTimeline();
-    
+
     if (!isPlaying) {
         isPlaying = true;
         const btn = document.getElementById('play-pause');
@@ -511,13 +518,13 @@ function toggleFullscreen() {
 
 function toggleMuteAll() {
     const allMuted = videoPlayers.filter(v => v).every(v => v.muted);
-    
+
     videoPlayers.forEach(video => {
         if (video) {
             video.muted = !allMuted;
         }
     });
-    
+
     const btn = document.getElementById('mute-all-btn');
     if (btn) {
         btn.textContent = allMuted ? '🔊 Unmute All' : '🔇 Mute All';
@@ -541,8 +548,9 @@ function updateVideoGrid() {
     videoPlayers = [];
 
     const numCameras = selectedCameras.length;
+
     if (numCameras === 0) {
-        container.innerHTML = '<p style="color: #888; text-align: center; padding: 2rem;">Select cameras to begin playback</p>';
+        container.innerHTML = '<div style="padding: 40px; text-align: center; color: #888; font-size: 18px;">Select cameras to begin playback</div>';
         isUpdatingGrid = false;
         return;
     }
@@ -601,40 +609,16 @@ function updateVideoGrid() {
             z-index: 10;
             display: none;
         `;
-        noVideoMessage.innerHTML = `
-            <div style="font-size: 48px; margin-bottom: 10px;">📹</div>
-            <div>No Recording Available</div>
-        `;
+        noVideoMessage.innerHTML = `<div>No Recording Available</div><div style="font-size: 14px; margin-top: 10px;">Select a different time</div>`;
 
         const video = document.createElement('video');
-        video.controls = false;
+        video.className = 'timeline-video';
+        video.controls = true;
         video.muted = true;
-        video.playbackRate = playbackSpeed;
         video.style.width = '100%';
         video.style.height = '100%';
-        video.style.backgroundColor = '#000';
-
-        video.addEventListener('error', () => {
-            video.style.display = 'none';
-            const videoCell = video.parentElement;
-            if (videoCell) {
-                const message = videoCell.querySelector('.no-video-message');
-                if (message) {
-                    message.style.display = 'block';
-                }
-            }
-        });
-
-        video.addEventListener('loadeddata', () => {
-            video.style.display = 'block';
-            const videoCell = video.parentElement;
-            if (videoCell) {
-                const message = videoCell.querySelector('.no-video-message');
-                if (message) {
-                    message.style.display = 'none';
-                }
-            }
-        });
+        video.style.objectFit = 'contain';
+        video.style.display = 'none';
 
         wrapper.appendChild(label);
         wrapper.appendChild(noVideoMessage);
@@ -644,17 +628,36 @@ function updateVideoGrid() {
         videoPlayers.push(video);
     });
 
-    if (currentTimePosition && !pendingSeekTime) {
-        pendingSeekTime = currentTimePosition;
+    isUpdatingGrid = false;
+
+    if (pendingSeekTime !== null) {
+        const time = new Date(pendingSeekTime);
+        pendingSeekTime = null;
+        console.log('Executing pending seek after grid update');
+        seekToTime(time);
+    } else if (currentTimePosition) {
+        seekToTime(new Date(currentTimePosition));
+    }
+}
+
+function previousSegment() {
+    if (!currentTimePosition) {
+        currentTimePosition = new Date().getTime();
     }
 
-    isUpdatingGrid = false;
-    
-    if (pendingSeekTime) {
-        const timeToSeek = pendingSeekTime;
-        pendingSeekTime = null;
-        seekToTime(new Date(timeToSeek));
+    const newTime = new Date(currentTimePosition);
+    newTime.setMinutes(newTime.getMinutes() - 10);
+    seekToTime(newTime);
+}
+
+function nextSegment() {
+    if (!currentTimePosition) {
+        currentTimePosition = new Date().getTime();
     }
+
+    const newTime = new Date(currentTimePosition);
+    newTime.setMinutes(newTime.getMinutes() + 10);
+    seekToTime(newTime);
 }
 
 function updatePlaybackSpeed() {
@@ -665,94 +668,109 @@ function updatePlaybackSpeed() {
     });
 }
 
-function previousSegment() {
-    if (!currentTimePosition) {
-        const start = new Date(currentDate);
-        start.setHours(0, 0, 0, 0);
-        seekToTime(start);
-        return;
-    }
-
-    const current = new Date(currentTimePosition);
-    current.setMinutes(current.getMinutes() - 10);
-    seekToTime(current);
-}
-
-function nextSegment() {
-    if (!currentTimePosition) {
-        const start = new Date(currentDate);
-        start.setHours(0, 0, 0, 0);
-        seekToTime(start);
-        return;
-    }
-
-    const current = new Date(currentTimePosition);
-    current.setMinutes(current.getMinutes() + 10);
-    seekToTime(current);
-}
-
 function setupKeyboardShortcuts() {
     document.addEventListener('keydown', (e) => {
-        if (e.target.tagName === 'INPUT') return;
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+            return;
+        }
 
-        switch(e.key) {
-            case ' ':
-                e.preventDefault();
-                togglePlayPause();
-                break;
-            case 'ArrowLeft':
-                e.preventDefault();
-                previousSegment();
-                break;
-            case 'ArrowRight':
-                e.preventDefault();
-                nextSegment();
-                break;
+        if (e.code === 'Space') {
+            e.preventDefault();
+            togglePlayPause();
+        } else if (e.code === 'ArrowLeft') {
+            e.preventDefault();
+            previousSegment();
+        } else if (e.code === 'ArrowRight') {
+            e.preventDefault();
+            nextSegment();
         }
     });
 }
 
-// Download functionality
+// Download Modal Functions
 function openDownloadModal() {
     if (!currentTimePosition) {
         alert('Please select a time on the timeline first');
         return;
     }
-    
-    downloadCameras = [...selectedCameras];
-    resetDownloadTimeRange();
-    updateDownloadModalDisplay();
-    
+
     const modal = document.getElementById('download-modal');
-    if (modal) modal.style.display = 'block';
+    if (!modal) return;
+
+    downloadStartTime = new Date(currentTimePosition);
+    downloadStartTime.setMinutes(downloadStartTime.getMinutes() - 10);
+
+    downloadEndTime = new Date(currentTimePosition);
+    downloadEndTime.setMinutes(downloadEndTime.getMinutes() + 10);
+
+    downloadCameras = [...selectedCameras];
+
+    updateDownloadTimeDisplay();
+    renderDownloadCameraSelection();
+
+    modal.style.display = 'block';
 }
 
 function closeDownloadModal() {
     const modal = document.getElementById('download-modal');
-    if (modal) modal.style.display = 'none';
-    
-    const status = document.getElementById('download-status');
-    if (status) status.style.display = 'none';
+    if (modal) {
+        modal.style.display = 'none';
+    }
 }
 
-function resetDownloadTimeRange() {
+function updateDownloadTimeDisplay() {
+    const startEl = document.getElementById('download-time-start');
+    const endEl = document.getElementById('download-time-end');
+
+    if (startEl) startEl.textContent = formatTimeForDisplay(downloadStartTime);
+    if (endEl) endEl.textContent = formatTimeForDisplay(downloadEndTime);
+}
+
+function formatTimeForDisplay(date) {
+    return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function adjustDownloadTime(delta) {
+    downloadStartTime.setMinutes(downloadStartTime.getMinutes() + delta);
+    downloadEndTime.setMinutes(downloadEndTime.getMinutes() + delta);
+    updateDownloadTimeDisplay();
+}
+
+function resetDownloadTime() {
     if (!currentTimePosition) return;
-    
-    const currentTime = new Date(currentTimePosition);
-    downloadStartTime = new Date(currentTime.getTime() - (CHUNK_SIZE_MS / 2));
-    downloadEndTime = new Date(currentTime.getTime() + (CHUNK_SIZE_MS / 2));
-    
-    updateDownloadModalDisplay();
+
+    downloadStartTime = new Date(currentTimePosition);
+    downloadStartTime.setMinutes(downloadStartTime.getMinutes() - 10);
+
+    downloadEndTime = new Date(currentTimePosition);
+    downloadEndTime.setMinutes(downloadEndTime.getMinutes() + 10);
+
+    updateDownloadTimeDisplay();
 }
 
-function expandDownloadTimeEarlier() {
-    downloadStartTime = new Date(downloadStartTime.getTime() - CHUNK_SIZE_MS);
-    updateDownloadModalDisplay();
-}
+function renderDownloadCameraSelection() {
+    const container = document.getElementById('download-camera-list');
+    if (!container) return;
 
-function expandDownloadTimeLater() {
-    downloadEndTime = new Date(downloadEndTime.getTime() + CHUNK_SIZE_MS);
-    updateDownloadModalDisplay();
+    container.innerHTML = '';
+
+    selectedCameras.forEach(cameraId => {
+        const camera = allCameras.find(c => c.id === cameraId);
+        if (!camera) return;
+
+        const label = document.createElement('label');
+        label.className = 'camera-checkbox';
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.value = cameraId;
+        checkbox.checked = downloadCameras.includes(cameraId);
+        checkbox.onchange = () => toggleDownloadCamera(cameraId);
+
+        label.appendChild(checkbox);
+        label.appendChild(document.createTextNode(' ' + camera.name));
+        container.appendChild(label);
+    });
 }
 
 function toggleDownloadCamera(cameraId) {
@@ -761,52 +779,7 @@ function toggleDownloadCamera(cameraId) {
     } else {
         downloadCameras.push(cameraId);
     }
-    updateDownloadModalDisplay();
-}
-
-function updateDownloadModalDisplay() {
-    const timeDisplay = document.getElementById('download-time-display');
-    if (timeDisplay) {
-        const startStr = downloadStartTime.toLocaleTimeString();
-        const endStr = downloadEndTime.toLocaleTimeString();
-        timeDisplay.textContent = `${startStr} - ${endStr}`;
-    }
-    
-    const durationDisplay = document.getElementById('download-duration-display');
-    if (durationDisplay) {
-        const durationMs = downloadEndTime - downloadStartTime;
-        const minutes = Math.floor(durationMs / 60000);
-        durationDisplay.textContent = `Duration: ${minutes} minutes`;
-    }
-    
-    const cameraList = document.getElementById('download-camera-list');
-    if (cameraList) {
-        cameraList.innerHTML = '';
-        selectedCameras.forEach(cameraId => {
-            const camera = allCameras.find(c => c.id === cameraId);
-            if (camera) {
-                const isChecked = downloadCameras.includes(cameraId);
-                
-                const label = document.createElement('label');
-                label.style.cssText = 'display: flex; align-items: center; padding: 8px; background: #2a2a2a; margin: 5px 0; border-radius: 4px; cursor: pointer;';
-                label.innerHTML = `
-                    <input type="checkbox" 
-                           ${isChecked ? 'checked' : ''} 
-                           onchange="toggleDownloadCamera('${cameraId}')"
-                           style="margin-right: 10px; cursor: pointer;">
-                    <span>📹 ${camera.name}</span>
-                `;
-                cameraList.appendChild(label);
-            }
-        });
-        
-        if (downloadCameras.length === 0) {
-            const warning = document.createElement('div');
-            warning.style.cssText = 'color: #f44336; padding: 8px; background: #3a1f1f; margin: 5px 0; border-radius: 4px;';
-            warning.textContent = '⚠️ No cameras selected';
-            cameraList.appendChild(warning);
-        }
-    }
+    renderDownloadCameraSelection();
 }
 
 function startDownload() {
@@ -814,51 +787,30 @@ function startDownload() {
         alert('Please select at least one camera to download');
         return;
     }
-    
-    const statusDiv = document.getElementById('download-status');
-    const progressList = document.getElementById('download-progress-list');
-    
-    if (statusDiv) statusDiv.style.display = 'block';
-    if (progressList) progressList.innerHTML = '';
-    
+
     downloadCameras.forEach(cameraId => {
         const camera = allCameras.find(c => c.id === cameraId);
         if (!camera) return;
-        
-        const progressItem = document.createElement('div');
-        progressItem.style.cssText = 'padding: 10px; background: #2a2a2a; margin: 5px 0; border-radius: 4px;';
-        progressItem.innerHTML = `
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span>${camera.name}</span>
-                <span id="progress-${cameraId}" style="color: #4CAF50;">⏳ Preparing...</span>
-            </div>
-        `;
-        if (progressList) progressList.appendChild(progressItem);
-        
-        const params = new URLSearchParams({
-            camera_id: cameraId,
-            start_time: downloadStartTime.toISOString(),
-            end_time: downloadEndTime.toISOString()
-        });
-        
-        const downloadUrl = `/api/download?${params.toString()}`;
-        
-        const statusSpan = document.getElementById(`progress-${cameraId}`);
-        if (statusSpan) statusSpan.textContent = '⬇ Downloading...';
-        
-        const link = document.createElement('a');
-        link.href = downloadUrl;
-        link.download = `${camera.name}_${downloadStartTime.toISOString().split('T')[0]}.mp4`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        
-        setTimeout(() => {
-            if (statusSpan) statusSpan.textContent = '✓ Download started';
-        }, 500);
+
+        const startTimeStr = downloadStartTime.toISOString();
+        const endTimeStr = downloadEndTime.toISOString();
+
+        const url = `/api/download?camera_id=${encodeURIComponent(cameraId)}&start_time=${encodeURIComponent(startTimeStr)}&end_time=${encodeURIComponent(endTimeStr)}`;
+
+        console.log('Starting download:', url);
+
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${camera.name}_${downloadStartTime.toISOString().split('T')[0]}.mp4`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
     });
+
+    closeDownloadModal();
 }
 
+// Initialize on page load
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initializeTimelinePlayback);
 } else {
