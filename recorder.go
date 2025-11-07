@@ -370,6 +370,7 @@ func recordSegment(ctx context.Context, cam *Camera, durationSeconds int) error 
 
 	cmd := exec.CommandContext(segmentCtx, "ffmpeg",
 		"-rtsp_transport", "tcp",
+		"-fflags", "+genpts+igndts+ignidx+discardcorrupt",
 		"-i", cam.RTSPUrl,
 		"-t", fmt.Sprintf("%d", durationSeconds),
 		"-c", "copy",

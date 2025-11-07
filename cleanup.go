@@ -155,21 +155,45 @@ func cleanupOldRecordings(dir string, retention time.Duration) {
 		return
 	}
 
-	cutoff := time.Now().Add(-retention)
+	// FIXED: Calculate cutoff in UTC
+	cutoff := time.Now().UTC().Add(-retention)
 	for _, file := range files {
-		info, err := os.Stat(file)
-		if err != nil {
+		filename := filepath.Base(file)
+		if len(filename) < 15 {
 			continue
 		}
 
-		if info.ModTime().Before(cutoff) {
-			size := float64(info.Size()) / (1024 * 1024)
-			err := os.Remove(file)
+		// Extract timestamp from filename (e.g., "20241105_120000_camera.mp4")
+		timeStr := filename[0:15]
+		// FIXED: Parse filenames in UTC
+		recordingStart, err := time.Parse("20060102_150405", timeStr)
+		if err != nil {
+			// Fallback to ModTime for files with non-standard names
+			info, err := os.Stat(file)
 			if err != nil {
+				continue
+			}
+			if info.ModTime().Before(cutoff) {
+				size := float64(info.Size()) / (1024 * 1024)
+				if err := os.Remove(file); err != nil {
+					log.Printf("Failed to delete old recording %s: %v", file, err)
+				} else {
+					log.Printf("Cleaned up old recording: %s (%.2f MB, age: %.1f days)",
+						filename, size, time.Since(info.ModTime()).Hours()/24)
+				}
+			}
+			continue
+		}
+
+		// FIXED: Delete if recording started before cutoff (in UTC)
+		if recordingStart.Before(cutoff) {
+			info, _ := os.Stat(file)
+			size := float64(info.Size()) / (1024 * 1024)
+			if err := os.Remove(file); err != nil {
 				log.Printf("Failed to delete old recording %s: %v", file, err)
 			} else {
-				log.Printf("Cleaned up old recording: %s (%.2f MB, age: %.1f days)",
-					filepath.Base(file), size, time.Since(info.ModTime()).Hours()/24)
+				log.Printf("Cleaned up old recording: %s (%.2f MB, started at %s UTC)",
+					filename, size, recordingStart.Format("2006-01-02 15:04:05"))
 			}
 		}
 	}

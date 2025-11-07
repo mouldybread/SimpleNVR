@@ -77,10 +77,11 @@ func timelineRecordingsHandler(w http.ResponseWriter, r *http.Request) {
 
 	dateStr := r.URL.Query().Get("date")
 	if dateStr == "" {
-		dateStr = time.Now().Format("2006-01-02")
+		dateStr = time.Now().UTC().Format("2006-01-02")
 	}
 
-	date, err := time.ParseInLocation("2006-01-02", dateStr, time.Local)
+	// FIXED: Parse date as UTC (frontend sends UTC dates)
+	date, err := time.Parse("2006-01-02", dateStr)
 	if err != nil {
 		log.Printf("Timeline API: Invalid date format: %s", dateStr)
 		w.Header().Set("Content-Type", "application/json")
@@ -121,7 +122,8 @@ func timelineRecordingsHandler(w http.ResponseWriter, r *http.Request) {
 			}
 
 			timeStr := filename[0:15]
-			fileTime, err := time.ParseInLocation("20060102_150405", timeStr, time.Local)
+			// FIXED: Parse filenames in UTC
+			fileTime, err := time.Parse("20060102_150405", timeStr)
 			if err != nil {
 				continue
 			}

@@ -990,7 +990,7 @@ button:hover { background: #45a049; }
 .camera-dropdown {
     position: relative;
     display: inline-block;
-    min-width: 250px;
+    min-width: 230px;
 }
 
 .dropdown-toggle {
