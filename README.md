@@ -1,4 +1,4 @@
-# SimpleNVR
+# 🔴SimpleNVR
 
 A lightweight, self-hosted Network Video Recorder (NVR) built in Go that uses FFmpeg for RTSP recording and MP4 output. SimpleNVR integrates with go2rtc for camera stream management and provides a web interface for monitoring, recording, and playback.
 
