@@ -4,18 +4,18 @@ A lightweight, self-hosted Network Video Recorder (NVR) built in Go that uses FF
 
 Built with go2rtc and Home Assistant in mind, this NVR assumes you already have adequate live viewing arrangements from your go2rtc headend to endpoints such as Home Assistant or TVs. It provides basic live stream preview for troubleshooting but focuses on recording and playback.
 
-Camera streams: IPC or NVR -> go2rtc -> SimpleNVR
-
-Event streams: Trigger -> Handler(ie Home Assistant) -> SimpleNVR
-
-> **⚠️ Security Notice**  
-> This app makes no attempt at security or access control. You are expected to use reverse proxies, vlans and firewall rules to achieve access control. 
-
 It ingests RTSP streams via FFmpeg, usually from a go2rtc server, and saves them to disk in 10-minute segments with configurable retention periods per camera (1-365 days).
 
 It provides an intuitive timeline-based interface to replay recordings with multi-camera synchronized playback and download merged clips as needed. It runs from a Docker container and tries to be as unobtrusive as possible. It pairs well with TrueNAS Scale or similar storage solutions.
 
-Personal Note: I absolutely did not want to make this app, but t
+> **⚠️ Security Notice**  
+> This app makes no attempt at security or access control. You are expected to use reverse proxies, vlans and firewall rules to achieve access control. 
+
+### Why SimpleNVR?
+
+I really didn't want to build another app, but proprietary NVRs are maddening to use, and existing alternatives are often bloated and quirky. They try to do everything: intercoms, entry systems, alerting, AI object recognition, stream viewing, event orchestration—much of which duplicates tools you likely already run elsewhere.
+
+SimpleNVR was built with a simple philosophy: an NVR should strictly ingest video, catalog and store it, and make it painless to review and export.
 
 ## 🎯 Features
 
