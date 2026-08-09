@@ -173,10 +173,6 @@ SimpleNVR includes a comprehensive event tracking and visualization system:
 ### 2. Docker Compose Configuration
 
 ```yaml
-networks:
-  nvr_net:
-    external: true
-
 services:
   simplenvr:
     container_name: simplenvr
@@ -189,9 +185,8 @@ services:
       '
     working_dir: /app
     restart: unless-stopped
-    networks:
-      nvr_net:
-        ipv4_address: 192.168.1.100
+    ports:
+      - "8443:443"
     volumes:
       - /path/to/simplenvr/build:/app
       - /path/to/simplenvr/recordings:/recordings
@@ -204,7 +199,7 @@ services:
 docker-compose up -d
 ```
 
-The application will be available securely at `https://<YOUR_SERVER_IP>` (or `https://your-server-ip:8443` if port mapping).
+The application will be available securely at `https://<YOUR_SERVER_IP>:8443`.
 
 ---
 
@@ -339,7 +334,7 @@ Add the following to your Home Assistant `configuration.yaml` file *(adjust IP a
 ```yaml
 rest_command:
   simplenvr_trigger_event:
-    url: "https://<YOUR_SERVER_IP>/api/events/trigger"
+    url: "https://<YOUR_SERVER_IP>:8443/api/events/trigger"
     method: POST
     verify_ssl: false  # Required if using auto-generated self-signed certificates
     content_type: "application/json"
@@ -394,7 +389,7 @@ action:
 
 ## 🔒 SSL / TLS Certificates
 
-SimpleNVR runs over HTTPS on port `443` inside the container.
+SimpleNVR runs over HTTPS on port `443` inside the container (mapped to `8443` in the example Docker Compose file).
 
 * **Auto-Generated Self-Signed Certs:** If no certificates exist in `/certs`, SimpleNVR automatically generates self-signed `cert.pem` and `key.pem` files on first boot.
 * **Custom Certificates:** To use custom or Let's Encrypt certificates, mount your own `cert.pem` and `key.pem` files inside `/certs/`.
@@ -691,8 +686,7 @@ Example: 1080p camera @ 4 Mbps
 ## 🔐 Security Considerations
 
 ### Network Isolation
-* Runs on isolated Docker networks (`nvr_net`).
-* Keeping cameras on a separate VLAN is highly recommended.
+* Keeping cameras and the NVR on a separate isolated VLAN is highly recommended.
 * go2rtc acts as the main RTSP gateway.
 
 ### Access Control & HTTPS
