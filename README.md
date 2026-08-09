@@ -828,6 +828,33 @@ Example: 1080p camera @ 4 Mbps
 *   Events stored locally in JSON format
 
 ---
+---
+
+## ⚠️ Disclaimer & Limitation of Liability
+
+> **IMPORTANT NOTICE:** SimpleNVR is provided on an **"AS IS"** and **"AS AVAILABLE"** basis, without warranties or conditions of any kind, either express or implied.
+
+### 1. No Guarantee of Performance or Recording
+This software is strictly intended for personal, non-critical, or self-hosted experimental use and is **not certified for high-risk, critical surveillance, or life-safety applications**. The author(s) and contributor(s) make **no guarantees, representations, or warranties** that:
+* The software will operate uninterrupted, continuously, or error-free.
+* Video footage, motion events, audio, or metadata will be successfully captured, processed, stored, or retrieved.
+* The software will survive hardware failures, network disruptions, power outages, software bugs, or unexpected system crashes.
+
+### 2. User Responsibility & Testing
+By using this software, you acknowledge and agree that you are solely responsible for:
+* Independently testing, verifying, and monitoring the recording integrity and system health in your deployment environment.
+* Maintaining appropriate backup, failover, and hardware redundancy protocols for critical footage.
+* Ensuring compliance with local surveillance, privacy, and video retention laws.
+
+### 3. Limitation of Liability
+To the maximum extent permitted by applicable law, in no event shall the author(s), developer(s), or copyright holder(s) be liable for any claim, loss, damage, or liability whatsoever—whether direct, indirect, incidental, special, or consequential—arising out of or in connection with the software, including without limitation:
+* Property damage, theft, burglary, robbery, or unrecorded security incidents.
+* Data corruption, loss of video logs, or storage drive wear.
+* Financial loss, business interruption, or legal claims resulting from software malfunction or failure to record.
+
+**BY INSTALLING, DEPLOYING, OR USING THIS SOFTWARE, YOU ACKNOWLEDGE THAT YOU HAVE READ THIS DISCLAIMER, UNDERSTAND IT, AND AGREE TO ASSUME ALL ASSOCIATED RISKS.**
+
+---
 
 ## 📄 License
 
