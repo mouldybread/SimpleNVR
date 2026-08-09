@@ -174,7 +174,7 @@ SimpleNVR includes a comprehensive event tracking and visualization system:
 
 ```yaml
 networks:
-  vlan2_net:
+  nvr_net:
     external: true
 
 services:
@@ -190,13 +190,12 @@ services:
     working_dir: /app
     restart: unless-stopped
     networks:
-      vlan2_net:
-        ipv4_address: 192.168.2.180
-        priority: 900
+      nvr_net:
+        ipv4_address: 192.168.1.100
     volumes:
-      - /mnt/backup_pool/operational/containers/simplenvr/build:/app
-      - /mnt/backup_pool/operational/containers/simplenvr/recordings:/recordings
-      - /mnt/backup_pool/operational/containers/simplenvr/certs:/certs
+      - /path/to/simplenvr/build:/app
+      - /path/to/simplenvr/recordings:/recordings
+      - /path/to/simplenvr/certs:/certs
 ```
 
 ### 3. Starting the Container
@@ -205,7 +204,7 @@ services:
 docker-compose up -d
 ```
 
-The application will be available securely at `https://192.168.2.180` (or `https://your-server-ip:8443` if mapping ports).
+The application will be available securely at `https://<YOUR_SERVER_IP>` (or `https://your-server-ip:8443` if port mapping).
 
 ---
 
@@ -340,7 +339,7 @@ Add the following to your Home Assistant `configuration.yaml` file *(adjust IP a
 ```yaml
 rest_command:
   simplenvr_trigger_event:
-    url: "[https://192.168.2.180/api/events/trigger](https://192.168.2.180/api/events/trigger)"
+    url: "https://<YOUR_SERVER_IP>/api/events/trigger"
     method: POST
     verify_ssl: false  # Required if using auto-generated self-signed certificates
     content_type: "application/json"
@@ -692,7 +691,7 @@ Example: 1080p camera @ 4 Mbps
 ## 🔐 Security Considerations
 
 ### Network Isolation
-* Runs on isolated Docker networks (`vlan2_net`).
+* Runs on isolated Docker networks (`nvr_net`).
 * Keeping cameras on a separate VLAN is highly recommended.
 * go2rtc acts as the main RTSP gateway.
 
