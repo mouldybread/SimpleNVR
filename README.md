@@ -9,13 +9,15 @@ It ingests RTSP streams via FFmpeg, usually from a go2rtc server, and saves them
 It provides an intuitive timeline-based interface to replay recordings with multi-camera synchronized playback and download merged clips as needed. It runs from a Docker container and tries to be as unobtrusive as possible. It pairs well with TrueNAS Scale or similar storage solutions.
 
 > **⚠️ Security Notice**  
-> This app makes no attempt at security or access control. You are expected to use reverse proxies, vlans and firewall rules to achieve access control. 
+> This app makes no attempt at access control or authentication. You are expected to use reverse proxies, VLANs, and firewall rules to achieve access control.
 
 ### Why SimpleNVR?
 
 I really didn't want to build another app, but proprietary NVRs are maddening to use, and existing alternatives are often bloated and quirky. They try to do everything: intercoms, entry systems, alerting, AI object recognition, stream viewing, event orchestration—much of which duplicates tools you likely already run elsewhere.
 
 SimpleNVR was built with a simple philosophy: an NVR should strictly ingest video, catalog and store it, and make it painless to review and export.
+
+---
 
 ## 🎯 Features
 
@@ -32,6 +34,7 @@ SimpleNVR was built with a simple philosophy: an NVR should strictly ingest vide
 *   **Drag-and-Drop Reordering** - Organize camera order with visual feedback
 *   **Toast Notifications** - Non-intrusive feedback for all operations
 *   **Per-Camera Storage Tracking** - View disk space consumed by each camera
+*   **Native HTTPS/TLS Support** - Auto-generates self-signed certificates in `/certs` on first boot, or loads custom certificates
 
 ### Event System
 
@@ -121,12 +124,16 @@ SimpleNVR includes a comprehensive event tracking and visualization system:
 *   **Duplicate Prevention** - go2rtc scan prevents importing duplicate RTSP URLs
 *   **Storage Display** - View disk space used by each camera's recordings
 
+---
+
 ## 📋 Requirements
 
 *   Docker and Docker Compose
 *   go2rtc server (for camera stream management)
 *   RTSP-compatible cameras (H.264 video codec)
 *   FFmpeg (for video concatenation during downloads)
+
+---
 
 ## 🚀 Installation
 
@@ -154,6 +161,9 @@ SimpleNVR includes a comprehensive event tracking and visualization system:
 │           ├── modals.js
 │           ├── playback.js
 │           └── recordings.js
+├── certs/
+│   ├── cert.pem
+│   └── key.pem
 └── recordings/
     ├── cameras.json
     └── events.json
@@ -162,25 +172,30 @@ SimpleNVR includes a comprehensive event tracking and visualization system:
 ### 2. Docker Compose Configuration
 
 ```yaml
+networks:
+  vlan2_net:
+    external: true
+
 services:
   simplenvr:
     container_name: simplenvr
-    image: golang:1.23-alpine
+    image: golang:1.26-alpine
+    command: |
+      sh -c '
+        apk add --no-cache ffmpeg &&
+        go install [github.com/air-verse/air@latest](https://github.com/air-verse/air@latest) &&
+        exec /go/bin/air
+      '
     working_dir: /app
-    command: >
-      sh -c "
-      apk add --no-cache ffmpeg &&
-      go install [github.com/air-verse/air@latest](https://github.com/air-verse/air@latest) &&
-      air
-      "
-    volumes:
-      - /path/to/SimpleNVR/build:/app
-      - /path/to/SimpleNVR/recordings:/recordings
-    ports:
-      - "8099:80"
-    networks:
-      - your_network
     restart: unless-stopped
+    networks:
+      vlan2_net:
+        ipv4_address: 192.168.2.180
+        priority: 900
+    volumes:
+      - /mnt/backup_pool/operational/containers/simplenvr/build:/app
+      - /mnt/backup_pool/operational/containers/simplenvr/recordings:/recordings
+      - /mnt/backup_pool/operational/containers/simplenvr/certs:/certs
 ```
 
 ### 3. Starting the Container
@@ -189,7 +204,9 @@ services:
 docker-compose up -d
 ```
 
-The application will be available at `http://your-server-ip:8099`
+The application will be available securely at `https://192.168.2.180` (or `https://your-server-ip:8443` if port mapping).
+
+---
 
 ## 🎮 Usage
 
@@ -394,8 +411,9 @@ Add the following to your Home Assistant `configuration.yaml` file to define how
 ```yaml
 rest_command:
   simplenvr_trigger_event:
-    url: "[http://192.168.2.180:8099/api/events/trigger](http://192.168.2.180:8099/api/events/trigger)"
+    url: "[https://192.168.2.180/api/events/trigger](https://192.168.2.180/api/events/trigger)"
     method: POST
+    verify_ssl: false  # Required if using auto-generated self-signed certificates
     content_type: "application/json"
     payload: >
       {
@@ -447,6 +465,15 @@ action:
 
 ---
 
+## 🔒 SSL / TLS Certificates
+
+SimpleNVR runs over HTTPS on port `443` internally. 
+
+*   **Auto-Generated Self-Signed Certs:** On first run, if no certificate files are present in the mounted `/certs` directory, SimpleNVR automatically creates a self-signed `cert.pem` and `key.pem`.
+*   **Custom Certificates:** To use custom or Let's Encrypt certificates, place your certificate and private key in the mounted `/certs` folder named `cert.pem` and `key.pem`. SimpleNVR will automatically detect and load them on startup.
+
+---
+
 ## 📁 File Structure
 
 ### Recording Files
@@ -457,14 +484,15 @@ action:
 *   **Segment Length:** 10 minutes per file
 *   **Files per day:** 144 per camera (24 hours × 6 segments/hour)
 
-### Configuration
+### Configuration & Certificates
 
-*   **cameras.json** - Camera settings, retention periods, recording states, camera order, color assignments
-*   **events.json** - Event log with timestamps, cameras, types, and durations
+*   **cameras.json** - Camera settings, retention periods, recording states, camera order, color assignments (`/recordings/cameras.json`)
+*   **events.json** - Event log with timestamps, cameras, types, and durations (`/recordings/events.json`)
+*   **cert.pem / key.pem** - SSL/TLS certificates (`/certs/`)
 
 ### Application Files
 
-*   `main.go`: HTTP server, API handlers, camera management
+*   `main.go`: HTTP/HTTPS server, API handlers, camera management
 *   `recorder.go`: RTSP recording, MP4 muxing, cleanup routines
 *   `handlers.go`: HTTP request handlers, camera operations
 *   `playback.go`: Timeline data, recording queries
@@ -473,6 +501,8 @@ action:
 *   `templates/`: HTML templates (index, camera cards)
 *   `static/js/`: Modular JavaScript (playback, cameras, modals, core, recordings)
 *   `static/style.css`: Application styling with responsive design
+
+---
 
 ## 🔧 Technical Details
 
@@ -605,6 +635,8 @@ action:
 *   **Safari:** Full support (H.264 native)
 *   **Mobile:** Responsive design, touch-friendly
 
+---
+
 ## 🎨 Customization
 
 ### Segment Duration
@@ -623,13 +655,12 @@ Edit `main.go` in `addCameraHandler`:
 RetentionDays: 7,  // Change default days
 ```
 
-### Port
+### Port / TLS Port
 
-Edit `docker-compose.yml`:
+Edit `main.go` (and `docker-compose.yml` if mapping ports):
 
-```yaml
-ports:
-  - "8099:80"  # Change 8099 to desired port
+```go
+http.ListenAndServeTLS(":443", certPath, keyPath, nil)
 ```
 
 ### Timeline Chunk Size
@@ -681,23 +712,7 @@ Edit `playback.js` in `updateVideoGrid`:
 video.controls = false;  // Set to true to show individual controls
 ```
 
-### Grid Layout
-
-Automatic layout based on number of selected cameras (defined in `updateVideoGrid` function)
-
-### Spacing and Margins
-
-Edit `style.css`:
-
-```css
-#playback-section {
-    margin: 20px;  /* Adjust for overall spacing */
-}
-```
-
-### Styling
-
-Edit `static/style.css` - Uses CSS variables for theming
+---
 
 ## 🔍 Monitoring
 
@@ -718,15 +733,10 @@ docker logs -f simplenvr
 *   `Camera order updated` - Drag-drop reorder saved
 *   `Event added: {type} for {camera}` - New event logged
 *   `Skipping camera {name} - URL already exists` - go2rtc scan duplicate prevention
+*   `Found existing TLS certificates in /certs.` - HTTPS certs loaded
+*   `No TLS certificates found. Auto-generating self-signed TLS certificate...` - Cert generation trigger
 
-### Health Checks
-
-*   Camera list updates automatically via Server-Sent Events
-*   Recording state displayed in real-time
-*   Auto-reconnect on stream failures
-*   Timeline updates when date, camera selection, or zoom changes
-*   Event markers update when events are added/removed
-*   Toast notifications for all user operations
+---
 
 ## 🐛 Troubleshooting
 
@@ -769,64 +779,7 @@ docker logs -f simplenvr
 *   Try refreshing the page
 *   Verify browser supports wheel events
 
-### Camera Order Not Persisting
-
-*   Check browser localStorage is enabled
-*   Verify `cameras.json` is writable
-*   Review browser console for errors
-*   Try manually reordering in configuration modal
-
-### Drag-and-Drop Not Working
-
-*   Ensure dragging from left side of camera card (drag handle area)
-*   Check browser console for errors
-*   Verify HTML5 drag and drop is supported
-*   Try refreshing the page
-
-### Download Fails
-
-*   Verify FFmpeg is installed in container
-*   Check that recordings exist for selected time range
-*   Review server logs for FFmpeg errors
-*   Ensure sufficient disk space
-*   Try smaller time range
-
-### Live Stream Fails
-
-*   Confirm go2rtc is running and accessible
-*   Check go2rtc has the camera configured
-*   Verify Docker network connectivity
-*   Review go2rtc logs
-
-### High Disk Usage
-
-*   Reduce retention period
-*   Decrease segment duration
-*   Stop recording on unused cameras
-*   Monitor cleanup routine execution
-*   Use **Delete All Recordings** if needed
-*   Check per-camera storage display
-
-### Videos Disappear on Seek (Firefox)
-
-*   Firefox compatibility optimizations are in place
-*   Debounced seek operations prevent overload
-*   Staggered video loading (150ms between cameras)
-*   If issues persist, try Chrome/Edge
-
-### Dropdown Selector Issues
-
-*   Clear browser cache and refresh
-*   Check JavaScript console for errors
-*   Verify `cameras.json` contains color assignments
-*   Try re-scanning from go2rtc to reset colors
-
-### go2rtc Scan Importing Duplicates
-
-*   System now checks for duplicate RTSP URLs
-*   Re-scanning will skip existing cameras
-*   Check logs for "Skipping camera" messages
-*   Verify cameras have unique RTSP URLs
+---
 
 ## 📊 Performance
 
@@ -852,15 +805,7 @@ Example: 1080p camera @ 4 Mbps
 *   **7-day retention:** ~301 GB
 *   **30-day retention:** ~1.29 TB
 
-### Timeline Performance
-
-*   Optimized for fast date queries
-*   Efficient segment matching algorithm
-*   Canvas rendering for smooth timeline visualization
-*   Zoom rendering only displays visible segments and events
-*   Debounced API calls to prevent overload
-*   Staggered video loading prevents server strain
-*   Event marker rendering optimized for large event counts
+---
 
 ## 🔐 Security Considerations
 
@@ -870,24 +815,19 @@ Example: 1080p camera @ 4 Mbps
 *   Cameras on separate VLAN recommended
 *   go2rtc acts as RTSP gateway
 
-### Access Control
+### Access Control & HTTPS
 
-*   **Port Security:** Bind to localhost if using reverse proxy
-*   **Authentication:** Add reverse proxy with auth (nginx, Caddy, Traefik)
-*   **HTTPS:** Terminate TLS at reverse proxy
+*   **Native HTTPS:** Serves web interface and API natively over HTTPS on port 443
+*   **VLAN/Firewalls:** Network isolation recommended since there is no built-in auth
 
 ### Data Protection
 
 *   Recordings stored on host filesystem
 *   No cloud uploads (fully self-hosted)
-*   Container has limited access to recordings directory
+*   Container has limited access to recordings and certs directories
 *   Events stored locally in JSON format
 
-### Download Security
-
-*   Downloads are temporary (FFmpeg streams directly)
-*   No persistent export files on server
-*   Time-based access control possible via reverse proxy
+---
 
 ## 📄 License
 
@@ -901,9 +841,9 @@ For issues, improvements, or questions, please refer to project documentation.
 
 *   **Review logs:** `docker logs simplenvr`
 *   **Check recording directory:** `/recordings/`
+*   **Check certs directory:** `/certs/`
 *   **Check event log:** `/recordings/events.json`
 *   **Verify go2rtc:** `http://go2rtc:1984`
 *   Browser console for frontend errors
 *   API endpoints for debugging
 *   Check `cameras.json` for configuration issues
-```
