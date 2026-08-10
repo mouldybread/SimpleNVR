@@ -3,16 +3,97 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"html/template"
 	"log"
+	"math/big"
+	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
+
+// ensureTLSCertificates checks if cert.pem and key.pem exist in certPath/keyPath.
+// If not, it automatically generates a self-signed certificate pair.
+func ensureTLSCertificates(certPath, keyPath string) error {
+	_, certErr := os.Stat(certPath)
+	_, keyErr := os.Stat(keyPath)
+
+	// If both files already exist, we're good to go
+	if certErr == nil && keyErr == nil {
+		log.Println("Found existing TLS certificates in /certs.")
+		return nil
+	}
+
+	log.Println("No TLS certificates found. Auto-generating self-signed TLS certificate...")
+
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return err
+	}
+
+	notBefore := time.Now()
+	notAfter := notBefore.Add(365 * 24 * time.Hour) // 1 year validity
+
+	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return err
+	}
+
+	template := x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			Organization: []string{"SimpleNVR Self-Signed"},
+			CommonName:   "SimpleNVR",
+		},
+		NotBefore:             notBefore,
+		NotAfter:              notAfter,
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("0.0.0.0")},
+	}
+
+	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+	if err != nil {
+		return err
+	}
+
+	// Write cert.pem
+	certOut, err := os.Create(certPath)
+	if err != nil {
+		return err
+	}
+	defer certOut.Close()
+	if err := pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes}); err != nil {
+		return err
+	}
+
+	// Write key.pem
+	keyOut, err := os.OpenFile(keyPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	defer keyOut.Close()
+	privBytes, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		return err
+	}
+	if err := pem.Encode(keyOut, &pem.Block{Type: "PRIVATE KEY", Bytes: privBytes}); err != nil {
+		return err
+	}
+
+	log.Printf("Self-signed TLS certificate generated successfully in %s", filepath.Dir(certPath))
+	return nil
+}
 
 // RecordingMode defines how a camera should record
 type RecordingMode string
@@ -24,15 +105,16 @@ const (
 )
 
 type Camera struct {
-	ID            string        `json:"id"`
-	Name          string        `json:"name"`
-	RTSPUrl       string        `json:"rtsp_url"`
-	RecordDir     string        `json:"record_dir"`
-	IsRecording   bool          `json:"is_recording"`
-	RetentionDays int           `json:"retention_days"`
-	RecordingMode RecordingMode `json:"recording_mode"`
-	AddedAt       time.Time     `json:"added_at"`
+	ID            string             `json:"id"`
+	Name          string             `json:"name"`
+	RTSPUrl       string             `json:"rtsp_url"`
+	RecordDir     string             `json:"record_dir"`
+	IsRecording   bool               `json:"is_recording"`
+	RetentionDays int                `json:"retention_days"`
+	RecordingMode RecordingMode      `json:"recording_mode"`
+	AddedAt       time.Time          `json:"added_at"`
 	recordCancel  context.CancelFunc
+	recordWG      sync.WaitGroup
 	bufferManager *BufferManager
 }
 
@@ -135,6 +217,8 @@ func autoStartRecordings() {
 			ctx, cancel := context.WithCancel(context.Background())
 			cam.recordCancel = cancel
 
+			cam.recordWG.Add(1)
+
 			if cam.RecordingMode == ModeEventBased {
 				go recordCameraEventBased(ctx, cam)
 			} else if cam.RecordingMode == ModeContinuous {
@@ -167,7 +251,7 @@ func main() {
 	}
 
 	autoStartRecordings()
-	recoverPartialRecordings() // <-- ADDED THIS LINE
+	recoverPartialRecordings()
 
 	// Camera management routes
 	http.HandleFunc("/api/cameras", camerasHandler)
@@ -189,7 +273,7 @@ func main() {
 	http.HandleFunc("/api/download", handleDownload)
 	http.HandleFunc("/recordings/", serveRecordingHandler)
 	http.HandleFunc("/api/cameras/reorder", reorderCamerasHandler)
-	
+
 	// Event routes
 	http.HandleFunc("/api/events/trigger", triggerEventHandler)
 	http.HandleFunc("/api/events/list", listEventsHandler)
@@ -208,6 +292,22 @@ func main() {
 	// Start background cleanup routine
 	go cleanupRoutine()
 
-	log.Println("SimpleNVR starting on :80")
-	log.Fatal(http.ListenAndServe(":80", nil))
+	// Ensure /certs directory exists
+	certDir := "/certs"
+	if err := os.MkdirAll(certDir, 0755); err != nil {
+		log.Fatalf("Failed to create certs directory: %v", err)
+	}
+
+	certPath := filepath.Join(certDir, "cert.pem")
+	keyPath := filepath.Join(certDir, "key.pem")
+
+	// Ensure certificates exist (auto-generates into /certs if missing)
+	if err := ensureTLSCertificates(certPath, keyPath); err != nil {
+		log.Fatalf("Failed to initialize TLS certificates: %v", err)
+	}
+
+	log.Println("SimpleNVR starting HTTPS server on :443...")
+	if err := http.ListenAndServeTLS(":443", certPath, keyPath, nil); err != nil {
+		log.Fatalf("Server failed to start over TLS: %v", err)
+	}
 }
