@@ -61,12 +61,12 @@ func triggerEventHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Create event
 	event := Event{
-		ID:         generateID("event", time.Now()),
+		ID:         generateID("event", time.Now().UTC()),
 		CameraName: req.CameraName,
 		Label:      req.Label,
 		StartTime:  startTime,
 		Duration:   req.DurationSeconds,
-		CreatedAt:  time.Now(),
+		CreatedAt:  time.Now().UTC(),
 	}
 
 	nvr.mu.Lock()
