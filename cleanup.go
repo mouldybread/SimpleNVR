@@ -86,7 +86,7 @@ func cleanupOrphanedRecordingsHandler(w http.ResponseWriter, r *http.Request) {
 				}
 				tmpFileInfos = append(tmpFileInfos, fileInfo{
 					path:    file,
-					modTime: info.ModTime(),
+					modTime: info.ModTime().UTC(),
 					size:    info.Size(),
 				})
 			}
@@ -127,6 +127,55 @@ func cleanupOrphanedRecordingsHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// cleanupEvents - Removes events that exceed their camera's retention period or belong to deleted cameras
+func cleanupEvents() {
+	nvr.mu.Lock()
+
+	// Map camera names to their retention duration
+	retentionMap := make(map[string]time.Duration)
+	for _, cam := range nvr.cameras {
+		days := cam.RetentionDays
+		if days == 0 {
+			days = 7
+		}
+		retentionMap[cam.Name] = time.Duration(days) * 24 * time.Hour
+	}
+
+	now := time.Now().UTC()
+	var validEvents []Event
+	deletedCount := 0
+
+	for _, event := range nvr.events {
+		retention, exists := retentionMap[event.CameraName]
+		
+		if !exists {
+			// Orphaned event (camera was deleted)
+			deletedCount++
+			continue
+		}
+
+		cutoff := now.Add(-retention)
+		if event.StartTime.Before(cutoff) {
+			// Expired event
+			deletedCount++
+			continue
+		}
+
+		validEvents = append(validEvents, event)
+	}
+
+	eventsChanged := len(validEvents) != len(nvr.events)
+	nvr.events = validEvents
+	nvr.mu.Unlock()
+
+	if eventsChanged {
+		log.Printf("Cleaned up %d old/orphaned events from memory", deletedCount)
+		if err := nvr.save(); err != nil {
+			log.Printf("Failed to save events after cleanup: %v", err)
+		}
+	}
+}
+
 // cleanupRoutine - Background task that runs every 5 minutes to clean old recordings
 func cleanupRoutine() {
 	ticker := time.NewTicker(5 * time.Minute)
@@ -134,6 +183,10 @@ func cleanupRoutine() {
 
 	log.Println("Cleanup routine started")
 	for range ticker.C {
+		// Clean up event metadata first
+		cleanupEvents()
+
+		// Clean up video files
 		nvr.mu.RLock()
 		for _, cam := range nvr.cameras {
 			retentionDays := cam.RetentionDays
@@ -155,7 +208,6 @@ func cleanupOldRecordings(dir string, retention time.Duration) {
 		return
 	}
 
-	// FIXED: Calculate cutoff in UTC
 	cutoff := time.Now().UTC().Add(-retention)
 	for _, file := range files {
 		filename := filepath.Base(file)
@@ -165,15 +217,16 @@ func cleanupOldRecordings(dir string, retention time.Duration) {
 
 		// Extract timestamp from filename (e.g., "20241105_120000_camera.mp4")
 		timeStr := filename[0:15]
-		// FIXED: Parse filenames in UTC
-		recordingStart, err := time.Parse("20060102_150405", timeStr)
+		
+		// Parse filenames strictly in UTC
+		recordingStart, err := time.ParseInLocation("20060102_150405", timeStr, time.UTC)
 		if err != nil {
 			// Fallback to ModTime for files with non-standard names
 			info, err := os.Stat(file)
 			if err != nil {
 				continue
 			}
-			if info.ModTime().Before(cutoff) {
+			if info.ModTime().UTC().Before(cutoff) {
 				size := float64(info.Size()) / (1024 * 1024)
 				if err := os.Remove(file); err != nil {
 					log.Printf("Failed to delete old recording %s: %v", file, err)
@@ -185,7 +238,6 @@ func cleanupOldRecordings(dir string, retention time.Duration) {
 			continue
 		}
 
-		// FIXED: Delete if recording started before cutoff (in UTC)
 		if recordingStart.Before(cutoff) {
 			info, _ := os.Stat(file)
 			size := float64(info.Size()) / (1024 * 1024)
@@ -207,14 +259,14 @@ func cleanupTempFiles(dir string) {
 	}
 
 	// .tmp files older than 15 minutes are considered stale
-	cutoff := time.Now().Add(-15 * time.Minute)
+	cutoff := time.Now().UTC().Add(-15 * time.Minute)
 	for _, file := range files {
 		info, err := os.Stat(file)
 		if err != nil {
 			continue
 		}
 
-		if info.ModTime().Before(cutoff) {
+		if info.ModTime().UTC().Before(cutoff) {
 			size := float64(info.Size()) / (1024 * 1024)
 			err := os.Remove(file)
 			if err != nil {
