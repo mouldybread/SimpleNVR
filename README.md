@@ -19,6 +19,45 @@ SimpleNVR was built with a simple philosophy: an NVR should strictly ingest vide
 
 ---
 
+## 🚀 Installation
+
+### 1. Directory Structure
+
+```text
+/path/to/SimpleNVR/
+├── certs/
+│   ├── cert.pem
+│   └── key.pem
+└── recordings/
+    ├── cameras.json
+    └── events.json
+```
+
+### 2. Docker Compose Configuration
+
+```yaml
+services:
+  simplenvr:
+    container_name: simplenvr
+    image: ghcr.io/mouldybread/simplenvr:latest
+    restart: unless-stopped
+    ports:
+      - "8443:443"
+    volumes:
+      - ./recordings:/recordings
+      - ./certs:/certs
+```
+
+### 3. Starting the Container
+
+```bash
+docker-compose up -d
+```
+
+The application will be available securely at `https://<YOUR_SERVER_IP>:8443`.
+
+---
+
 ## 🎯 Features
 
 ### Core Functionality
@@ -122,54 +161,6 @@ SimpleNVR includes a comprehensive event tracking and visualization system:
 * **Bulk Operations** - Set retention, remove cameras, cleanup recordings, clear events
 * **Duplicate Prevention** - go2rtc scan prevents importing duplicate RTSP URLs
 * **Storage Display** - View disk space used by each camera's recordings
-
----
-
-## 📋 Requirements
-
-* Docker and Docker Compose
-* go2rtc server (for camera stream management)
-* RTSP-compatible cameras (H.264 video codec)
-* FFmpeg (for video concatenation during downloads)
-
----
-
-## 🚀 Installation
-
-### 1. Directory Structure
-
-```text
-/path/to/SimpleNVR/
-├── certs/
-│   ├── cert.pem
-│   └── key.pem
-└── recordings/
-    ├── cameras.json
-    └── events.json
-```
-
-### 2. Docker Compose Configuration
-
-```yaml
-services:
-  simplenvr:
-    container_name: simplenvr
-    image: ghcr.io/mouldybread/simplenvr:latest
-    restart: unless-stopped
-    ports:
-      - "8443:443"
-    volumes:
-      - ./recordings:/recordings
-      - ./certs:/certs
-```
-
-### 3. Starting the Container
-
-```bash
-docker-compose up -d
-```
-
-The application will be available securely at `https://<YOUR_SERVER_IP>:8443`.
 
 ---
 
