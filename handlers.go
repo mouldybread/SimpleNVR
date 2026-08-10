@@ -1,6 +1,8 @@
 package main
 
 import (
+	"strings"
+	"net/url"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -24,7 +26,7 @@ func addCameraHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 	id := generateID(name, now)
 	recordDir := filepath.Join("/recordings", id)
 	os.MkdirAll(recordDir, 0755)
@@ -61,12 +63,25 @@ func deleteCameraHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := data["id"]
+	var needsWait bool
 
 	nvr.mu.Lock()
-	if cam, exists := nvr.cameras[id]; exists {
+	cam, exists := nvr.cameras[id]
+	if exists {
 		if cam.IsRecording && cam.recordCancel != nil {
 			cam.recordCancel()
+			needsWait = true
 		}
+	}
+	nvr.mu.Unlock()
+
+	// Wait outside the lock so we don't freeze the API
+	if needsWait {
+		cam.recordWG.Wait()
+	}
+
+	if exists {
+		nvr.mu.Lock()
 		cam.IsRecording = false
 
 		// Delete the camera's recording directory
@@ -84,8 +99,8 @@ func deleteCameraHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		log.Printf("Removed camera: %s (%s)", cam.Name, id)
+		nvr.mu.Unlock()
 	}
-	nvr.mu.Unlock()
 
 	if err := nvr.save(); err != nil {
 		log.Printf("Failed to save cameras: %v", err)
@@ -96,15 +111,26 @@ func deleteCameraHandler(w http.ResponseWriter, r *http.Request) {
 
 // deleteAllCamerasHandler - Delete all cameras
 func deleteAllCamerasHandler(w http.ResponseWriter, r *http.Request) {
+	var waitingCameras []*Camera
+
 	nvr.mu.Lock()
 	count := len(nvr.cameras)
 	for _, cam := range nvr.cameras {
 		if cam.IsRecording && cam.recordCancel != nil {
 			cam.recordCancel()
+			waitingCameras = append(waitingCameras, cam)
 		}
-		cam.IsRecording = false
+	}
+	nvr.mu.Unlock()
 
-		// Delete the camera's recording directory
+	// Wait for all active FFmpeg processes to spin down gracefully
+	for _, cam := range waitingCameras {
+		cam.recordWG.Wait()
+	}
+
+	nvr.mu.Lock()
+	for _, cam := range nvr.cameras {
+		cam.IsRecording = false
 		if err := os.RemoveAll(cam.RecordDir); err != nil {
 			log.Printf("Failed to delete recording directory for camera %s: %v", cam.Name, err)
 		} else {
@@ -204,47 +230,57 @@ func updateRecordingModeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate mode
 	if data.Mode != ModeContinuous && data.Mode != ModeEventBased && data.Mode != ModeNoRecording {
 		http.Error(w, "Invalid mode. Must be: continuous, event_based, or no_recording", http.StatusBadRequest)
 		return
 	}
 
+	var needsWait bool
+	var oldMode RecordingMode
+
 	nvr.mu.Lock()
 	cam, exists := nvr.cameras[data.ID]
-	if exists {
-		oldMode := cam.RecordingMode
+	if !exists {
+		nvr.mu.Unlock()
+		http.Error(w, "Camera not found", http.StatusNotFound)
+		return
+	}
+
+	oldMode = cam.RecordingMode
+	if oldMode != data.Mode {
 		cam.RecordingMode = data.Mode
-
-		// Handle mode transitions
-		if oldMode != data.Mode {
-			// Stop existing recording
-			if cam.IsRecording && cam.recordCancel != nil {
-				cam.recordCancel()
-				cam.IsRecording = false
-			}
-
-			// Start appropriate recording mode
-			if data.Mode == ModeContinuous {
-				cam.IsRecording = true
-				ctx, cancel := context.WithCancel(context.Background())
-				cam.recordCancel = cancel
-				go recordCamera(ctx, cam)
-			} else if data.Mode == ModeEventBased {
-				cam.IsRecording = true
-				ctx, cancel := context.WithCancel(context.Background())
-				cam.recordCancel = cancel
-				go recordCameraEventBased(ctx, cam)
-			}
+		if cam.IsRecording && cam.recordCancel != nil {
+			cam.recordCancel()
+			needsWait = true
 		}
-
-		log.Printf("Updated recording mode for camera %s to %s", cam.Name, data.Mode)
 	}
 	nvr.mu.Unlock()
 
-	if !exists {
-		http.Error(w, "Camera not found", http.StatusNotFound)
-		return
+	// Wait outside the lock
+	if needsWait {
+		cam.recordWG.Wait()
+	}
+
+	if oldMode != data.Mode {
+		nvr.mu.Lock()
+		cam.IsRecording = false
+
+		if data.Mode == ModeContinuous {
+			cam.IsRecording = true
+			ctx, cancel := context.WithCancel(context.Background())
+			cam.recordCancel = cancel
+			cam.recordWG.Add(1)
+			go recordCamera(ctx, cam)
+		} else if data.Mode == ModeEventBased {
+			cam.IsRecording = true
+			ctx, cancel := context.WithCancel(context.Background())
+			cam.recordCancel = cancel
+			cam.recordWG.Add(1)
+			go recordCameraEventBased(ctx, cam)
+		}
+		nvr.mu.Unlock()
+
+		log.Printf("Updated recording mode for camera %s to %s", cam.Name, data.Mode)
 	}
 
 	if err := nvr.save(); err != nil {
@@ -254,17 +290,68 @@ func updateRecordingModeHandler(w http.ResponseWriter, r *http.Request) {
 	camerasHandler(w, r)
 }
 
-
 // scanGo2rtcHandler - Scan go2rtc for available streams and add them
 func scanGo2rtcHandler(w http.ResponseWriter, r *http.Request) {
-	r.ParseForm()
-	go2rtcUrl := r.FormValue("go2rtc-url")
+	var go2rtcUrl string
+
+	// Explicitly parse multipart forms if the content type matches
+	contentType := r.Header.Get("Content-Type")
+	if strings.Contains(contentType, "multipart/form-data") {
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
+			log.Printf("Failed to parse multipart form: %v", err)
+		}
+	} else {
+		if err := r.ParseForm(); err != nil {
+			log.Printf("Failed to parse form: %v", err)
+		}
+	}
+
+	// r.Form covers both query parameters and parsed form body parameters
+	for _, key := range []string{"go2rtc-url", "go2rtc_url", "url", "go2rtcURL"} {
+		if val := r.Form.Get(key); val != "" {
+			go2rtcUrl = val
+			break
+		}
+	}
+
+	// Fallback to JSON body if form values were empty
+	if go2rtcUrl == "" && r.Body != nil {
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err == nil && len(bodyBytes) > 0 {
+			var data map[string]interface{}
+			if json.Unmarshal(bodyBytes, &data) == nil {
+				for _, key := range []string{"go2rtc-url", "go2rtc_url", "url", "go2rtcURL"} {
+					if val, ok := data[key].(string); ok && val != "" {
+						go2rtcUrl = val
+						break
+					}
+				}
+			}
+		}
+	}
+
 	if go2rtcUrl == "" {
 		go2rtcUrl = "http://go2rtc:1984"
 	}
 
+	// Clean up any trailing slashes to prevent malformed path endpoints
+	go2rtcUrl = strings.TrimSuffix(go2rtcUrl, "/")
+
+	// Strict Sanity Check: Ensure format is http(s)://address:port
+	parsedUrl, err := url.Parse(go2rtcUrl)
+	if err != nil || (parsedUrl.Scheme != "http" && parsedUrl.Scheme != "https") || parsedUrl.Host == "" || parsedUrl.Port() == "" {
+		log.Printf("Invalid go2rtc URL format rejected: %s", go2rtcUrl)
+		http.Error(w, "Invalid format. Must be in the form http://websiteaddress:port", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("Attempting to connect to go2rtc at: %s", go2rtcUrl)
+
+	host := parsedUrl.Hostname()
+
 	resp, err := http.Get(go2rtcUrl + "/api/streams")
 	if err != nil {
+		log.Printf("Failed to connect to go2rtc (%s): %v", go2rtcUrl, err)
 		http.Error(w, "Failed to connect to go2rtc: "+err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -274,12 +361,13 @@ func scanGo2rtcHandler(w http.ResponseWriter, r *http.Request) {
 	var streams map[string]interface{}
 	json.Unmarshal(body, &streams)
 
-	now := time.Now()
+	now := time.Now().UTC()
 	added := 0
 	skipped := 0
 
 	for streamName := range streams {
-		rtspUrl := fmt.Sprintf("rtsp://go2rtc:8554/%s", streamName)
+		// Use the dynamically parsed host instead of hardcoding "go2rtc"
+		rtspUrl := fmt.Sprintf("rtsp://%s:8554/%s", host, streamName)
 		
 		// Check if camera with this RTSP URL already exists
 		nvr.mu.RLock()
@@ -330,7 +418,6 @@ func scanGo2rtcHandler(w http.ResponseWriter, r *http.Request) {
 	camerasHandler(w, r)
 }
 
-
 // startRecordingHandler - Start recording for a camera
 func startRecordingHandler(w http.ResponseWriter, r *http.Request) {
 	var data map[string]string
@@ -343,6 +430,7 @@ func startRecordingHandler(w http.ResponseWriter, r *http.Request) {
 		cam.IsRecording = true
 		ctx, cancel := context.WithCancel(context.Background())
 		cam.recordCancel = cancel
+		cam.recordWG.Add(1)
 
 		if cam.RecordingMode == ModeEventBased {
 			go recordCameraEventBased(ctx, cam)
@@ -364,15 +452,26 @@ func stopRecordingHandler(w http.ResponseWriter, r *http.Request) {
 	var data map[string]string
 	json.NewDecoder(r.Body).Decode(&data)
 	id := data["id"]
+	var needsWait bool
 
 	nvr.mu.Lock()
-	if cam, exists := nvr.cameras[id]; exists {
-		if cam.recordCancel != nil {
-			cam.recordCancel()
-		}
-		cam.IsRecording = false
+	cam, exists := nvr.cameras[id]
+	if exists && cam.IsRecording && cam.recordCancel != nil {
+		cam.recordCancel()
+		needsWait = true
 	}
 	nvr.mu.Unlock()
+
+	// Wait outside the lock
+	if needsWait {
+		cam.recordWG.Wait()
+	}
+
+	if exists {
+		nvr.mu.Lock()
+		cam.IsRecording = false
+		nvr.mu.Unlock()
+	}
 
 	if err := nvr.save(); err != nil {
 		log.Printf("Failed to save cameras: %v", err)
