@@ -1,9 +1,7 @@
 // Modal management
 
-
 // Live Stream Modal
 let currentVideo = null;
-
 
 function viewLiveStream(cameraName) {
     let modal = document.getElementById('liveModal');
@@ -30,7 +28,6 @@ function viewLiveStream(cameraName) {
     currentVideo.src = '/api/stream/' + cameraName;
 }
 
-
 function createLiveModal() {
     const modalHtml = `
         <div id="liveModal" class="modal">
@@ -53,7 +50,6 @@ function createLiveModal() {
     };
 }
 
-
 function closeLiveModal() {
     const modal = document.getElementById('liveModal');
     if (!modal) return;
@@ -68,7 +64,6 @@ function closeLiveModal() {
     }
 }
 
-
 // Retention Modal (now per-camera)
 function showRetentionModal(cameraId, currentRetention) {
     const modal = document.getElementById('retention-modal');
@@ -80,7 +75,6 @@ function showRetentionModal(cameraId, currentRetention) {
     modal.style.display = 'block';
 }
 
-
 function closeRetentionModal() {
     const modal = document.getElementById('retention-modal');
     if (!modal) return;
@@ -88,7 +82,6 @@ function closeRetentionModal() {
     modal.classList.remove('active');
     modal.style.display = 'none';
 }
-
 
 function updateRetentionModal() {
     const cameraId = document.getElementById('retention-camera-id').value;
@@ -125,7 +118,6 @@ function updateRetentionModal() {
     });
 }
 
-
 // Recording Mode Modal
 function showModeModal(cameraId, currentMode) {
     const modal = document.getElementById('mode-modal');
@@ -135,7 +127,6 @@ function showModeModal(cameraId, currentMode) {
         return;
     }
 
-
     document.getElementById('mode-camera-id').value = cameraId;
     
     // Set radio button selection
@@ -144,11 +135,9 @@ function showModeModal(cameraId, currentMode) {
         radio.checked = (radio.value === currentMode);
     }
 
-
     modal.classList.add('active');
     modal.style.display = 'block';
 }
-
 
 function closeModeModal() {
     const modal = document.getElementById('mode-modal');
@@ -157,7 +146,6 @@ function closeModeModal() {
     modal.classList.remove('active');
     modal.style.display = 'none';
 }
-
 
 function updateRecordingMode() {
     const cameraId = document.getElementById('mode-camera-id').value;
@@ -171,12 +159,10 @@ function updateRecordingMode() {
         }
     }
 
-
     if (!selectedMode) {
         showError('Please select a recording mode');
         return;
     }
-
 
     fetch('/api/cameras/update-mode', {
         method: 'POST',
@@ -208,7 +194,6 @@ function updateRecordingMode() {
         showError('Failed to update recording mode: ' + error.message);
     });
 }
-
 
 function createModeModal() {
     const modalHtml = `
@@ -250,7 +235,6 @@ function createModeModal() {
     };
 }
 
-
 // Camera Settings Modal
 function openCameraSettings() {
     let modal = document.getElementById('camera-settings-modal');
@@ -283,7 +267,6 @@ function openCameraSettings() {
     modal.style.display = 'block';
 }
 
-
 function closeCameraSettings() {
     const modal = document.getElementById('camera-settings-modal');
     if (!modal) return;
@@ -292,16 +275,14 @@ function closeCameraSettings() {
     modal.style.display = 'none';
 }
 
-
 function createCameraSettingsModal() {
     const modalHtml = `
         <div id="camera-settings-modal" class="modal">
             <div class="modal-content" style="width: 90vw !important; max-width: 1200px !important; height: 90vh !important; max-height: 90vh !important; padding: 20px; overflow-y: auto;">
                 <span class="close" onclick="closeCameraSettings()">&times;</span>
                 
-                
                 <div class="config-subsection">
-                    <h3>🔗 Go2RTC Integration</h3>
+                    <h3>?? Go2RTC Integration</h3>
                     <form id="modal-go2rtc-form" class="form" style="display: flex; align-items: center; gap: 10px;">
                         <label for="modal-go2rtc-url" style="margin: 0; white-space: nowrap;">Go2RTC URL:</label>
                         <input type="text" id="modal-go2rtc-url" name="go2rtc-url" value="http://go2rtc:1984" style="flex: 1;">
@@ -309,9 +290,8 @@ function createCameraSettingsModal() {
                     </form>
                 </div>
 
-
                 <div class="config-subsection">
-                    <h3>➕ Add Camera Manually</h3>
+                    <h3>? Add Camera Manually</h3>
                     <form id="modal-add-camera-form" class="form" style="display: flex; align-items: center; gap: 10px;">
                         <label for="modal-camera-name" style="margin: 0; white-space: nowrap;">Camera Name:</label>
                         <input type="text" id="modal-camera-name" name="camera-name" required style="width: 200px;">
@@ -321,9 +301,8 @@ function createCameraSettingsModal() {
                     </form>
                 </div>
 
-
                 <div class="config-subsection">
-                    <h3>⚙️ Bulk Operations</h3>
+                    <h3>?? Bulk Operations</h3>
                     <div class="bulk-ops" style="display: flex; justify-content: space-between; align-items: center; gap: 10px;">
                         <div class="form-group" style="display: flex; align-items: center; gap: 10px; margin: 0;">
                             <label for="modal-retention-all" style="margin: 0; white-space: nowrap;">Retention period (days):</label>
@@ -341,13 +320,12 @@ function createCameraSettingsModal() {
                 
                 <!-- Cleanup Results Display -->
                 <div id="modal-cleanup-results" style="display: none; background: #1f1f1f; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #4CAF50;">
-                    <h4 style="margin: 0 0 10px 0; color: #4CAF50;">✓ Cleanup Complete</h4>
+                    <h4 style="margin: 0 0 10px 0; color: #4CAF50;">? Cleanup Complete</h4>
                     <p id="modal-cleanup-results-text" style="margin: 0; color: #ccc;"></p>
                 </div>
 
-
                 <div class="config-subsection">
-                    <h3>📹 Your Cameras</h3>
+                    <h3>?? Your Cameras</h3>
                     <div id="modal-camera-list"></div>
                 </div>
             </div>
@@ -367,7 +345,6 @@ function createCameraSettingsModal() {
         }
     };
 }
-
 
 function setupModalCameraForms() {
     const addForm = document.getElementById('modal-add-camera-form');
@@ -415,7 +392,13 @@ function setupModalCameraForms() {
                 method: 'POST',
                 body: formData
             })
-            .then(response => response.text())
+            .then(async response => {
+                if (!response.ok) {
+                    const errorMsg = await response.text();
+                    throw new Error(errorMsg || 'Failed to scan go2rtc');
+                }
+                return response.text();
+            })
             .then(html => {
                 // Update BOTH lists
                 document.getElementById('modal-camera-list').innerHTML = html;
@@ -434,13 +417,11 @@ function setupModalCameraForms() {
             })
             .catch(error => {
                 console.error('Error scanning go2rtc:', error);
-                showError('Failed to scan go2rtc');
+                showError(error.message);
             });
         };
     }
 }
-
-
 
 function setAllRetentionFromModal() {
     const days = parseInt(document.getElementById('modal-retention-all').value);
@@ -465,11 +446,9 @@ function setAllRetentionFromModal() {
     });
 }
 
-
 // Clear All Events functionality
 let clearEventsCode;
 let clearEventsConfirmCount = 0;
-
 
 // Open clear events modal
 function openClearEventsModal() {
@@ -491,7 +470,6 @@ function openClearEventsModal() {
     }, 100);
 }
 
-
 // Close clear events modal
 function closeClearEventsModal() {
     const modal = document.getElementById('clear-events-modal');
@@ -505,7 +483,6 @@ function closeClearEventsModal() {
     btn.classList.remove('confirm');
     btn.disabled = true;
 }
-
 
 // Clear all events
 function clearAllEvents() {
@@ -560,9 +537,6 @@ function clearAllEvents() {
     });
 }
 
-
-
-
 // Setup event listeners on page load
 document.addEventListener('DOMContentLoaded', () => {
     // Clear events code input validation
@@ -592,7 +566,6 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     }
 });
-
 
 // Close modals when clicking outside
 window.onclick = function(event) {
