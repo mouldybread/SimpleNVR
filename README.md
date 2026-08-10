@@ -54,7 +54,7 @@ services:
 docker-compose up -d
 ```
 
-The application will be available securely at `https://<YOUR_SERVER_IP>:8443`.
+The application will be available at `https://<YOUR_SERVER_IP>:8443`.
 
 ---
 
