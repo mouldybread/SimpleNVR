@@ -12,23 +12,23 @@
         <!-- Timeline Playback Section -->
         <section class="section" id="playback-section">
             <div class="section-header" style="padding: 10px 20px; display: flex; align-items: center; gap: 20px;">
-                <h1 style="margin: 0; line-height: 1; flex-shrink: 0;">📹 Simple NVR</h1>
+                <h1 style="margin: 0; line-height: 1; flex-shrink: 0;">🔴SimpleNVR</h1>
                 
                 <!-- Inline Controls -->
-                <div class="timeline-controls" style="flex: 1; margin: 0;">
-                    <div class="control-group">
+                <div class="timeline-controls" style="flex: 1; margin: 0; display: flex; align-items: center; gap: 15px; flex-wrap: wrap;">
+                    <div class="control-group" style="display: flex; align-items: center; gap: 8px;">
                         <label>Cameras:</label>
                         <div id="timeline-camera-selector" style="min-width: 200px;"></div>
                     </div>
                     
-                    <div class="control-group">
+                    <div class="control-group" style="display: flex; align-items: center; gap: 8px;">
                         <label>Date:</label>
                         <input type="date" id="timeline-date-picker">
                     </div>
                     
-                    <div class="control-group">
+                    <div class="control-group" style="display: flex; align-items: center; gap: 8px;">
                         <label>Speed:</label>
-                        <select id="speed-control">
+                        <select id="speed-control" onchange="playbackSpeed = parseFloat(this.value); updatePlaybackSpeed();">
                             <option value="0.25">0.25x</option>
                             <option value="0.5">0.5x</option>
                             <option value="1" selected>1x</option>
@@ -37,13 +37,10 @@
                         </select>
                     </div>
 
-                    <div class="control-group" style="margin-left: auto;">
-                        <button id="prev-segment" class="btn btn-small">⏮ Previous</button>
-                        <button id="play-pause" class="btn btn-small">▶ Play</button>
-                        <button id="next-segment" class="btn btn-small">Next ⏭</button>
-                        <button id="mute-all-btn" class="btn btn-small">🔇 Mute All</button>
-                        <button id="fullscreen-btn" class="btn btn-small">⛶ Fullscreen</button>
-                        <button id="download-btn" class="btn btn-small">⬇ Download</button>
+                    <div class="control-group" style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
+                        <button id="mute-all-btn" class="btn btn-small" onclick="toggleMuteAll()">🔇 Mute All</button>
+                        <button id="fullscreen-btn" class="btn btn-small" onclick="toggleFullscreen()">⛶ Fullscreen</button>
+                        <button id="download-btn" class="btn btn-small" onclick="openDownloadModal()">⬇ Download</button>
                     </div>
                 </div>
                 <button onclick="openEventsModal()" style="background: none; border: none; color: #4CAF50; cursor: pointer; font-size: 24px; padding: 5px; flex-shrink: 0;" title="View Events">📋</button>
@@ -99,20 +96,20 @@
                     </form>
                 </div>
 
-<div class="config-subsection">
-  <h3>Bulk Operations</h3>
-  <div class="bulk-ops">
-    <div class="form-group">
-      <label for="retention-all">Retention period (days):</label>
-      <input type="number" id="retention-all" min="1" max="365" value="7">
-      <button onclick="setAllRetention()" class="btn">Set Retention</button>
-    </div>
-    <button onclick="openDeleteAllCamerasModal()" class="btn btn-danger">Remove All Cameras</button>
-    <button onclick="openDeleteAllRecordingsModal()" class="btn btn-danger">Delete All Recordings</button>
-    <button onclick="openClearEventsModal()" class="btn btn-danger">Clear All Events</button>
-    <button onclick="cleanupOrphanedRecordings()" class="btn btn-danger">Cleanup Orphaned Recordings</button>
-  </div>
-</div>
+                <div class="config-subsection">
+                    <h3>Bulk Operations</h3>
+                    <div class="bulk-ops">
+                        <div class="form-group">
+                            <label for="retention-all">Retention period (days):</label>
+                            <input type="number" id="retention-all" min="1" max="365" value="7">
+                            <button onclick="setAllRetention()" class="btn">Set Retention</button>
+                        </div>
+                        <button onclick="openDeleteAllCamerasModal()" class="btn btn-danger">Remove All Cameras</button>
+                        <button onclick="openDeleteAllRecordingsModal()" class="btn btn-danger">Delete All Recordings</button>
+                        <button onclick="openClearEventsModal()" class="btn btn-danger">Clear All Events</button>
+                        <button onclick="cleanupOrphanedRecordings()" class="btn btn-danger">Cleanup Orphaned Recordings</button>
+                    </div>
+                </div>
 
                 <!-- Cleanup Results Display -->
                 <div id="cleanup-results" style="display: none; background: #1f1f1f; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #4CAF50;">
@@ -216,21 +213,22 @@
         </div>
     </div>
 
-   <!-- Clear All Events Modal -->
-<div id="clear-events-modal" class="modal" style="z-index: 10001;">
-  <div class="modal-content small-modal" style="width: fit-content !important; max-width: 500px !important; height: auto !important; padding: 20px;">
-    <span class="close" onclick="closeClearEventsModal()">&times;</span>
-    <h2>Clear All Events</h2>
-    <p style="color: #f44336; margin: 10px 0;">This will permanently delete ALL events from ALL cameras!</p>
-    <p style="margin: 10px 0;">To confirm, enter the code: <strong id="clear-events-code" style="color: #4CAF50; font-size: 20px;"></strong></p>
-    <div class="form-group">
-      <input type="text" id="clear-events-code-input" placeholder="Enter code" maxlength="4" style="text-align: center; font-size: 18px; width: 80%; padding: 10px;">
+    <!-- Clear All Events Modal -->
+    <div id="clear-events-modal" class="modal" style="z-index: 10001;">
+        <div class="modal-content small-modal" style="width: fit-content !important; max-width: 500px !important; height: auto !important; padding: 20px;">
+            <span class="close" onclick="closeClearEventsModal()">&times;</span>
+            <h2>Clear All Events</h2>
+            <p style="color: #f44336; margin: 10px 0;">This will permanently delete ALL events from ALL cameras!</p>
+            <p style="margin: 10px 0;">To confirm, enter the code: <strong id="clear-events-code" style="color: #4CAF50; font-size: 20px;"></strong></p>
+            <div class="form-group">
+                <input type="text" id="clear-events-code-input" placeholder="Enter code" maxlength="4" style="text-align: center; font-size: 18px; width: 80%; padding: 10px;">
+            </div>
+            <button id="clear-events-btn" onclick="clearAllEvents()" class="btn btn-danger" disabled style="width: 100%; padding: 12px; margin-top: 10px;">Clear All Events</button>
+        </div>
     </div>
-    <button id="clear-events-btn" onclick="clearAllEvents()" class="btn btn-danger" disabled style="width: 100%; padding: 12px; margin-top: 10px;">Clear All Events</button>
-  </div>
-</div>
-<!-- Toast Notification Container -->
-<div id="toast-container"></div>
+
+    <!-- Toast Notification Container -->
+    <div id="toast-container"></div>
 
     <!-- Load JavaScript modules -->
     <script src="/static/js/core.js"></script>
