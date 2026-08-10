@@ -20,7 +20,6 @@ type BufferManager struct {
 	cancel      context.CancelFunc
 	eventChan   chan Event
 	recording   bool
-	recordMutex sync.Mutex
 }
 
 type BufferSegment struct {
@@ -35,6 +34,7 @@ const (
 
 // Continuous recording (existing functionality)
 func recordCamera(ctx context.Context, cam *Camera) {
+	defer cam.recordWG.Done()
 	log.Printf("Starting continuous recording for %s (retention: %d days)", cam.Name, cam.RetentionDays)
 
 	for {
@@ -59,6 +59,7 @@ func recordCamera(ctx context.Context, cam *Camera) {
 
 // Event-based recording with 30-second pre-recording buffer
 func recordCameraEventBased(ctx context.Context, cam *Camera) {
+	defer cam.recordWG.Done()
 	log.Printf("Starting event-based recording for %s with 30s pre-buffer", cam.Name)
 
 	bufferCtx, bufferCancel := context.WithCancel(ctx)
@@ -72,8 +73,8 @@ func recordCameraEventBased(ctx context.Context, cam *Camera) {
 
 	cam.bufferManager = bm
 
-	// Start buffer maintenance goroutine
-	go bm.maintainBuffer()
+	// Start continuous buffer maintenance goroutine
+	go bm.startContinuousBuffer()
 
 	// Handle incoming events
 	for {
@@ -88,107 +89,86 @@ func recordCameraEventBased(ctx context.Context, cam *Camera) {
 	}
 }
 
-// maintainBuffer keeps a rolling 30-second buffer
-func (bm *BufferManager) maintainBuffer() {
-	log.Printf("Starting buffer maintenance for %s", bm.camera.Name)
-
-	for {
-		select {
-		case <-bm.ctx.Done():
-			bm.cleanupBuffer()
-			return
-		default:
-			err := bm.recordBufferSegment()
-			if err != nil {
-				log.Printf("Buffer recording error for %s: %v. Retrying in 2s...", bm.camera.Name, err)
-				time.Sleep(2 * time.Second)
-				continue
-			}
-		}
-	}
-}
-
-// recordBufferSegment records a small segment to the buffer
-func (bm *BufferManager) recordBufferSegment() error {
-	now := time.Now()
-	filename := fmt.Sprintf("buffer_%s_%s.mp4",
-		now.Format("20060102_150405"),
-		sanitizeFilename(bm.camera.Name))
+// startContinuousBuffer runs a single FFmpeg process to maintain a rolling window of segments
+func (bm *BufferManager) startContinuousBuffer() {
+	log.Printf("Starting continuous buffer maintenance for %s", bm.camera.Name)
 
 	bufferDir := filepath.Join(bm.camera.RecordDir, "buffer")
 	os.MkdirAll(bufferDir, 0755)
 
-	filePath := filepath.Join(bufferDir, filename)
-	tempPath := filePath + ".tmp"
+	// 1. Single Continuous FFmpeg Segmenter
+	go func() {
+		for {
+			select {
+			case <-bm.ctx.Done():
+				return
+			default:
+				cmd := exec.CommandContext(bm.ctx, "ffmpeg",
+					"-rtsp_transport", "tcp",
+					"-i", bm.camera.RTSPUrl,
+					"-c", "copy",
+					"-f", "segment",
+					"-segment_time", "5",
+					"-segment_format", "mp4",
+					"-reset_timestamps", "1",
+					"-strftime", "1",
+					filepath.Join(bufferDir, "buffer_%Y%m%d_%H%M%S.mp4"),
+				)
+				
+				// Force FFmpeg to generate UTC filenames
+				cmd.Env = append(os.Environ(), "TZ=UTC")
 
-	segmentCtx, cancel := context.WithTimeout(bm.ctx, segmentSize+2*time.Second)
-	defer cancel()
+				log.Printf("Starting FFmpeg segmenter for %s buffer", bm.camera.Name)
+				err := cmd.Run()
 
-	cmd := exec.CommandContext(segmentCtx, "ffmpeg",
-		"-rtsp_transport", "tcp",
-		"-i", bm.camera.RTSPUrl,
-		"-t", fmt.Sprintf("%.0f", segmentSize.Seconds()),
-		"-c", "copy",
-		"-f", "mp4",
-		"-movflags", "faststart",
-		"-y",
-		tempPath,
-	)
-
-	output, err := cmd.CombinedOutput()
-	if bm.ctx.Err() == context.Canceled {
-		log.Printf("Buffer recording cancelled for %s, keeping partial file", bm.camera.Name)
-		return fmt.Errorf("recording cancelled")
-	}
-
-	if segmentCtx.Err() == context.DeadlineExceeded {
-		os.Remove(tempPath)
-		return fmt.Errorf("segment timeout")
-	}
-
-	if err != nil {
-		log.Printf("FFmpeg buffer error for %s: %v\nOutput: %s", bm.camera.Name, err, string(output))
-		os.Remove(tempPath)
-		return fmt.Errorf("ffmpeg error: %w", err)
-	}
-
-	err = os.Rename(tempPath, filePath)
-	if err != nil {
-		os.Remove(tempPath)
-		return fmt.Errorf("failed to finalize buffer segment: %w", err)
-	}
-
-	info, err := os.Stat(filePath)
-	if err != nil {
-		return fmt.Errorf("failed to stat buffer segment: %w", err)
-	}
-
-	if info.Size() < 1000 {
-		os.Remove(filePath)
-		return fmt.Errorf("buffer segment too small")
-	}
-
-	// Add to buffer
-	bm.bufferMutex.Lock()
-	bm.buffer = append(bm.buffer, BufferSegment{
-		StartTime: now,
-		FilePath:  filePath,
-	})
-
-	// Remove segments older than 30 seconds
-	cutoff := now.Add(-bufferDuration)
-	newBuffer := make([]BufferSegment, 0)
-	for _, seg := range bm.buffer {
-		if seg.StartTime.After(cutoff) {
-			newBuffer = append(newBuffer, seg)
-		} else {
-			os.Remove(seg.FilePath)
+				if bm.ctx.Err() != nil {
+					return // Context was cancelled normally
+				}
+				log.Printf("Buffer stream exited for %s: %v. Restarting in 5s...", bm.camera.Name, err)
+				time.Sleep(5 * time.Second)
+			}
 		}
-	}
-	bm.buffer = newBuffer
-	bm.bufferMutex.Unlock()
+	}()
 
-	return nil
+	// 2. Lightweight Buffer Cleanup (Keeps only the last 30 seconds)
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-bm.ctx.Done():
+				bm.cleanupBuffer()
+				return
+			case <-ticker.C:
+				cutoff := time.Now().UTC().Add(-30 * time.Second)
+				files, err := filepath.Glob(filepath.Join(bufferDir, "buffer_*.mp4"))
+				if err != nil {
+					continue
+				}
+
+				bm.bufferMutex.Lock()
+				bm.buffer = make([]BufferSegment, 0) // Rebuild the slice
+
+				for _, file := range files {
+					info, err := os.Stat(file)
+					if err != nil {
+						continue
+					}
+
+					if info.ModTime().UTC().Before(cutoff) {
+						os.Remove(file)
+					} else {
+						bm.buffer = append(bm.buffer, BufferSegment{
+							StartTime: info.ModTime().UTC(),
+							FilePath:  file,
+						})
+					}
+				}
+				bm.bufferMutex.Unlock()
+			}
+		}
+	}()
 }
 
 // TriggerEvent is called when an external event is received
@@ -203,9 +183,6 @@ func (bm *BufferManager) TriggerEvent(event Event) {
 
 // handleEvent processes an event and saves the recording
 func (bm *BufferManager) handleEvent(event Event) {
-	bm.recordMutex.Lock()
-	defer bm.recordMutex.Unlock()
-
 	log.Printf("Processing event for %s: %s (duration: %ds)", bm.camera.Name, event.Label, event.Duration)
 
 	// Get buffer segments (pre-recording)
@@ -240,7 +217,7 @@ func (bm *BufferManager) handleEvent(event Event) {
 // recordEventDuration records the actual event duration
 func (bm *BufferManager) recordEventDuration(event Event, duration time.Duration) string {
 	filename := fmt.Sprintf("event_%s_%s_%s.mp4",
-		time.Now().Format("20060102_150405"),
+		time.Now().UTC().Format("20060102_150405"),
 		sanitizeFilename(event.Label),
 		sanitizeFilename(bm.camera.Name))
 
@@ -355,7 +332,7 @@ func (bm *BufferManager) cleanupBuffer() {
 
 // recordSegment records a single segment (used for continuous recording)
 func recordSegment(ctx context.Context, cam *Camera, durationSeconds int) error {
-	now := time.Now()
+	now := time.Now().UTC()
 	filename := fmt.Sprintf("%s_%s.mp4",
 		now.Format("20060102_150405"),
 		sanitizeFilename(cam.Name))
@@ -433,9 +410,9 @@ func sanitizeFilename(name string) string {
 	return safe
 }
 
-// recoverPartialRecordings - On startup, validate and recover playable .tmp files
+// recoverPartialRecordings - On startup, validate and recover playable .tmp files, and clear transient directories
 func recoverPartialRecordings() {
-	log.Println("Checking for partial recordings to recover...")
+	log.Println("Checking for partial recordings and transient files to recover/cleanup...")
 
 	nvr.mu.RLock()
 	cameras := make([]*Camera, 0, len(nvr.cameras))
@@ -448,6 +425,19 @@ func recoverPartialRecordings() {
 	totalDeleted := 0
 
 	for _, cam := range cameras {
+		// 1. Wipe transient event directories
+		// These hold ephemeral event data that cannot be stitched together after an application crash
+		tempDir := filepath.Join(cam.RecordDir, "temp")
+		bufferDir := filepath.Join(cam.RecordDir, "buffer")
+
+		if err := os.RemoveAll(tempDir); err == nil {
+			log.Printf("Cleared transient temp directory for %s", cam.Name)
+		}
+		if err := os.RemoveAll(bufferDir); err == nil {
+			log.Printf("Cleared transient buffer directory for %s", cam.Name)
+		}
+
+		// 2. Recover continuous recording .tmp files
 		tmpFiles, err := filepath.Glob(filepath.Join(cam.RecordDir, "*.tmp"))
 		if err != nil {
 			continue
@@ -491,7 +481,7 @@ func recoverPartialRecordings() {
 			}
 
 			sizeMB := float64(info.Size()) / (1024 * 1024)
-			log.Printf("✓ Recovered partial recording: %s (%.2f MB)", filepath.Base(finalFile), sizeMB)
+			log.Printf("? Recovered partial recording: %s (%.2f MB)", filepath.Base(finalFile), sizeMB)
 			totalRecovered++
 		}
 	}
