@@ -1,4 +1,4 @@
-# 🔴SimpleNVR
+# 🔴 SimpleNVR
 
 A lightweight, self-hosted Network Video Recorder (NVR) built in Go that uses FFmpeg for RTSP recording and MP4 output. SimpleNVR integrates with go2rtc for camera stream management and provides a web interface for monitoring, recording, and playback.
 
@@ -140,28 +140,6 @@ SimpleNVR includes a comprehensive event tracking and visualization system:
 
 ```text
 /path/to/SimpleNVR/
-├── build/
-│   ├── main.go
-│   ├── recorder.go
-│   ├── handlers.go
-│   ├── playback.go
-│   ├── events.go
-│   ├── cleanup.go
-│   ├── go.mod
-│   ├── .air.toml
-│   ├── templates/
-│   │   ├── index.html
-│   │   └── cameras.html
-│   └── static/
-│       ├── style.css
-│       └── js/
-│           ├── core.js
-│           ├── cameras.js
-│           ├── modals.js
-│           ├── playback.js
-│           ├── events.js
-│           ├── toast.js
-│           └── recordings.js
 ├── certs/
 │   ├── cert.pem
 │   └── key.pem
@@ -176,21 +154,13 @@ SimpleNVR includes a comprehensive event tracking and visualization system:
 services:
   simplenvr:
     container_name: simplenvr
-    image: golang:1.26-alpine
-    command: |
-      sh -c '
-        apk add --no-cache ffmpeg &&
-        go install [github.com/air-verse/air@latest](https://github.com/air-verse/air@latest) &&
-        exec /go/bin/air
-      '
-    working_dir: /app
+    image: ghcr.io/mouldybread/simplenvr:latest
     restart: unless-stopped
     ports:
       - "8443:443"
     volumes:
-      - /path/to/simplenvr/build:/app
-      - /path/to/simplenvr/recordings:/recordings
-      - /path/to/simplenvr/certs:/certs
+      - ./recordings:/recordings
+      - ./certs:/certs
 ```
 
 ### 3. Starting the Container
@@ -744,7 +714,7 @@ See the full [LICENSE](LICENSE) file for complete details.
 
 ## 🤝 Contributing
 
-For issues, feature requests, or questions, please open an issue in the repository.
+For issues, feature requests, or questions, please open an issue in the repository at [https://github.com/mouldybread/SimpleNVR](https://github.com/mouldybread/SimpleNVR).
 
 ---
 
