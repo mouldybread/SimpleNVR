@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/url"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -77,17 +78,26 @@ func timelineRecordingsHandler(w http.ResponseWriter, r *http.Request) {
 
 	dateStr := r.URL.Query().Get("date")
 	if dateStr == "" {
-		dateStr = time.Now().UTC().Format("2006-01-02")
+		dateStr = time.Now().Format("2006-01-02")
 	}
 
-	// FIXED: Parse date as UTC (frontend sends UTC dates)
-	date, err := time.Parse("2006-01-02", dateStr)
+	// Parse the requested date string as a local date in UTC+8 (Hong Kong)
+	loc := time.FixedZone("HKT", 8*60*60)
+	parsedDate, err := time.ParseInLocation("2006-01-02", dateStr, loc)
 	if err != nil {
 		log.Printf("Timeline API: Invalid date format: %s", dateStr)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode([]interface{}{})
 		return
 	}
+
+	// Define the local 24-hour window for that date (00:00:00 to 23:59:59 HKT)
+	localStart := time.Date(parsedDate.Year(), parsedDate.Month(), parsedDate.Day(), 0, 0, 0, 0, loc)
+	localEnd := localStart.Add(24 * time.Hour)
+
+	// Convert local boundaries to UTC for filename timestamp comparisons
+	utcStart := localStart.UTC()
+	utcEnd := localEnd.UTC()
 
 	type TimelineSegment struct {
 		CameraID   string    `json:"camera_id"`
@@ -122,30 +132,25 @@ func timelineRecordingsHandler(w http.ResponseWriter, r *http.Request) {
 			}
 
 			timeStr := filename[0:15]
-			// FIXED: Parse filenames in UTC
-			fileTime, err := time.Parse("20060102_150405", timeStr)
+			fileTime, err := time.ParseInLocation("20060102_150405", timeStr, time.UTC)
 			if err != nil {
 				continue
 			}
 
-			// Compare year, month, day separately (FIXED from YearDay)
-			if fileTime.Year() != date.Year() ||
-				fileTime.Month() != date.Month() ||
-				fileTime.Day() != date.Day() {
-				continue
+			// Check if the file's UTC timestamp falls within the local day's UTC window
+			if (fileTime.Equal(utcStart) || fileTime.After(utcStart)) && fileTime.Before(utcEnd) {
+				endTime := fileTime.Add(10 * time.Minute)
+				relPath := filepath.Join(filepath.Base(cam.RecordDir), filename)
+
+				segments = append(segments, TimelineSegment{
+					CameraID:   cam.ID,
+					CameraName: cam.Name,
+					StartTime:  fileTime,
+					EndTime:    endTime,
+					FilePath:   "/recordings/" + relPath,
+					Size:       info.Size(),
+				})
 			}
-
-			endTime := fileTime.Add(10 * time.Minute)
-			relPath := filepath.Join(filepath.Base(cam.RecordDir), filename)
-
-			segments = append(segments, TimelineSegment{
-				CameraID:   cam.ID,
-				CameraName: cam.Name,
-				StartTime:  fileTime,
-				EndTime:    endTime,
-				FilePath:   "/recordings/" + relPath,
-				Size:       info.Size(),
-			})
 		}
 	}
 
@@ -282,7 +287,7 @@ func handleDownload(w http.ResponseWriter, r *http.Request) {
 
 		// Parse timestamp from filename (format: YYYYMMDD_HHMMSS_CAMERANAME.mp4)
 		timestampStr := filename[0:15]
-		fileTime, err := time.ParseInLocation("20060102_150405", timestampStr, time.Local)
+		fileTime, err := time.ParseInLocation("20060102_150405", timestampStr, time.UTC)
 		if err != nil {
 			continue
 		}
@@ -356,8 +361,31 @@ func streamProxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	go2rtcURL := fmt.Sprintf("http://go2rtc:1984/api/stream.mp4?src=%s", cameraName)
-	log.Printf("Proxying stream for camera: %s", cameraName)
+	// Find the camera to extract the correct hostname from its saved RTSP URL
+	nvr.mu.RLock()
+	var targetCam *Camera
+	for _, cam := range nvr.cameras {
+		if cam.Name == cameraName {
+			targetCam = cam
+			break
+		}
+	}
+	nvr.mu.RUnlock()
+
+	if targetCam == nil {
+		http.Error(w, "Camera not found", http.StatusNotFound)
+		return
+	}
+
+	// Dynamically reconstruct the proxy URL using the host from the RTSP string
+	parsedUrl, err := url.Parse(targetCam.RTSPUrl)
+	host := "go2rtc"
+	if err == nil && parsedUrl.Hostname() != "" {
+		host = parsedUrl.Hostname()
+	}
+
+	go2rtcURL := fmt.Sprintf("http://%s:1984/api/stream.mp4?src=%s", host, cameraName)
+	log.Printf("Proxying stream for camera: %s from %s", cameraName, go2rtcURL)
 
 	proxyReq, err := http.NewRequest("GET", go2rtcURL, nil)
 	if err != nil {
