@@ -1,7 +1,6 @@
 // Enhanced Timeline-based Playback System with Event Markers
 // FIXED: All issues + Firefox compatibility + Download feature + Event visualization
 
-
 // State
 let selectedCameras = [];
 let allCameras = [];
@@ -19,32 +18,28 @@ let seekTimeoutId = null;
 let loadDataTimeoutId = null;
 let pendingVideoTimeouts = [];
 
-
 // Download state
 let downloadStartTime = null;
 let downloadEndTime = null;
 let downloadCameras = [];
 
-
 // Event state
 let timelineEvents = [];
 let eventTooltip = null;
 
-
 // Event type to emoji mapping
 const EVENT_ICONS = {
-    'Motion Detected': '👁️',
-    'Person Detected': '👤',
-    'Vehicle Detected': '🚗',
-    'Intrusion': '⚠️',
-    'Loitering': '⏱️',
-    'Object Removed': '📦',
-    'Object Left Behind': '🎒',
-    'Sound Alert': '🔔',
-    'Line Crossing': '➡️',
-    'Tamper Alert': '🚨'
+    'Motion Detected': '???',
+    'Person Detected': '??',
+    'Vehicle Detected': '??',
+    'Intrusion': '??',
+    'Loitering': '??',
+    'Object Removed': '??',
+    'Object Left Behind': '??',
+    'Sound Alert': '??',
+    'Line Crossing': '??',
+    'Tamper Alert': '??'
 };
-
 
 // Camera color mapping for UI consistency - stable colors by camera ID
 let cameraColorMap = {};
@@ -67,40 +62,20 @@ const COLORS = [
     '#d946ef'   // Fuchsia
 ];
 
-
 // Timeline zoom state
 let timelineZoomLevel = 1.0;
 let timelineOffset = 0;
-
-
 let nextColorIndex = 0;
 
+const CHUNK_SIZE_MS = 10 * 60 * 1000;
 
-// FIXED: Helper function to convert local date to UTC date string for API calls
+// Helper function to convert local date to UTC date string for API calls
 function getUTCDateString(localDate) {
-    // Get the local date components (year, month, day at midnight local time)
     const year = localDate.getFullYear();
     const month = String(localDate.getMonth() + 1).padStart(2, '0');
     const day = String(localDate.getDate()).padStart(2, '0');
-    
-    // Return as YYYY-MM-DD string
-    // This is the DATE in the local timezone, formatted as a string
-    // The backend will interpret this as a UTC date
     return `${year}-${month}-${day}`;
 }
-
-
-
-
-// FIXED: Helper function to convert local date to UTC date string for API calls
-function getUTCDateString(localDate) {
-    const [year, month, day] = localDate.toISOString().split('T')[0].split('-');
-    const utcDate = new Date(Date.UTC(parseInt(year), parseInt(month) - 1, parseInt(day)));
-    return utcDate.toISOString().split('T')[0];
-}
-
-
-const CHUNK_SIZE_MS = 10 * 60 * 1000;
 
 // Helper function to get cameras in configured order, filtered to selected ones
 function getOrderedSelectedCameras() {
@@ -108,7 +83,6 @@ function getOrderedSelectedCameras() {
         .filter(cam => selectedCameras.includes(cam.id))
         .map(cam => cam.id);
 }
-
 
 function initializeTimelinePlayback() {
     loadTimelineCameras();
@@ -118,10 +92,8 @@ function initializeTimelinePlayback() {
     setupTimelineZoom();
 }
 
-
 function loadTimelineEvents(date) {
     // Events are loaded globally from events.js (allEvents variable)
-    // Filter events for the selected date
     if (typeof allEvents !== 'undefined' && allEvents) {
         timelineEvents = allEvents.filter(event => {
             const eventDate = new Date(event.start_time).toISOString().split('T')[0];
@@ -132,7 +104,6 @@ function loadTimelineEvents(date) {
         timelineEvents = [];
     }
 }
-
 
 function loadTimelineCameras() {
     fetch('/api/cameras')
@@ -161,7 +132,6 @@ function loadTimelineCameras() {
                 }
             });
 
-
             const savedSelection = localStorage.getItem('selectedCameras');
             if (savedSelection) {
                 try {
@@ -178,20 +148,17 @@ function loadTimelineCameras() {
                 selectedCameras = allCameras.slice(0, 4).map(c => c.id);
             }
 
-
             if (selectedCameras.length === 0 && allCameras.length > 0) {
                 selectedCameras = allCameras.slice(0, 4).map(c => c.id);
             }
 
-
-            // Initialize color map for previously selected cameras
+            // Initialize color map for selected cameras
             selectedCameras.forEach(cameraId => {
                 if (!cameraColorMap[cameraId]) {
                     cameraColorMap[cameraId] = COLORS[nextColorIndex % COLORS.length];
                     nextColorIndex++;
                 }
             });
-
 
             renderCameraSelector();
             loadTimelineData();
@@ -201,25 +168,28 @@ function loadTimelineCameras() {
         });
 }
 
-
 function renderCameraSelector() {
     const container = document.getElementById('timeline-camera-selector');
     if (!container) return;
 
+    // Ensure EVERY camera in allCameras has a assigned color
+    allCameras.forEach(cam => {
+        if (!cameraColorMap[cam.id]) {
+            cameraColorMap[cam.id] = COLORS[nextColorIndex % COLORS.length];
+            nextColorIndex++;
+        }
+    });
 
-    // Create dropdown structure
+    // Create dropdown structure (using HTML entity &#9660; for the down arrow)
     container.innerHTML = `
         <div class="camera-dropdown">
             <button class="dropdown-toggle" id="camera-dropdown-toggle" type="button">
                 <span id="dropdown-label">Select Cameras</span>
-                <span class="dropdown-arrow">▼</span>
+                <span class="dropdown-arrow">&#9660;</span>
             </button>
-            <div class="dropdown-menu" id="camera-dropdown-menu">
-                <!-- Options will be populated here -->
-            </div>
+            <div class="dropdown-menu" id="camera-dropdown-menu"></div>
         </div>
     `;
-
 
     const toggle = document.getElementById('camera-dropdown-toggle');
     const menu = document.getElementById('camera-dropdown-menu');
@@ -239,15 +209,15 @@ function renderCameraSelector() {
         label.htmlFor = `timeline-cam-${cam.id}`;
         label.textContent = cam.name;
 
-        // Apply camera color if assigned
-        if (cameraColorMap[cam.id]) {
-            label.style.backgroundColor = cameraColorMap[cam.id];
-            label.style.padding = '4px 10px';
-            label.style.borderRadius = '4px';
-            label.style.color = '#fff';
-            label.style.marginLeft = '8px';
-            label.style.cursor = 'pointer';
-        }
+        // Always apply color badge styling to every camera label
+        const color = cameraColorMap[cam.id] || COLORS[0];
+        label.style.backgroundColor = color;
+        label.style.padding = '4px 10px';
+        label.style.borderRadius = '4px';
+        label.style.color = '#fff';
+        label.style.marginLeft = '8px';
+        label.style.cursor = 'pointer';
+        label.style.display = 'inline-block';
 
         option.appendChild(checkbox);
         option.appendChild(label);
@@ -267,7 +237,7 @@ function renderCameraSelector() {
         menu.appendChild(option);
     });
 
-    // Toggle dropdown
+    // Toggle dropdown visibility
     toggle.onclick = (e) => {
         e.stopPropagation();
         menu.classList.toggle('show');
@@ -285,7 +255,6 @@ function renderCameraSelector() {
     updateDropdownLabel();
 }
 
-
 function updateDropdownLabel() {
     const label = document.getElementById('dropdown-label');
     if (!label) return;
@@ -301,7 +270,6 @@ function updateDropdownLabel() {
     }
 }
 
-
 function toggleCamera(cameraId) {
     if (selectedCameras.includes(cameraId)) {
         selectedCameras = selectedCameras.filter(id => id !== cameraId);
@@ -314,10 +282,8 @@ function toggleCamera(cameraId) {
         }
     }
 
-
     localStorage.setItem('selectedCameras', JSON.stringify(selectedCameras));
     console.log('Saved camera selection to localStorage:', selectedCameras);
-
 
     gridLayout = selectedCameras.length;
     updateDropdownLabel();
@@ -325,16 +291,11 @@ function toggleCamera(cameraId) {
     updateVideoGrid();
 }
 
-
 function setupDatePicker() {
     const datePicker = document.getElementById('timeline-date-picker');
     if (!datePicker) return;
 
-    // FIXED: Initialize date picker to today's local date (not UTC)
-    // The date picker value should reflect what the user sees in their timezone
     const today = new Date();
-
-    // Format today's LOCAL date as YYYY-MM-DD (not UTC)
     const year = today.getFullYear();
     const month = String(today.getMonth() + 1).padStart(2, '0');
     const day = String(today.getDate()).padStart(2, '0');
@@ -346,46 +307,40 @@ function setupDatePicker() {
     currentDate.setHours(0, 0, 0, 0);
 
     datePicker.onchange = () => {
-        // When user selects a date, parse it as local date at midnight
         const selectedDateStr = datePicker.value;
-        const [year, month, day] = selectedDateStr.split('-');
-        currentDate = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+        const [y, m, d] = selectedDateStr.split('-');
+        currentDate = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
         currentDate.setHours(0, 0, 0, 0);
         loadTimelineData();
     };
 }
-
-
 
 function loadTimelineData() {
     if (loadDataTimeoutId) {
         clearTimeout(loadDataTimeoutId);
     }
 
-
     loadDataTimeoutId = setTimeout(() => {
         performLoadTimelineData();
     }, 200);
 }
 
-
 function performLoadTimelineData() {
-    const localDateStr = currentDate.toISOString().split('T')[0];
-    const utcDateStr = getUTCDateString(currentDate);
+    const year = currentDate.getFullYear();
+    const month = String(currentDate.getMonth() + 1).padStart(2, '0');
+    const day = String(currentDate.getDate()).padStart(2, '0');
+    const localDateStr = `${year}-${month}-${day}`;
 
+    const utcDateStr = getUTCDateString(currentDate);
 
     console.log('Loading timeline for local: ' + localDateStr + ' (UTC: ' + utcDateStr + ')');
 
-
-    // Load events for this date
     loadTimelineEvents(utcDateStr);
 
-
-    fetch(`/api/timeline/recordings?date=${utcDateStr}`)
+    fetch(`/api/timeline/recordings?date=${localDateStr}`)
         .then(response => response.json())
         .then(segments => {
             console.log('API returned', segments.length, 'segments');
-
 
             timelineSegments = segments.filter(s => {
                 const include = selectedCameras.includes(s.camera_id);
@@ -396,7 +351,6 @@ function performLoadTimelineData() {
                 return include;
             });
 
-
             console.log('Filtered to', timelineSegments.length, 'visible segments');
             renderTimeline();
             updateVideoGrid();
@@ -406,33 +360,25 @@ function performLoadTimelineData() {
         });
 }
 
-
 function renderTimeline() {
     const canvas = document.getElementById('timeline-canvas');
     if (!canvas) return;
 
-
     const ctx = canvas.getContext('2d');
     const width = canvas.width = canvas.offsetWidth;
-    const height = canvas.height = 85; // Increased from 80 to 85
-
+    const height = canvas.height = 85;
 
     ctx.fillStyle = '#1a1a1a';
     ctx.fillRect(0, 0, width, height);
-
 
     ctx.strokeStyle = '#444';
     ctx.fillStyle = '#888';
     ctx.font = '10px monospace';
 
-
-    // Calculate visible time range based on zoom
     const visibleHours = 24 / timelineZoomLevel;
     const startHour = timelineOffset;
     const endHour = startHour + visibleHours;
 
-
-    // Adaptive time markers based on zoom level
     let majorStep, minorStep, showMinutes;
 
     if (visibleHours >= 12) {
@@ -445,16 +391,15 @@ function renderTimeline() {
         showMinutes = false;
     } else if (visibleHours >= 2) {
         majorStep = 0.5;
-        minorStep = 10/60;
+        minorStep = 10 / 60;
         showMinutes = true;
     } else {
-        majorStep = 10/60;
-        minorStep = 1/60;
+        majorStep = 10 / 60;
+        minorStep = 1 / 60;
         showMinutes = true;
     }
 
-
-    // Draw minor markers
+    // Minor markers
     ctx.strokeStyle = '#333';
     const startMinutes = Math.floor(startHour * 60);
     const endMinutes = Math.ceil(endHour * 60);
@@ -472,8 +417,7 @@ function renderTimeline() {
         ctx.stroke();
     }
 
-
-    // Draw major markers with labels
+    // Major markers
     ctx.strokeStyle = '#555';
     const majorStepMinutes = majorStep * 60;
 
@@ -488,8 +432,6 @@ function renderTimeline() {
         ctx.lineTo(x, height);
         ctx.stroke();
 
-
-        // Format label
         let label;
         if (showMinutes) {
             const h = Math.floor(hour);
@@ -503,8 +445,7 @@ function renderTimeline() {
         ctx.fillText(label, x + 2, 12);
     }
 
-
-    // Draw event markers (compact design)
+    // Event markers
     if (timelineEvents && timelineEvents.length > 0) {
         const eventRowHeight = 18;
         const eventY = 5;
@@ -513,13 +454,10 @@ function renderTimeline() {
             const eventTime = new Date(event.start_time);
             const eventHours = eventTime.getHours() + eventTime.getMinutes() / 60 + eventTime.getSeconds() / 3600;
 
-            // Check if event is in visible time range
             if (eventHours < startHour || eventHours > endHour) return;
 
-            // Calculate X position with zoom
             const x = ((eventHours - startHour) / visibleHours) * width;
 
-            // Draw subtle vertical line
             ctx.strokeStyle = 'rgba(76, 175, 80, 0.3)';
             ctx.lineWidth = 1;
             ctx.beginPath();
@@ -527,53 +465,43 @@ function renderTimeline() {
             ctx.lineTo(x, height);
             ctx.stroke();
 
-            // Draw event marker circle
             ctx.fillStyle = '#4CAF50';
             ctx.beginPath();
             ctx.arc(x, eventY + eventRowHeight / 2, 6, 0, Math.PI * 2);
             ctx.fill();
 
-            // Draw icon (text emoji)
-            const icon = EVENT_ICONS[event.label] || '⚡';
+            const icon = EVENT_ICONS[event.label] || '?';
             ctx.font = '10px Arial';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillStyle = '#fff';
             ctx.fillText(icon, x, eventY + eventRowHeight / 2);
 
-            // Store event position for click detection
             event._canvasX = x;
             event._canvasY = eventY + eventRowHeight / 2;
             event._radius = 6;
         });
     }
 
-
-    // Draw camera segments
+    // Camera segments
     const camerasInView = [...new Set(timelineSegments.map(s => s.camera_id))];
-    const blockHeight = (height - 25) / Math.max(camerasInView.length, 1); // Adjusted for event row
-
+    const blockHeight = (height - 25) / Math.max(camerasInView.length, 1);
 
     camerasInView.forEach((cameraId, idx) => {
         const segments = timelineSegments.filter(s => s.camera_id === cameraId);
         const color = cameraColorMap[cameraId] || '#888';
 
-
         segments.forEach(segment => {
             const startDate = new Date(segment.start_time);
             const endDate = new Date(segment.end_time);
 
-
             const segStartHour = startDate.getHours() + startDate.getMinutes() / 60;
             const segEndHour = endDate.getHours() + endDate.getMinutes() / 60;
 
-
-            // Only render if segment is visible in current zoom window
             if (segEndHour >= startHour && segStartHour <= endHour) {
                 const x1 = Math.max(0, ((segStartHour - startHour) / visibleHours) * width);
                 const x2 = Math.min(width, ((segEndHour - startHour) / visibleHours) * width);
-                const y = 25 + (idx * blockHeight); // Adjusted for event row
-
+                const y = 25 + (idx * blockHeight);
 
                 ctx.fillStyle = color;
                 ctx.fillRect(x1, y, x2 - x1, blockHeight - 2);
@@ -581,16 +509,13 @@ function renderTimeline() {
         });
     });
 
-
-    // Draw playhead
+    // Playhead
     if (currentTimePosition) {
         const date = new Date(currentTimePosition);
         const hour = date.getHours() + date.getMinutes() / 60 + date.getSeconds() / 3600;
 
-        // Only draw playhead if it's in visible range
         if (hour >= startHour && hour <= endHour) {
             const x = ((hour - startHour) / visibleHours) * width;
-
 
             ctx.strokeStyle = '#fff';
             ctx.lineWidth = 2;
@@ -603,11 +528,9 @@ function renderTimeline() {
     }
 }
 
-
 function setupTimelineZoom() {
     const canvas = document.getElementById('timeline-canvas');
     if (!canvas) return;
-
 
     canvas.addEventListener('wheel', (e) => {
         e.preventDefault();
@@ -616,14 +539,12 @@ function setupTimelineZoom() {
         const mouseX = e.clientX - rect.left;
         const mouseHour = (mouseX / rect.width) * (24 / timelineZoomLevel) + timelineOffset;
 
-        // Zoom in/out
         const zoomDelta = e.deltaY > 0 ? 0.8 : 1.25;
         const newZoomLevel = Math.max(1.0, Math.min(24.0, timelineZoomLevel * zoomDelta));
 
         if (newZoomLevel !== timelineZoomLevel) {
             timelineZoomLevel = newZoomLevel;
 
-            // Adjust offset to keep mouse position centered
             const visibleHours = 24 / timelineZoomLevel;
             timelineOffset = mouseHour - (mouseX / rect.width) * visibleHours;
             timelineOffset = Math.max(0, Math.min(24 - visibleHours, timelineOffset));
@@ -633,19 +554,15 @@ function setupTimelineZoom() {
     }, { passive: false });
 }
 
-
 function setupTimelineControls() {
     const canvas = document.getElementById('timeline-canvas');
     if (!canvas) return;
 
-
-    // Click handler with event detection
     canvas.addEventListener('click', (e) => {
         const rect = canvas.getBoundingClientRect();
         const clickX = e.offsetX || e.clientX - rect.left;
         const clickY = e.offsetY || e.clientY - rect.top;
 
-        // Check if clicked on an event marker first
         if (timelineEvents) {
             for (const event of timelineEvents) {
                 if (event._canvasX && event._canvasY) {
@@ -654,7 +571,6 @@ function setupTimelineControls() {
                     const distance = Math.sqrt(dx * dx + dy * dy);
 
                     if (distance <= event._radius + 5) {
-                        // Clicked on event marker - seek to event time
                         const eventTime = new Date(event.start_time);
                         seekToTime(eventTime);
                         return;
@@ -663,13 +579,10 @@ function setupTimelineControls() {
             }
         }
 
-        // Regular timeline click
         const visibleHours = 24 / timelineZoomLevel;
         const clickedHour = (clickX / rect.width) * visibleHours + timelineOffset;
 
         const targetTime = new Date(currentDate);
-        // FIXED: Direct millisecond calculation for pixel-perfect seeking
-        // Instead of snapping to minute boundaries, calculate exact click position
         targetTime.setTime(
             currentDate.getTime() + (clickedHour * 3600000)
         );
@@ -678,15 +591,40 @@ function setupTimelineControls() {
         seekToTime(targetTime);
     });
 
-    // Hover handler for event tooltips (rest stays the same...)
     canvas.addEventListener('mousemove', (e) => {
-        // ... rest of the function unchanged
+        const rect = canvas.getBoundingClientRect();
+        const hoverX = e.offsetX || e.clientX - rect.left;
+        const hoverY = e.offsetY || e.clientY - rect.top;
+
+        let hoveredEvent = null;
+        if (timelineEvents) {
+            for (const event of timelineEvents) {
+                if (event._canvasX && event._canvasY) {
+                    const dx = hoverX - event._canvasX;
+                    const dy = hoverY - event._canvasY;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+
+                    if (distance <= event._radius + 5) {
+                        hoveredEvent = event;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (hoveredEvent) {
+            canvas.style.cursor = 'pointer';
+            showEventTooltip(hoveredEvent, e.clientX, e.clientY);
+        } else {
+            canvas.style.cursor = 'default';
+            hideEventTooltip();
+        }
     });
-    
-    // ... rest of setupTimelineControls unchanged
+
+    canvas.addEventListener('mouseleave', () => {
+        hideEventTooltip();
+    });
 }
-
-
 
 function showEventTooltip(event, x, y) {
     hideEventTooltip();
@@ -711,12 +649,12 @@ function showEventTooltip(event, x, y) {
 
     tooltip.innerHTML = `
         <div style="font-weight: bold; color: #4CAF50; margin-bottom: 4px;">
-            ${EVENT_ICONS[event.label] || '⚡'} ${event.label}
+            ${EVENT_ICONS[event.label] || '?'} ${event.label}
         </div>
         <div style="font-size: 11px; color: #ccc;">
-            📹 ${event.camera_name}<br>
-            🕐 ${timeStr}<br>
-            ⏱️ ${event.duration_seconds || event.duration}s
+            ?? ${event.camera_name}<br>
+            ?? ${timeStr}<br>
+            ?? ${event.duration_seconds || event.duration}s
         </div>
         <div style="font-size: 10px; color: #888; margin-top: 4px; font-style: italic;">
             Click to view recording
@@ -727,7 +665,6 @@ function showEventTooltip(event, x, y) {
     eventTooltip = tooltip;
 }
 
-
 function hideEventTooltip() {
     if (eventTooltip) {
         eventTooltip.remove();
@@ -735,21 +672,17 @@ function hideEventTooltip() {
     }
 }
 
-
 function seekToTime(time) {
     const timeMs = time.getTime();
-
 
     if (lastSeekTime === timeMs && seekTimeoutId) {
         console.log('Skipping duplicate seek to same time');
         return;
     }
 
-
     if (seekTimeoutId) {
         clearTimeout(seekTimeoutId);
     }
-
 
     if (isUpdatingGrid) {
         pendingSeekTime = timeMs;
@@ -757,10 +690,8 @@ function seekToTime(time) {
         return;
     }
 
-
     lastSeekTime = timeMs;
     currentTimePosition = timeMs;
-
 
     seekTimeoutId = setTimeout(() => {
         performSeek(time);
@@ -768,37 +699,29 @@ function seekToTime(time) {
     }, 100);
 }
 
-
 function performSeek(time) {
     pendingVideoTimeouts.forEach(timeoutId => clearTimeout(timeoutId));
     pendingVideoTimeouts = [];
-
 
     console.log('=== SEEK DEBUG ===');
     console.log('Seeking to:', time.toISOString(), '(Local:', time.toString(), ')');
     console.log('Searching through', timelineSegments.length, 'segments');
 
-
     const orderedSelectedCameras = getOrderedSelectedCameras();
-
 
     orderedSelectedCameras.forEach((cameraId, idx) => {
         const timeoutId = setTimeout(() => {
             pendingVideoTimeouts = pendingVideoTimeouts.filter(id => id !== timeoutId);
-
 
             if (!videoPlayers[idx]) {
                 console.warn(`Video player at index ${idx} does not exist, skipping`);
                 return;
             }
 
-
             console.log(`\n--- Camera ${cameraId} ---`);
-
 
             const segment = timelineSegments.find(s => {
                 if (s.camera_id !== cameraId) return false;
-
 
                 const segStart = new Date(s.start_time);
                 const segEnd = new Date(s.end_time);
@@ -806,9 +729,7 @@ function performSeek(time) {
                 const startMs = segStart.getTime();
                 const endMs = segEnd.getTime();
 
-
                 const matches = timeMs >= startMs && timeMs < endMs;
-
 
                 console.log(`Segment: ${s.file_path}`);
                 console.log(`  Start: ${segStart.toISOString()} (${segStart.toString()})`);
@@ -816,18 +737,14 @@ function performSeek(time) {
                 console.log(`  Time: ${time.toISOString()} (${time.toString()})`);
                 console.log(`  Match: ${matches} (${timeMs} >= ${startMs} && ${timeMs} < ${endMs})`);
 
-
                 return matches;
             });
 
-
             const video = videoPlayers[idx];
-
 
             if (segment) {
                 const filePath = segment.file_path;
-                console.log(`✓ MATCH FOUND: Loading ${filePath}`);
-
+                console.log(`? MATCH FOUND: Loading ${filePath}`);
 
                 const videoCell = video.parentElement;
                 if (videoCell) {
@@ -837,28 +754,23 @@ function performSeek(time) {
                     }
                 }
 
-
                 video.style.display = 'block';
                 video.pause();
                 video.removeAttribute('src');
 
-
                 setTimeout(() => {
                     video.src = filePath;
-
 
                     const segmentStart = new Date(segment.start_time).getTime();
                     const offset = (time.getTime() - segmentStart) / 1000;
                     console.log(`Offset within segment: ${offset.toFixed(2)}s`);
 
-
                     const metadataHandler = () => {
                         const seekTime = Math.max(0, Math.min(offset, video.duration));
                         console.log(`Video loaded, duration: ${video.duration}s, seeking to ${seekTime.toFixed(2)}s`);
 
-
                         video.currentTime = seekTime;
-
+                        video.playbackRate = playbackSpeed;
 
                         if (isPlaying) {
                             const playPromise = video.play();
@@ -869,15 +781,12 @@ function performSeek(time) {
                             }
                         }
 
-
                         video.removeEventListener('loadedmetadata', metadataHandler);
                     };
 
-
                     const errorHandler = (e) => {
-                        console.error(`✗ Video load error for ${filePath}:`, video.error);
+                        console.error(`? Video load error for ${filePath}:`, video.error);
                         video.style.display = 'none';
-
 
                         const videoCell = video.parentElement;
                         if (videoCell) {
@@ -887,20 +796,17 @@ function performSeek(time) {
                             }
                         }
 
-
                         video.removeEventListener('error', errorHandler);
                     };
-
 
                     video.addEventListener('loadedmetadata', metadataHandler);
                     video.addEventListener('error', errorHandler);
                 }, 10);
             } else {
-                console.log(`✗ No segment found for camera ${cameraId} at ${time}`);
+                console.log(`? No segment found for camera ${cameraId} at ${time}`);
                 video.pause();
                 video.removeAttribute('src');
                 video.style.display = 'none';
-
 
                 const videoCell = video.parentElement;
                 if (videoCell) {
@@ -912,25 +818,20 @@ function performSeek(time) {
             }
         }, idx * 150);
 
-
         pendingVideoTimeouts.push(timeoutId);
     });
 
-
     renderTimeline();
-
 
     if (!isPlaying) {
         isPlaying = true;
         const btn = document.getElementById('play-pause');
-        if (btn) btn.textContent = '⏸ Pause';
+        if (btn) btn.textContent = '? Pause';
     }
 }
 
-
 function togglePlayPause() {
     isPlaying = !isPlaying;
-
 
     videoPlayers.forEach(video => {
         if (video) {
@@ -945,16 +846,13 @@ function togglePlayPause() {
         }
     });
 
-
     const btn = document.getElementById('play-pause');
-    if (btn) btn.textContent = isPlaying ? '⏸ Pause' : '▶ Play';
+    if (btn) btn.textContent = isPlaying ? '? Pause' : '? Play';
 }
-
 
 function toggleFullscreen() {
     const container = document.getElementById('fullscreen-wrapper');
     if (!container) return;
-
 
     if (!document.fullscreenElement) {
         container.requestFullscreen().catch(err => {
@@ -967,10 +865,8 @@ function toggleFullscreen() {
     }
 }
 
-
 function toggleMuteAll() {
     const allMuted = videoPlayers.filter(v => v).every(v => v.muted);
-
 
     videoPlayers.forEach(video => {
         if (video) {
@@ -978,21 +874,17 @@ function toggleMuteAll() {
         }
     });
 
-
     const btn = document.getElementById('mute-all-btn');
     if (btn) {
-        btn.textContent = allMuted ? '🔊 Unmute All' : '🔇 Mute All';
+        btn.textContent = allMuted ? '?? Unmute All' : '?? Mute All';
     }
 }
-
 
 function updateVideoGrid() {
     const container = document.getElementById('video-grid');
     if (!container) return;
 
-
     isUpdatingGrid = true;
-
 
     videoPlayers.forEach(video => {
         if (video) {
@@ -1001,21 +893,17 @@ function updateVideoGrid() {
         }
     });
 
-
     container.innerHTML = '';
     videoPlayers = [];
 
-
     const orderedSelectedCameras = getOrderedSelectedCameras();
     const numCameras = orderedSelectedCameras.length;
-
 
     if (numCameras === 0) {
         container.innerHTML = '<div style="padding: 40px; text-align: center; color: #888; font-size: 18px;">Select cameras to begin playback</div>';
         isUpdatingGrid = false;
         return;
     }
-
 
     let cols;
     if (numCameras === 1) {
@@ -1032,19 +920,15 @@ function updateVideoGrid() {
         cols = 4;
     }
 
-
     container.style.display = 'grid';
     container.style.gap = '10px';
     container.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
-
 
     orderedSelectedCameras.forEach((cameraId, idx) => {
         const camera = allCameras.find(c => c.id === cameraId);
         if (!camera) return;
 
-
         const color = cameraColorMap[cameraId] || '#888';
-
 
         const wrapper = document.createElement('div');
         wrapper.className = 'video-cell';
@@ -1052,12 +936,10 @@ function updateVideoGrid() {
         wrapper.style.backgroundColor = '#1a1a1a';
         wrapper.style.aspectRatio = '16/9';
 
-
         const label = document.createElement('div');
         label.className = 'video-label';
         label.textContent = camera.name;
         label.style.backgroundColor = color;
-
 
         const noVideoMessage = document.createElement('div');
         noVideoMessage.className = 'no-video-message';
@@ -1075,7 +957,6 @@ function updateVideoGrid() {
         `;
         noVideoMessage.innerHTML = `<div>No Recording Available</div><div style="font-size: 14px; margin-top: 10px;">Select a different time</div>`;
 
-
         const video = document.createElement('video');
         video.className = 'timeline-video';
         video.controls = false;
@@ -1085,19 +966,15 @@ function updateVideoGrid() {
         video.style.objectFit = 'contain';
         video.style.display = 'none';
 
-
         wrapper.appendChild(label);
         wrapper.appendChild(noVideoMessage);
         wrapper.appendChild(video);
         container.appendChild(wrapper);
 
-
         videoPlayers.push(video);
     });
 
-
     isUpdatingGrid = false;
-
 
     if (pendingSeekTime !== null) {
         const time = new Date(pendingSeekTime);
@@ -1109,30 +986,25 @@ function updateVideoGrid() {
     }
 }
 
-
 function previousSegment() {
     if (!currentTimePosition) {
         currentTimePosition = new Date().getTime();
     }
-
 
     const newTime = new Date(currentTimePosition);
     newTime.setMinutes(newTime.getMinutes() - 10);
     seekToTime(newTime);
 }
 
-
 function nextSegment() {
     if (!currentTimePosition) {
         currentTimePosition = new Date().getTime();
     }
 
-
     const newTime = new Date(currentTimePosition);
     newTime.setMinutes(newTime.getMinutes() + 10);
     seekToTime(newTime);
 }
-
 
 function updatePlaybackSpeed() {
     videoPlayers.forEach(video => {
@@ -1142,13 +1014,11 @@ function updatePlaybackSpeed() {
     });
 }
 
-
 function setupKeyboardShortcuts() {
     document.addEventListener('keydown', (e) => {
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
             return;
         }
-
 
         if (e.code === 'Space') {
             e.preventDefault();
@@ -1163,101 +1033,101 @@ function setupKeyboardShortcuts() {
     });
 }
 
-
 // Download Modal Functions
 function openDownloadModal() {
     if (!currentTimePosition) {
-        showError('Please select a time on the timeline first');
+        if (typeof showError === 'function') {
+            showError('Please select a time on the timeline first');
+        } else {
+            alert('Please select a time on the timeline first');
+        }
         return;
     }
-
 
     const modal = document.getElementById('download-modal');
     if (!modal) return;
 
-
     downloadStartTime = new Date(currentTimePosition);
     downloadStartTime.setMinutes(downloadStartTime.getMinutes() - 10);
-
 
     downloadEndTime = new Date(currentTimePosition);
     downloadEndTime.setMinutes(downloadEndTime.getMinutes() + 10);
 
-
     downloadCameras = [...selectedCameras];
-
 
     updateDownloadTimeDisplay();
     renderDownloadCameraSelection();
 
-
+    modal.classList.add('active');
     modal.style.display = 'block';
 }
-
-
 
 function closeDownloadModal() {
     const modal = document.getElementById('download-modal');
     if (modal) {
+        modal.classList.remove('active');
         modal.style.display = 'none';
     }
 }
 
-
 function updateDownloadTimeDisplay() {
-    const startEl = document.getElementById('download-time-start');
-    const endEl = document.getElementById('download-time-end');
+    const displayEl = document.getElementById('download-time-display');
+    const durationEl = document.getElementById('download-duration-display');
 
-
-    if (startEl) startEl.textContent = formatTimeForDisplay(downloadStartTime);
-    if (endEl) endEl.textContent = formatTimeForDisplay(downloadEndTime);
+    if (displayEl && downloadStartTime && downloadEndTime) {
+        displayEl.textContent = `${formatTimeForDisplay(downloadStartTime)} - ${formatTimeForDisplay(downloadEndTime)}`;
+    }
+    if (durationEl && downloadStartTime && downloadEndTime) {
+        const diffMins = Math.round((downloadEndTime - downloadStartTime) / 60000);
+        durationEl.textContent = `Total duration: ${diffMins} min`;
+    }
 }
 
+function expandDownloadTimeEarlier() {
+    if (downloadStartTime) {
+        downloadStartTime.setMinutes(downloadStartTime.getMinutes() - 10);
+        updateDownloadTimeDisplay();
+    }
+}
+
+function expandDownloadTimeLater() {
+    if (downloadEndTime) {
+        downloadEndTime.setMinutes(downloadEndTime.getMinutes() + 10);
+        updateDownloadTimeDisplay();
+    }
+}
+
+function resetDownloadTimeRange() {
+    if (!currentTimePosition) return;
+
+    downloadStartTime = new Date(currentTimePosition);
+    downloadStartTime.setMinutes(downloadStartTime.getMinutes() - 10);
+
+    downloadEndTime = new Date(currentTimePosition);
+    downloadEndTime.setMinutes(downloadEndTime.getMinutes() + 10);
+
+    updateDownloadTimeDisplay();
+}
 
 function formatTimeForDisplay(date) {
     return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
-
-function adjustDownloadTime(delta) {
-    downloadStartTime.setMinutes(downloadStartTime.getMinutes() + delta);
-    downloadEndTime.setMinutes(downloadEndTime.getMinutes() + delta);
-    updateDownloadTimeDisplay();
-}
-
-
-function resetDownloadTime() {
-    if (!currentTimePosition) return;
-
-
-    downloadStartTime = new Date(currentTimePosition);
-    downloadStartTime.setMinutes(downloadStartTime.getMinutes() - 10);
-
-
-    downloadEndTime = new Date(currentTimePosition);
-    downloadEndTime.setMinutes(downloadEndTime.getMinutes() + 10);
-
-
-    updateDownloadTimeDisplay();
-}
-
-
 function renderDownloadCameraSelection() {
     const container = document.getElementById('download-camera-list');
     if (!container) return;
 
-
     container.innerHTML = '';
-
 
     selectedCameras.forEach(cameraId => {
         const camera = allCameras.find(c => c.id === cameraId);
         if (!camera) return;
 
-
         const label = document.createElement('label');
         label.className = 'camera-checkbox';
-
+        label.style.display = 'block';
+        label.style.margin = '5px 0';
+        label.style.cursor = 'pointer';
 
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
@@ -1265,13 +1135,11 @@ function renderDownloadCameraSelection() {
         checkbox.checked = downloadCameras.includes(cameraId);
         checkbox.onchange = () => toggleDownloadCamera(cameraId);
 
-
         label.appendChild(checkbox);
         label.appendChild(document.createTextNode(' ' + camera.name));
         container.appendChild(label);
     });
 }
-
 
 function toggleDownloadCamera(cameraId) {
     if (downloadCameras.includes(cameraId)) {
@@ -1282,28 +1150,26 @@ function toggleDownloadCamera(cameraId) {
     renderDownloadCameraSelection();
 }
 
-
 function startDownload() {
     if (downloadCameras.length === 0) {
-        showError('Please select at least one camera to download');
+        if (typeof showError === 'function') {
+            showError('Please select at least one camera to download');
+        } else {
+            alert('Please select at least one camera to download');
+        }
         return;
     }
-
 
     downloadCameras.forEach(cameraId => {
         const camera = allCameras.find(c => c.id === cameraId);
         if (!camera) return;
 
-
         const startTimeStr = downloadStartTime.toISOString();
         const endTimeStr = downloadEndTime.toISOString();
 
-
         const url = `/api/download?camera_id=${encodeURIComponent(cameraId)}&start_time=${encodeURIComponent(startTimeStr)}&end_time=${encodeURIComponent(endTimeStr)}`;
 
-
         console.log('Starting download:', url);
-
 
         const a = document.createElement('a');
         a.href = url;
@@ -1313,12 +1179,11 @@ function startDownload() {
         document.body.removeChild(a);
     });
 
-
-    showSuccess('Download started for ' + downloadCameras.length + ' camera(s)');
+    if (typeof showSuccess === 'function') {
+        showSuccess('Download started for ' + downloadCameras.length + ' camera(s)');
+    }
     closeDownloadModal();
 }
-
-
 
 // Initialize on page load
 if (document.readyState === 'loading') {
