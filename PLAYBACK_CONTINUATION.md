@@ -1,0 +1,9 @@
+# Conservative playback continuation
+
+This first implementation is limited to exactly one selected camera. It installs generation- and player-identity-guarded timeupdate/ended listeners after metadata loads; seeks, timeline invalidation and grid rebuilds detach them. The playhead follows source-relative media time added to the recording's metadata start. This is not calibrated camera wall-clock timing.
+
+At a natural ended event while playing, continuation requires exactly one interval covering the previous metadata end, starting at that exact instant, with a different nonempty file path. There is no rounding tolerance, gap skipping or overlap tie-break. Missing/ambiguous continuation pauses playback and asks the user to select another time. The selected local day's next-midnight boundary also stops playback; there is no automatic next-day fetch. A timeupdate can stop a cross-midnight source at that boundary, subject to browser event scheduling, not frame-exact enforcement.
+
+The next clip uses the existing seek/loading path and current speed. Pausing while its metadata is pending prevents autoplay. Transitions are not guaranteed gapless. Existing video-only metadata timing uncertainty and browser playback restrictions remain. Decode errors after metadata and rejected play promises are not newly solved here. Multi-camera synchronization/advancement, explicit resume after a paused ended event, and full browser validation remain pending. Existing exports are unchanged. Keep the audit branch unmerged.
+
+Node tests load the real playback script with stub media/timers and cover contiguous transition, playhead/speed, gaps/overlaps/duplicate candidates, stale callbacks, pause during transition, multi-camera exclusion and midnight stopping. These are not browser integration tests.

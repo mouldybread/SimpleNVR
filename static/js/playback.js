@@ -6,7 +6,7 @@ let seekTimeoutId = null, loadDataTimeoutId = null, pendingVideoTimeouts = [];
 let downloadStartTime = null, downloadEndTime = null, downloadCameras = [];
 let timelineEvents = [], eventTooltip = null;
 let timelineRequestVersion = 0, timelineAbort = null, pendingEventNavigation = null, cameraLoadVersion = 0;
-let seekGeneration = 0, mediaCleanups = [];
+let seekGeneration = 0, mediaCleanups = [], segmentCleanups = [];
 const EVENT_ICONS = {'Motion Detected':'???','Person Detected':'??','Vehicle Detected':'??','Intrusion':'??','Loitering':'??','Object Removed':'??','Object Left Behind':'??','Sound Alert':'??','Line Crossing':'??','Tamper Alert':'??'};
 let cameraColorMap = {};
 const COLORS = ['#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06b6d4','#84cc16','#f97316','#14b8a6','#a855f7','#f43f5e','#0ea5e9','#eab308','#6366f1','#d946ef'];
@@ -35,6 +35,7 @@ function cancelPlaybackTasks() {
   seekTimeoutId = null;
   pendingVideoTimeouts.forEach(clearTimeout); pendingVideoTimeouts = [];
   mediaCleanups.splice(0).forEach(cleanup => cleanup());
+  segmentCleanups.splice(0).forEach(cleanup => cleanup());
 }
 function invalidateTimelineLoad() {
   timelineRequestVersion++;
@@ -250,6 +251,39 @@ function scheduleVideoTask(fn,delay,generation) {
   const timer=setTimeout(() => { pendingVideoTimeouts=pendingVideoTimeouts.filter(id=>id!==timer); if (generation===seekGeneration) fn(); },delay);
   pendingVideoTimeouts.push(timer);
 }
+// This first continuation policy deliberately excludes multi-camera playback.
+function attachSingleCameraContinuation(video,index,segment,generation) {
+  const cameras=getOrderedSelectedCameras();
+  if (cameras.length!==1 || cameras[0]!==segment.camera_id) return;
+  const day=localDateKey(currentDate),bounds=timelineWindowForDay(day),dayEnd=Date.parse(bounds.end_time);
+  const start=Date.parse(segment.start_time),end=Date.parse(segment.end_time);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end<=start) return;
+  const valid=()=>generation===seekGeneration && videoPlayers[index]===video && localDateKey(currentDate)===day && getOrderedSelectedCameras().length===1 && getOrderedSelectedCameras()[0]===segment.camera_id;
+  function stop(time,message) {
+    cancelPlaybackTasks();isPlaying=false;videoPlayers.forEach(player=>{if(player)player.pause();});
+    currentTimePosition=Math.min(time,dayEnd-1);
+    const button=document.getElementById('play-pause');if(button)button.textContent='? Play';
+    renderTimeline();playbackError(message);
+  }
+  const update=()=>{
+    if (!valid() || !isPlaying || !Number.isFinite(video.currentTime)) return;
+    const time=start+Math.max(0,video.currentTime)*1000;
+    if (time>=dayEnd) {stop(dayEnd,'Selected playback day ended; select another day to continue');return;}
+    currentTimePosition=Math.min(time,end);renderTimeline();
+  };
+  const ended=()=>{
+    if (!valid() || !isPlaying || !video.ended) return;
+    if (end>=dayEnd) {stop(dayEnd,'Selected playback day ended; select another day to continue');return;}
+    const next=timelineSegments.filter(item=>item.camera_id===segment.camera_id && Date.parse(item.start_time)<=end && Date.parse(item.end_time)>end);
+    if (next.length!==1 || Date.parse(next[0].start_time)!==end || !next[0].file_path || next[0].file_path===segment.file_path) {
+      stop(end,'No unique contiguous recording; select another time to continue');return;
+    }
+    cancelPlaybackTasks();currentTimePosition=end;lastSeekTime=end;
+    performSeek(new Date(end),seekGeneration);
+  };
+  const cleanup=()=>{video.removeEventListener('timeupdate',update);video.removeEventListener('ended',ended);segmentCleanups=segmentCleanups.filter(fn=>fn!==cleanup);};
+  segmentCleanups.push(cleanup);video.addEventListener('timeupdate',update);video.addEventListener('ended',ended);
+}
 function performSeek(time,generation=seekGeneration) {
   if (generation!==seekGeneration) return;
   getOrderedSelectedCameras().forEach((id,index) => scheduleVideoTask(() => {
@@ -265,6 +299,7 @@ function performSeek(time,generation=seekGeneration) {
       const metadata=() => {
         cleanup(); if (generation!==seekGeneration || videoPlayers[index]!==video) return;
         video.currentTime=Math.max(0,Math.min(offset,video.duration)); video.playbackRate=playbackSpeed;
+        attachSingleCameraContinuation(video,index,segment,generation);
         if (isPlaying) { const promise=video.play(); if (promise!==undefined) promise.catch(()=>{}); }
       };
       const failed=() => { cleanup(); if (generation!==seekGeneration || videoPlayers[index]!==video) return; video.style.display='none'; if (message) message.style.display='block'; };
