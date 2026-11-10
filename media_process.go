@@ -44,14 +44,7 @@ func validateRecording(ctx context.Context,path string) error {
 }
 
 func publishRecording(ctx context.Context,temporary,final string) error {
- if _,err:=os.Lstat(final);err==nil {return os.ErrExist} else if !os.IsNotExist(err) {return err}
- info,err:=os.Lstat(temporary)
- if err!=nil {return err}
- if !info.Mode().IsRegular() || info.Size()==0 {return errors.New("recording is not a nonempty regular file")}
- if err:=validateRecording(ctx,temporary);err!=nil {return err}
- // Destinations use unique recording/event IDs. Never intentionally replace a file.
- if _,err:=os.Lstat(final);err==nil {return os.ErrExist} else if !os.IsNotExist(err) {return err}
- return os.Rename(temporary,final)
+ return publishRecordingWithOps(ctx,temporary,final,validateRecording,renameRecordingNoReplace)
 }
 
 func removeEmptyRecording(path string) {
