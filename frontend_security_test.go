@@ -23,7 +23,7 @@ func runFrontendRegression(t *testing.T,script,zone string) {
 }
 
 func TestFrontendEventRendering(t *testing.T) {runFrontendRegression(t,"tests/event-rendering.cjs","UTC")}
-
+func TestFrontendExportUI(t *testing.T) {runFrontendRegression(t,"tests/export-ui.cjs","UTC")}
 func TestFrontendEventNavigation(t *testing.T) {
  for _,zone:=range []string{"UTC","Asia/Hong_Kong","America/Chicago"} {
   t.Run(zone,func(t *testing.T){runFrontendRegression(t,"tests/event-navigation.cjs",zone)})
