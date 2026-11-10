@@ -368,7 +368,7 @@ func scanGo2rtcHandler(w http.ResponseWriter, r *http.Request) {
 	for streamName := range streams {
 		// Use the dynamically parsed host instead of hardcoding "go2rtc"
 		rtspUrl := fmt.Sprintf("rtsp://%s:8554/%s", host, streamName)
-		
+
 		// Check if camera with this RTSP URL already exists
 		nvr.mu.RLock()
 		exists := false
@@ -497,7 +497,7 @@ func reorderCamerasHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	nvr.mu.Lock()
-	
+
 	// Validate that all IDs exist
 	for _, id := range data.Order {
 		if _, exists := nvr.cameras[id]; !exists {
@@ -506,7 +506,7 @@ func reorderCamerasHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	
+
 	// Update camera order
 	nvr.cameraOrder = data.Order
 	nvr.mu.Unlock()
@@ -519,20 +519,26 @@ func reorderCamerasHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("Updated camera order: %v", data.Order)
-	
+
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
+
 // camerasHandler - Render camera list template
 func camerasHandler(w http.ResponseWriter, r *http.Request) {
 	nvr.mu.RLock()
 	defer nvr.mu.RUnlock()
 
 	type CameraView struct {
-		Camera
+		ID               string
+		Name             string
+		RTSPUrl          string
+		RecordDir        string
+		IsRecording      bool
+		RecordingMode    RecordingMode
 		RetentionDisplay int
 		ModeDisplay      string
-		DiskUsage        string  // NEW: Disk space used
+		DiskUsage        string
 	}
 
 	var cameras []CameraView
@@ -554,7 +560,12 @@ func camerasHandler(w http.ResponseWriter, r *http.Request) {
 		diskUsage := calculateDiskUsage(cam.RecordDir)
 
 		cameras = append(cameras, CameraView{
-			Camera:           *cam,
+			ID:               cam.ID,
+			Name:             cam.Name,
+			RTSPUrl:          cam.RTSPUrl,
+			RecordDir:        cam.RecordDir,
+			IsRecording:      cam.IsRecording,
+			RecordingMode:    cam.RecordingMode,
 			RetentionDisplay: retentionDays,
 			ModeDisplay:      modeDisplay,
 			DiskUsage:        diskUsage,
