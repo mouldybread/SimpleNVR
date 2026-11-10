@@ -10,32 +10,29 @@ import (
 )
 
 // Never acquire recordingControlMu while holding NVR.mu.
-// Startup completes before the HTTP server accepts control requests.
 var recordingControlMu sync.Mutex
 
 var (
- errCameraMissing = errors.New("camera not found")
- errRecordingDisabled = errors.New("recording is disabled; change the recording mode first")
- errRecordingMode = errors.New("invalid recording mode")
- errRecordingAction = errors.New("invalid recording action")
+ errCameraMissing=errors.New("camera not found")
+ errRecordingDisabled=errors.New("recording is disabled; change the recording mode first")
+ errRecordingMode=errors.New("invalid recording mode")
+ errRecordingAction=errors.New("invalid recording action")
+ errRecorderShuttingDown=errors.New("server shutting down; recording control rejected")
 )
 
-// Workers own the matching recordWG.Done call, after joining their child work.
-type recordingWorker func(context.Context, *Camera, RecordingMode)
+type recordingWorker func(context.Context,*Camera,RecordingMode)
 
-func runRecordingWorker(ctx context.Context, cam *Camera, mode RecordingMode) {
- switch mode {
- case ModeContinuous: recordCamera(ctx,cam)
- case ModeEventBased: recordCameraEventBased(ctx,cam)
- default: cam.recordWG.Done()
- }
+func runRecordingWorker(ctx context.Context,cam *Camera,mode RecordingMode) {
+ switch mode {case ModeContinuous:recordCamera(ctx,cam);case ModeEventBased:recordCameraEventBased(ctx,cam);default:cam.recordWG.Done()}
 }
 
-// Caller holds NVR.mu and recordingControlMu (except single-threaded startup).
-func startCameraWorkerLocked(cam *Camera, worker recordingWorker) error {
+// Caller holds NVR.mu and recordingControlMu. Workers own Done after children join.
+func startCameraWorkerLocked(n *NVR,cam *Camera,worker recordingWorker) error {
+ if n.shuttingDown.Load() {return errRecorderShuttingDown}
  if cam.RecordingMode==ModeNoRecording {return errRecordingDisabled}
  if cam.RecordingMode!=ModeContinuous && cam.RecordingMode!=ModeEventBased {return errRecordingMode}
- if cam.IsRecording {return nil}
+ // A loaded IsRecording=true with no runtime cancel function is restart intent.
+ if cam.IsRecording && cam.recordCancel!=nil {return nil}
  if worker==nil {return errors.New("recording worker unavailable")}
  ctx,cancel:=context.WithCancel(context.Background())
  mode:=cam.RecordingMode
@@ -46,57 +43,56 @@ func startCameraWorkerLocked(cam *Camera, worker recordingWorker) error {
  return nil
 }
 
-// Caller holds recordingControlMu, not NVR.mu. Event workers transitively join
-// maintenance and event jobs before completing their top-level WaitGroup task.
-func stopManagedCamera(n *NVR, cam *Camera) {
- n.mu.RLock()
- cancel:=cam.recordCancel
- n.mu.RUnlock()
- if cancel!=nil {cancel()}
- cam.recordWG.Wait()
- n.mu.Lock()
- cam.IsRecording=false
- cam.recordCancel=nil
- cam.bufferManager=nil
- n.mu.Unlock()
+func (n *NVR) resumeRecordings(worker recordingWorker) error {
+ recordingControlMu.Lock();defer recordingControlMu.Unlock()
+ n.mu.Lock();defer n.mu.Unlock()
+ if n.shuttingDown.Load() {return errRecorderShuttingDown}
+ var result error
+ for _,cam:=range n.cameras {
+  if !cam.IsRecording {continue}
+  if cam.RecordingMode!=ModeContinuous && cam.RecordingMode!=ModeEventBased {cam.IsRecording=false;continue}
+  result=errors.Join(result,startCameraWorkerLocked(n,cam,worker))
+ }
+ return result
 }
 
-func (n *NVR) transitionRecording(id, action string, mode RecordingMode, worker recordingWorker) error {
+// API stops intentionally clear restart intent. Process shutdown does not use this.
+func stopManagedCamera(n *NVR,cam *Camera) {
+ n.mu.RLock();cancel:=cam.recordCancel;n.mu.RUnlock()
+ if cancel!=nil {cancel()}
+ cam.recordWG.Wait()
+ n.mu.Lock();cam.IsRecording=false;cam.recordCancel=nil;cam.bufferManager=nil;n.mu.Unlock()
+}
+
+func (n *NVR) transitionRecording(id,action string,mode RecordingMode,worker recordingWorker) error {
  if action!="start" && action!="stop" && action!="mode" {return errRecordingAction}
  if action=="mode" && mode!=ModeContinuous && mode!=ModeEventBased && mode!=ModeNoRecording {return errRecordingMode}
- recordingControlMu.Lock()
- defer recordingControlMu.Unlock()
+ recordingControlMu.Lock();defer recordingControlMu.Unlock()
  n.mu.Lock()
+ if n.shuttingDown.Load() {n.mu.Unlock();return errRecorderShuttingDown}
  cam,exists:=n.cameras[id]
  if !exists {n.mu.Unlock();return errCameraMissing}
- if action=="start" {
-  err:=startCameraWorkerLocked(cam,worker)
-  n.mu.Unlock()
-  return err
- }
+ if action=="start" {err:=startCameraWorkerLocked(n,cam,worker);n.mu.Unlock();return err}
  if action=="mode" && cam.RecordingMode==mode {n.mu.Unlock();return nil}
+ wasRecording:=cam.IsRecording
  n.mu.Unlock()
  stopManagedCamera(n,cam)
- n.mu.Lock()
- defer n.mu.Unlock()
+ n.mu.Lock();defer n.mu.Unlock()
  if n.cameras[id]!=cam {return errCameraMissing}
  if action=="mode" {
+  if n.shuttingDown.Load() {cam.IsRecording=wasRecording;return errRecorderShuttingDown}
   cam.RecordingMode=mode
-  if mode!=ModeNoRecording {return startCameraWorkerLocked(cam,worker)}
+  if mode!=ModeNoRecording {return startCameraWorkerLocked(n,cam,worker)}
  }
  return nil
 }
 
-type recordingRequest struct {
- ID string `json:"id"`
- Mode RecordingMode `json:"mode,omitempty"`
-}
+type recordingRequest struct {ID string `json:"id"`;Mode RecordingMode `json:"mode,omitempty"`}
 
 func decodeRecordingRequest(w http.ResponseWriter,r *http.Request) (recordingRequest,bool) {
  var req recordingRequest
  if r.Method!=http.MethodPost {w.Header().Set("Allow","POST");http.Error(w,"Method not allowed",405);return req,false}
- dec:=json.NewDecoder(http.MaxBytesReader(w,r.Body,65536))
- dec.DisallowUnknownFields()
+ dec:=json.NewDecoder(http.MaxBytesReader(w,r.Body,65536));dec.DisallowUnknownFields()
  if err:=dec.Decode(&req);err!=nil {http.Error(w,"Invalid request",400);return req,false}
  var extra interface{}
  if err:=dec.Decode(&extra);err!=io.EOF || req.ID=="" {http.Error(w,"A single JSON request with a camera id is required",400);return req,false}
@@ -105,11 +101,7 @@ func decodeRecordingRequest(w http.ResponseWriter,r *http.Request) (recordingReq
 
 func recordingError(w http.ResponseWriter,err error) {
  status:=http.StatusInternalServerError
- switch {
- case errors.Is(err,errCameraMissing):status=http.StatusNotFound
- case errors.Is(err,errRecordingDisabled):status=http.StatusConflict
- case errors.Is(err,errRecordingMode):status=http.StatusBadRequest
- }
+ switch {case errors.Is(err,errCameraMissing):status=404;case errors.Is(err,errRecordingDisabled):status=409;case errors.Is(err,errRecordingMode):status=400;case errors.Is(err,errRecorderShuttingDown):status=503;w.Header().Set("Retry-After","5")}
  http.Error(w,err.Error(),status)
 }
 

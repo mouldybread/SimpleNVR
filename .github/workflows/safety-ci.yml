@@ -31,7 +31,7 @@ jobs:
           git diff --exit-code -- go.mod go.sum
       - name: Build
         run: go build ./...
-      - name: Race-enabled tests including synthetic FFmpeg cancellation
+      - name: Race-enabled tests including media and shutdown lifecycle
         run: go test -race -count=1 -timeout=120s ./...
       - name: Static analysis
         if: always()
@@ -41,3 +41,24 @@ jobs:
         run: git diff --exit-code -- go.mod go.sum
       - name: Verify runtime image builds
         run: docker build -t simplenvr-safety-test .
+      - name: Runtime container SIGTERM smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          state=$(mktemp -d)
+          name=simplenvr-shutdown-ci
+          trap 'docker rm -f "$name" >/dev/null 2>&1 || true; rm -rf "$state"' EXIT
+          printf '{"cameras":{},"camera_order":[],"events":[]}\n' > "$state/cameras.json"
+          python3 -c 'import secrets; print(secrets.token_urlsafe(32))' | docker run --rm -i --user "$(id -u):$(id -g)" -v "$state:/recordings" simplenvr-safety-test auth set-password ci-admin
+          docker run -d --name "$name" -v "$state:/recordings" --tmpfs /certs simplenvr-safety-test
+          ready=0
+          for attempt in $(seq 1 60); do
+            if docker exec "$name" wget --no-check-certificate -q -O /dev/null https://127.0.0.1/auth/login; then ready=1; break; fi
+            sleep 0.5
+          done
+          if [ "$ready" -ne 1 ]; then docker logs "$name"; exit 1; fi
+          docker stop --time 75 "$name"
+          docker logs "$name"
+          test "$(docker inspect -f '{{.State.ExitCode}}' "$name")" -eq 0
+          docker logs "$name" 2>&1 | grep -F 'Shutdown complete; recording intent persisted'
+          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["cameras"] == {}' "$state/cameras.json"

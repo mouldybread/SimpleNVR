@@ -1,29 +1,33 @@
-# Recording and event lifecycle safety
+# Recording and server lifecycle safety
 
-API start/stop/mode-change, event admission and camera deletion share recordingControlMu. NVR.mu is released during worker waits and event pinning. Starting no_recording returns 409 without adding a WaitGroup task. Mode changes stop the old top-level worker before starting a replacement. Camera-list disk scans use scalar snapshots outside NVR.mu.
+API controls and event admission use recordingControlMu. NVR.mu is released during worker waits and event pinning. Disabled starts return 409 without allocating workers. Event recorders join buffer maintenance and two bounded event workers. Completed FFmpeg CSV-reported prebuffer segments are hard-linked into unique event staging. Capacity limits, asynchronous acceptance and retained failure staging are intentional.
 
-## Event workers and prebuffer
+## Recorder command cancellation
 
-Each event-based camera has one buffer segmenter, one cleanup loop and two event workers. All are joined before the camera task completes. Publication/clearing of buffer managers uses NVR.mu. FFmpeg CSV close reports, rather than modification-time guesses, admit completed regular files into the rolling prebuffer. Accepted events pin available completed segments with same-filesystem hard links into unique staging directories.
+FFmpeg receives SIGINT on recorder-context cancellation, with an 8-second force-kill fallback. Continuous and assembly outputs are probed for a video stream and a readable packet before publication; interrupted outputs are named _partial.mp4. Detached finalization has a 15-second budget. This does not prove completeness, duration accuracy, every-frame validity, gapless media continuity or power-loss resilience. Interrupted acquisition and failed assembly retain nonempty staging for inspection.
 
-Two total event slots bound admission and capture work. Excess requests return 429; unavailable/starting/stopping recorders return 503. Durations are 1-3600 seconds. Event labels are limited to 128 bytes and camera names to 256 bytes; duplicate names return 409. Responses distinguish recording_queued from footage confirmed saved. Metadata persistence can fail after admission, so automatic retries may duplicate an event. Stopped/continuous/no_recording cameras can still log events without capture.
+## SIGTERM/SIGINT and restart intent
 
-The prebuffer is the available completed trailing window, not a guarantee of exactly 30 seconds. Post-trigger media still comes from a separate RTSP connection. Gaps, keyframe alignment and source continuity require live-camera tests and potentially a single-source segment-promotion design.
+The application installs signal handling before startup recovery and accepts SIGTERM/SIGINT as shutdown requests. Startup recovery now uses the signal context and stops before launching recorders if cancellation occurs. TLS/template/configuration initialization is performed before recorder startup. A listener/server failure also enters recorder cleanup rather than immediately exiting with active recorders.
 
-## Graceful command cancellation and partial files
+On shutdown, a request gate rejects new requests with 503. The runtime shutdown flag prevents new recording workers, including already-admitted controls that reach a start later. Existing admitted state-changing requests are tracked. Recorder cancellation is broadcast to all cameras before waiting. HTTP shutdown gets up to 5 seconds before connections are closed. Persistence waits for recorder completion, mutation-request draining and HTTP shutdown. The overall application budget is 60 seconds; failure or timeout produces a nonzero exit rather than a false clean-shutdown message.
 
-Recorder FFmpeg commands disable stdin interaction and send SIGINT on context cancellation. Go's WaitDelay allows up to 8 seconds before force-killing a command that does not exit. This is a bounded attempt to let FFmpeg write MP4 trailers; it is not a guarantee that every interrupted file is recoverable.
+Process shutdown cancels runtime workers without clearing the persisted IsRecording intent. Previously active cameras can resume on the next process start; paused cameras remain paused. Explicit API stop still clears intent. A mode change interrupted during its worker wait rejects the replacement and restores the previous recording intent and mode for restart. Runtime cancellation functions, buffer managers and the shutdown flag are not persisted.
 
-Continuous segments and event assembly outputs are validated using a video-stream probe and at least one readable video packet. Outputs from failed/interrupted commands that pass these checks are published with _partial.mp4 names. Finalization uses a separate bounded 15-second context so cancellation does not immediately cancel the probes. File publication refuses an already-existing destination. Validation does not prove duration, completeness or every frame; _partial must not be treated as a complete interval.
+During shutdown IsRecording represents restart intent, not proof that a worker is still running. A timed-out shutdown cannot promise that the final persistence operation completed; atomic configuration replacement preserves the prior complete file if replacement did not finish. Filesystem stalls remain outside normal timing guarantees.
 
-Interrupted event acquisition retains nonempty event media and pinned prebuffer staging for inspection instead of immediately assembling under a canceled context. Canceled queued jobs retain staging only if it contains pinned prebuffer. Failed assembly retains staging and nonempty temporary output if it cannot be published. Successful assembly cleans staging. Slots are released in all these paths. Logs identify the camera/event, not camera URLs or passwords.
+For the SimpleNVR Compose/TrueNAS custom-app service, configure an outer stop grace longer than the application budget:
 
-Startup attempts to publish validated root .tmp files as partial recordings and leaves invalid/nonvalidated files for inspection. Event staging is not automatically reassembled. Filesystem stalls can exceed application-level timing expectations.
+```yaml
+stop_grace_period: 90s
+```
 
-## Verification and remaining limitations
+The image explicitly declares STOPSIGNAL SIGTERM and uses the Go application directly as its entrypoint. SIGKILL, power loss and a shorter orchestrator stop timeout bypass or truncate graceful cleanup.
 
-CI installs FFmpeg and requires the media tests (no missing-tool skip in CI). A synthetic lavfi clip is interrupted after frames are produced, published as a partial MP4 and fully decoded. A helper process ignores SIGINT to test the forced-kill fallback. Other tests cover pinning/pruning, bounded admission, cancellation/joining, retained canceled prebuffer, destination protection and preserving unvalidated bytes. These tests are not yet a substitute for live Dahua RTSP/disconnect tests or runtime-image media tests.
+## Verification scope
 
-Server/container SIGTERM handling remains unimplemented: this batch handles cancellation when the recorder context is canceled by API lifecycle controls, not process-wide shutdown. Do not assume docker stop invokes this flow yet. Power-loss/crash resilience of ordinary MP4 remains limited.
+Unit tests cover shutdown admission, joining injected workers, draining admitted mutations, preserving active/paused intent through save/load/resume, mode-change interruption and returning an error when shutdown is canceled. Existing synthetic FFmpeg tests cover interrupted MP4 decoding and forced-kill fallback. CI adds a real runtime-image SIGTERM smoke test with an empty camera registry, generated temporary administrator credentials and exit-code/configuration checks. The smoke test does not exercise a live camera or media finalization inside that container.
 
-Retention/recovery still needs follow-up: preserved staging can grow and requires manual recovery/cleanup; old stale-root-.tmp cleanup can still delete inspection files. Disk-full policy, timeline durations, export boundaries, cancelable control waits and in-flight authenticated-stream revocation remain pending. Keep the branch unmerged until the remaining audit and integration tests are complete.
+## Remaining work
+
+Retained staging needs recovery/retention and disk-full policy; existing root-.tmp cleanup can still remove inspection files. Live Dahua RTSP/disconnect tests, timeline/export correctness, both frontend XSS paths and proxy hardening remain pending. Existing export/proxy jobs are not yet explicitly joined like recorder workers; HTTP connections are closed on shutdown but that is not a guarantee that every non-recorder subprocess has been reaped. An existing unbounded go2rtc scan or stalled mutation can cause the 60-second drain to fail; bounded/cancelable upstream requests are a follow-up. The legacy non-context recovery helper remains unused by main pending consolidation. Keep the fix branch unmerged until these issues and the final re-audit are complete.

@@ -13,4 +13,5 @@ COPY --from=builder /app/simplenvr /app/simplenvr
 COPY --from=builder /app/templates /app/templates
 COPY --from=builder /app/static /app/static
 EXPOSE 443
+STOPSIGNAL SIGTERM
 ENTRYPOINT ["/app/simplenvr"]
