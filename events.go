@@ -10,6 +10,12 @@ import (
 )
 
 func triggerEventHandler(w http.ResponseWriter,r *http.Request) {
+ triggerEventHandlerWithState(w,r,nvr,nvr.save)
+}
+
+// Inject persistence for isolated handler tests; production uses the same NVR
+// instance for admission, event metadata and the save callback.
+func triggerEventHandlerWithState(w http.ResponseWriter,r *http.Request,n *NVR,persist func() error) {
  if r.Method!=http.MethodPost {w.Header().Set("Allow","POST");http.Error(w,"Method not allowed",405);return}
  var req struct {CameraName string `json:"camera_name"`;Label string `json:"label"`;StartTime string `json:"start_time"`;DurationSeconds int `json:"duration_seconds"`}
  dec:=json.NewDecoder(http.MaxBytesReader(w,r.Body,65536))
@@ -22,32 +28,37 @@ func triggerEventHandler(w http.ResponseWriter,r *http.Request) {
  event:=Event{ID:generateID("event",time.Now()),CameraName:req.CameraName,Label:req.Label,StartTime:start.UTC(),Duration:req.DurationSeconds,CreatedAt:time.Now().UTC()}
  queued:=false
  status:=0
+ var storageErr error
  func(){
   recordingControlMu.Lock();defer recordingControlMu.Unlock()
-  nvr.mu.RLock()
+  n.mu.RLock()
   var cam *Camera
   ambiguous:=false
-  for _,candidate:=range nvr.cameras {if candidate.Name==req.CameraName {if cam!=nil {ambiguous=true;break};cam=candidate}}
+  for _,candidate:=range n.cameras {if candidate.Name==req.CameraName {if cam!=nil {ambiguous=true;break};cam=candidate}}
   active:=false;var bm *BufferManager
   if cam!=nil {active=cam.IsRecording && cam.RecordingMode==ModeEventBased;bm=cam.bufferManager}
-  nvr.mu.RUnlock()
+  n.mu.RUnlock()
   if ambiguous {status=409;return}
   if cam==nil {status=404;return}
   if active {
    if bm==nil {status=503;return}
+   // Check before TriggerEvent can reserve a slot, create staging or pin
+   // prebuffer files. Metadata-only logging intentionally bypasses this.
+   if storageErr=checkRecordingStorage(cam.RecordDir);storageErr!=nil {return}
    if err:=bm.TriggerEvent(event);err!=nil {
     switch {case errors.Is(err,errEventBusy):status=429;case errors.Is(err,errEventStopped):status=503;default:status=500}
     return
    }
    queued=true
   }
-  nvr.mu.Lock();nvr.events=append(nvr.events,event);nvr.mu.Unlock()
+  n.mu.Lock();n.events=append(n.events,event);n.mu.Unlock()
  }()
+ if storageErr!=nil {recordingError(w,storageErr);return}
  if status!=0 {
   if status==429 || status==503 {w.Header().Set("Retry-After","1")}
   http.Error(w,"Event not accepted: camera missing, ambiguous, recorder unavailable, at capacity or storage failed",status);return
  }
- if err:=nvr.save();err!=nil {http.Error(w,"Event state changed but metadata could not be persisted",500);return}
+ if err:=persist();err!=nil {http.Error(w,"Event state changed but metadata could not be persisted",500);return}
  w.Header().Set("Content-Type","application/json")
  json.NewEncoder(w).Encode(map[string]interface{}{"success":true,"event_id":event.ID,"recording_queued":queued,"message":"Event logged; queued captures are asynchronous and not yet confirmed saved"})
 }
