@@ -57,8 +57,8 @@ jobs:
             sleep 0.5
           done
           if [ "$ready" -ne 1 ]; then docker logs "$name"; exit 1; fi
-          docker stop --time 75 "$name"
+          docker stop --timeout 75 "$name"
           docker logs "$name"
           test "$(docker inspect -f '{{.State.ExitCode}}' "$name")" -eq 0
           docker logs "$name" 2>&1 | grep -F 'Shutdown complete; recording intent persisted'
-          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["cameras"] == {}' "$state/cameras.json"
+          sudo python3 -c 'import json,os,stat,sys; p=sys.argv[1]; s=os.stat(p); assert stat.S_ISREG(s.st_mode); assert stat.S_IMODE(s.st_mode) == 0o600, oct(stat.S_IMODE(s.st_mode)); d=json.load(open(p)); assert d["cameras"] == {}' "$state/cameras.json"
