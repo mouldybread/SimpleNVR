@@ -37,4 +37,8 @@ The token is printed once. Store it in Home Assistant secrets, not in Git. Only 
 
 ## Dependency verification
 
-Go 1.26 is required by the selected current cryptography dependency and includes standard-library CSRF protection. Library versions are pinned in go.mod. This initial branch patch bootstraps go.sum with go mod tidy in CI/builds, verified against Go's configured checksum database; checksums have not been fabricated. Review and commit the generated go.sum from CI before merging, then require readonly module builds. CI prints the generated lockfile for that follow-up. A green run alone does not complete the wider audit or establish absence of vulnerabilities.
+Go 1.26 is required by the selected cryptography dependency and includes standard-library CSRF protection. Library versions are pinned in go.mod; the CI-generated checksums supplied by the repository owner are committed in go.sum. Historical /go.mod checksum entries are retained; they are not a list of versions compiled into the application.
+
+CI and Docker use GOFLAGS=-mod=readonly, download pinned dependencies, run go mod verify, and fail if go.mod or go.sum changes. Neither build runs go mod tidy or automatically commits dependency updates. Docker checks hashes of both files before and after resolution/build; CI checks the Git diff. The follow-up run must pass these checks before the checksum integration is considered verified.
+
+For deliberate dependency updates, run go mod tidy in a development checkout, review both module files, commit the changes together, and rerun CI. A green run alone does not complete the wider audit or establish absence of vulnerabilities.

@@ -13,14 +13,19 @@ jobs:
   verify:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      GOFLAGS: -mod=readonly
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.x'
           cache: false
-      - name: Resolve and verify pinned dependencies
-        run: go mod tidy && go mod verify
+      - name: Download and verify pinned dependencies
+        run: |
+          go mod download
+          go mod verify
+          git diff --exit-code -- go.mod go.sum
       - name: Build
         run: go build ./...
       - name: Race-enabled tests
@@ -28,8 +33,8 @@ jobs:
       - name: Static analysis
         if: always()
         run: go vet ./...
-      - name: Show generated dependency lockfile for review
+      - name: Assert dependency files remain unchanged
         if: always()
-        run: cat go.sum
+        run: git diff --exit-code -- go.mod go.sum
       - name: Verify runtime image builds
         run: docker build -t simplenvr-safety-test .
