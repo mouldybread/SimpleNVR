@@ -152,65 +152,76 @@ async function performLoadTimelineData(version = timelineRequestVersion,day = lo
     return false;
   } finally { if (timelineAbort === controller) timelineAbort = null; }
 }
+function timelineViewport() {
+  const bounds = timelineWindowForDay(localDateKey(currentDate));
+  const viewport = TimelineGeometry.view(Date.parse(bounds.start_time),Date.parse(bounds.end_time),timelineZoomLevel,timelineOffset);
+  timelineOffset = viewport.offsetHours;
+  return viewport;
+}
+function timelinePointer(canvas,event) {
+  const rect=canvas.getBoundingClientRect();
+  if (!(rect.width>0) || !(rect.height>0)) return null;
+  return {fraction:Math.max(0,Math.min(1,(event.clientX-rect.left)/rect.width)),x:(event.clientX-rect.left)*canvas.width/rect.width,y:(event.clientY-rect.top)*canvas.height/rect.height};
+}
 function renderTimeline() {
-  const canvas = document.getElementById('timeline-canvas'); if (!canvas) return;
-  const ctx = canvas.getContext('2d'), width = canvas.width = canvas.offsetWidth, height = canvas.height = 85;
-  ctx.fillStyle = '#1a1a1a'; ctx.fillRect(0,0,width,height); ctx.strokeStyle = '#444'; ctx.fillStyle = '#888'; ctx.font = '10px monospace';
-  const visibleHours = 24/timelineZoomLevel, startHour = timelineOffset, endHour = startHour+visibleHours;
-  let majorStep,minorStep,showMinutes;
-  if (visibleHours >= 12) { majorStep=2; minorStep=1; showMinutes=false; }
-  else if (visibleHours >= 4) { majorStep=1; minorStep=0.5; showMinutes=false; }
-  else if (visibleHours >= 2) { majorStep=0.5; minorStep=10/60; showMinutes=true; }
-  else { majorStep=10/60; minorStep=1/60; showMinutes=true; }
-  ctx.strokeStyle = '#333'; const startMinutes = Math.floor(startHour*60), endMinutes = Math.ceil(endHour*60), minorStepMinutes = minorStep*60;
-  for (let minutes=Math.ceil(startMinutes/minorStepMinutes)*minorStepMinutes;minutes<=endMinutes;minutes+=minorStepMinutes) {
-    const x = ((minutes/60-startHour)/visibleHours)*width; ctx.beginPath(); ctx.moveTo(x,height-10); ctx.lineTo(x,height); ctx.stroke();
+  const canvas=document.getElementById('timeline-canvas'); if (!canvas) return;
+  const ctx=canvas.getContext('2d'),width=canvas.width=canvas.offsetWidth,height=canvas.height=85,viewport=timelineViewport();
+  ctx.fillStyle='#1a1a1a'; ctx.fillRect(0,0,width,height); ctx.lineWidth=1;
+  ctx.font='10px monospace'; ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+  const steps=viewport.visibleHours>=12?[2,1]:viewport.visibleHours>=4?[1,0.5]:viewport.visibleHours>=2?[0.5,1/6]:[1/6,1/60];
+  function ticks(step,major) {
+    const stepMs=step*3600000; let previousLabelRight=-Infinity;
+    for (let index=Math.ceil((viewport.start-viewport.dayStart)/stepMs);;index++) {
+      const time=viewport.dayStart+index*stepMs; if (time>viewport.end) break;
+      const x=TimelineGeometry.fractionAt(time,viewport)*width;
+      ctx.strokeStyle=major?'#555':'#333';ctx.beginPath();ctx.moveTo(x,major?0:height-10);ctx.lineTo(x,height);ctx.stroke();
+      if (major) {
+        const label=TimelineGeometry.label(time),labelWidth=ctx.measureText(label).width;
+        if (x+2>=previousLabelRight+6 && x+2+labelWidth<=width) {ctx.fillStyle='#888';ctx.fillText(label,x+2,12);previousLabelRight=x+2+labelWidth;}
+      }
+    }
   }
-  ctx.strokeStyle = '#555'; const majorStepMinutes = majorStep*60;
-  for (let minutes=Math.ceil(startMinutes/majorStepMinutes)*majorStepMinutes;minutes<=endMinutes;minutes+=majorStepMinutes) {
-    const hour=minutes/60, x=((hour-startHour)/visibleHours)*width; ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,height); ctx.stroke();
-    const label = showMinutes ? `${Math.floor(hour).toString().padStart(2,'0')}:${Math.round((hour-Math.floor(hour))*60).toString().padStart(2,'0')}` : Math.floor(hour).toString().padStart(2,'0');
-    ctx.fillStyle='#888'; ctx.fillText(label,x+2,12);
-  }
-  timelineEvents.forEach(event => {
-    const time=new Date(event.start_time), hour=time.getHours()+time.getMinutes()/60+time.getSeconds()/3600;
-    delete event._canvasX; delete event._canvasY;
-    if (hour<startHour || hour>endHour) return;
-    const x=((hour-startHour)/visibleHours)*width, y=14;
-    ctx.strokeStyle='rgba(76, 175, 80, 0.3)'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(x,23); ctx.lineTo(x,height); ctx.stroke();
-    ctx.fillStyle='#4CAF50'; ctx.beginPath(); ctx.arc(x,y,6,0,Math.PI*2); ctx.fill();
-    ctx.font='10px Arial'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillStyle='#fff'; ctx.fillText(eventIconText(event.label),x,y);
-    event._canvasX=x; event._canvasY=y; event._radius=6;
+  ticks(steps[1],false);ticks(steps[0],true);
+  timelineEvents.forEach(event=>{
+    delete event._canvasX;delete event._canvasY;
+    const time=Date.parse(event.start_time);
+    if (!Number.isFinite(time) || time<viewport.start || time>=viewport.end) return;
+    const x=TimelineGeometry.fractionAt(time,viewport)*width,y=23;
+    ctx.strokeStyle='rgba(76, 175, 80, 0.3)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x,30);ctx.lineTo(x,height);ctx.stroke();
+    ctx.fillStyle='#4CAF50';ctx.beginPath();ctx.arc(x,y,6,0,Math.PI*2);ctx.fill();
+    ctx.font='10px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillStyle='#fff';ctx.fillText(eventIconText(event.label),x,y);
+    event._canvasX=x;event._canvasY=y;event._radius=6;
   });
-  const cameras=[...new Set(timelineSegments.map(segment=>segment.camera_id))], blockHeight=(height-25)/Math.max(cameras.length,1);
-  cameras.forEach((id,index) => timelineSegments.filter(segment=>segment.camera_id===id).forEach(segment => {
-    const start=new Date(segment.start_time), end=new Date(segment.end_time), a=start.getHours()+start.getMinutes()/60, b=end.getHours()+end.getMinutes()/60;
-    if (b>=startHour && a<=endHour) { const x1=Math.max(0,((a-startHour)/visibleHours)*width), x2=Math.min(width,((b-startHour)/visibleHours)*width); ctx.fillStyle=cameraColorMap[id] || '#888'; ctx.fillRect(x1,25+index*blockHeight,x2-x1,blockHeight-2); }
+  const cameras=[...new Set(timelineSegments.map(segment=>segment.camera_id))],blockHeight=(height-32)/Math.max(cameras.length,1);
+  cameras.forEach((id,index)=>timelineSegments.filter(segment=>segment.camera_id===id).forEach(segment=>{
+    const span=TimelineGeometry.clip(Date.parse(segment.start_time),Date.parse(segment.end_time),viewport);if (!span) return;
+    ctx.fillStyle=cameraColorMap[id] || '#888';ctx.fillRect(span.left*width,32+index*blockHeight,(span.right-span.left)*width,blockHeight-2);
   }));
-  if (currentTimePosition !== null) {
-    const time=new Date(currentTimePosition), hour=time.getHours()+time.getMinutes()/60+time.getSeconds()/3600;
-    if (hour>=startHour && hour<=endHour) { const x=((hour-startHour)/visibleHours)*width; ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,height); ctx.stroke(); ctx.lineWidth=1; }
+  if (Number.isFinite(currentTimePosition) && currentTimePosition>=viewport.start && currentTimePosition<viewport.end) {
+    const x=TimelineGeometry.fractionAt(currentTimePosition,viewport)*width;
+    ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,height);ctx.stroke();ctx.lineWidth=1;
   }
 }
 function setupTimelineZoom() {
-  const canvas=document.getElementById('timeline-canvas'); if (!canvas) return;
-  canvas.addEventListener('wheel',e => {
-    e.preventDefault(); const rect=canvas.getBoundingClientRect(), mouseX=e.clientX-rect.left, hour=mouseX/rect.width*(24/timelineZoomLevel)+timelineOffset;
-    const zoom=Math.max(1,Math.min(24,timelineZoomLevel*(e.deltaY>0?0.8:1.25)));
-    if (zoom!==timelineZoomLevel) { timelineZoomLevel=zoom; const visible=24/zoom; timelineOffset=Math.max(0,Math.min(24-visible,hour-mouseX/rect.width*visible)); renderTimeline(); }
+  const canvas=document.getElementById('timeline-canvas');if (!canvas) return;
+  canvas.addEventListener('wheel',e=>{
+    e.preventDefault();const pointer=timelinePointer(canvas,e);if (!pointer) return;
+    const zoom=Math.max(1,Math.min(24,timelineZoomLevel*(e.deltaY>0?0.8:1.25)));if (zoom===timelineZoomLevel) return;
+    const viewport=TimelineGeometry.zoomAt(timelineViewport(),pointer.fraction,zoom);
+    timelineZoomLevel=zoom;timelineOffset=viewport.offsetHours;renderTimeline();
   },{passive:false});
 }
 function setupTimelineControls() {
-  const canvas=document.getElementById('timeline-canvas'); if (!canvas) return;
-  function hit(x,y) { return timelineEvents.find(event => Number.isFinite(event._canvasX) && Number.isFinite(event._canvasY) && Math.hypot(x-event._canvasX,y-event._canvasY)<=event._radius+5); }
-  canvas.addEventListener('click',e => {
-    const rect=canvas.getBoundingClientRect(), x=e.clientX-rect.left, y=e.clientY-rect.top, event=hit(x,y);
-    if (event) { navigateToEvent(event.camera_name,event.start_time); return; }
-    const hour=x/rect.width*(24/timelineZoomLevel)+timelineOffset, target=new Date(currentDate); target.setTime(currentDate.getTime()+hour*3600000); seekToTime(target);
+  const canvas=document.getElementById('timeline-canvas');if (!canvas) return;
+  function hit(pointer) {return timelineEvents.find(event=>Number.isFinite(event._canvasX) && Number.isFinite(event._canvasY) && Math.hypot(pointer.x-event._canvasX,pointer.y-event._canvasY)<=event._radius+5);}
+  canvas.addEventListener('click',e=>{
+    const pointer=timelinePointer(canvas,e);if (!pointer) return;const event=hit(pointer);
+    if (event) {navigateToEvent(event.camera_name,event.start_time);return;}
+    const viewport=timelineViewport();seekToTime(new Date(Math.min(viewport.dayEnd-1,TimelineGeometry.timeAt(pointer.fraction,viewport))));
   });
-  canvas.addEventListener('mousemove',e => {
-    const rect=canvas.getBoundingClientRect(), event=hit(e.clientX-rect.left,e.clientY-rect.top);
-    canvas.style.cursor=event?'pointer':'default'; if (event) showEventTooltip(event,e.clientX,e.clientY); else hideEventTooltip();
+  canvas.addEventListener('mousemove',e=>{
+    const pointer=timelinePointer(canvas,e),event=pointer && hit(pointer);
+    canvas.style.cursor=event?'pointer':'default';if (event) showEventTooltip(event,e.clientX,e.clientY);else hideEventTooltip();
   });
   canvas.addEventListener('mouseleave',hideEventTooltip);
 }
