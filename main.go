@@ -118,6 +118,7 @@ func main() {
  http.HandleFunc("/api/record/stop",stopRecordingHandler)
  http.HandleFunc("/api/stream/",streamProxyHandler)
  http.HandleFunc("/api/recordings/list",listRecordingsHandler)
+ http.HandleFunc("/api/storage/status",storageStatusHandler)
  http.HandleFunc("/api/timeline/recordings",timelineRecordingsHandler)
  http.HandleFunc("/api/recordings/delete-all",deleteAllRecordingsHandler)
  http.HandleFunc("/api/download",handleDownload)

@@ -28,7 +28,7 @@ func newShutdownGate(next http.Handler) *shutdownGate {return &shutdownGate{next
 func (g *shutdownGate) ServeHTTP(w http.ResponseWriter,r *http.Request) {
  g.mu.Lock()
  if g.closing {g.mu.Unlock();w.Header().Set("Retry-After","5");http.Error(w,"Server shutting down",503);return}
- job:=r.URL.Path=="/api/download" || r.URL.Path=="/api/timeline/recordings" || strings.HasPrefix(r.URL.Path,"/api/stream/")
+ job:=r.URL.Path=="/api/download" || r.URL.Path=="/api/timeline/recordings" || r.URL.Path=="/api/storage/status" || strings.HasPrefix(r.URL.Path,"/api/stream/")
  tracked:=mutationPaths[r.URL.Path] || job
  if tracked {g.mutations.Add(1)}
  var cancel context.CancelFunc;var id uint64
