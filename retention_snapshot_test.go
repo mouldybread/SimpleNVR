@@ -37,7 +37,7 @@ func TestChangedCameraIdentityPathOrPolicyRejectsSnapshot(t *testing.T) {
  for _,change:=range []string{"remove","replace","path","invalid"} {t.Run(change,func(t *testing.T){
   n,cam,file,target:=retentionSnapshotFixture(t)
   n.mu.Lock()
-  switch change {case "remove":delete(n.cameras,"a");case "replace":copy:=*cam;n.cameras["a"]=&copy;case "path":cam.RecordDir=filepath.Join(cam.RecordDir,"other");case "invalid":cam.RetentionDays=-1}
+  switch change {case "remove":delete(n.cameras,"a");case "replace":n.cameras["a"]=&Camera{ID:cam.ID,Name:cam.Name,RecordDir:cam.RecordDir,RetentionDays:cam.RetentionDays};case "path":cam.RecordDir=filepath.Join(cam.RecordDir,"other");case "invalid":cam.RetentionDays=-1}
   n.mu.Unlock()
   if cleanupRetentionSnapshot(context.Background(),n,target) {t.Fatal("changed snapshot was used")}
   if _,err:=os.Stat(file);err!=nil {t.Fatal("changed snapshot deleted published media")}
