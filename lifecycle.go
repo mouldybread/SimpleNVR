@@ -20,7 +20,7 @@ var (
  errRecordingAction = errors.New("invalid recording action")
 )
 
-// Workers own the matching recordWG.Done call, as the existing recorders do.
+// Workers own the matching recordWG.Done call, after joining their child work.
 type recordingWorker func(context.Context, *Camera, RecordingMode)
 
 func runRecordingWorker(ctx context.Context, cam *Camera, mode RecordingMode) {
@@ -46,8 +46,8 @@ func startCameraWorkerLocked(cam *Camera, worker recordingWorker) error {
  return nil
 }
 
-// Caller holds recordingControlMu, not NVR.mu. Only the top-level worker is
-// currently tracked; event child-worker tracking is a separate pending fix.
+// Caller holds recordingControlMu, not NVR.mu. Event workers transitively join
+// maintenance and event jobs before completing their top-level WaitGroup task.
 func stopManagedCamera(n *NVR, cam *Camera) {
  n.mu.RLock()
  cancel:=cam.recordCancel
@@ -57,6 +57,7 @@ func stopManagedCamera(n *NVR, cam *Camera) {
  n.mu.Lock()
  cam.IsRecording=false
  cam.recordCancel=nil
+ cam.bufferManager=nil
  n.mu.Unlock()
 }
 
