@@ -1,280 +1,152 @@
 package main
 
 import (
-	"encoding/json"
-	"log"
-	"net/http"
-	"os"
-	"path/filepath"
-	"sort"
-	"time"
+ "encoding/json"
+ "io"
+ "log"
+ "net/http"
+ "os"
+ "path/filepath"
+ "strings"
+ "time"
 )
 
-// cleanupOrphanedRecordingsHandler - Cleanup orphaned recordings from deleted cameras
-func cleanupOrphanedRecordingsHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+type orphanCleanupResult struct {
+ Count int `json:"count"`
+ Bytes int64 `json:"bytes"`
+ SkippedRecoveryDirs int `json:"skipped_recovery_dirs"`
+ Failures int `json:"failures"`
+}
 
-	nvr.mu.RLock()
-	validDirs := make(map[string]bool)
-	for _, cam := range nvr.cameras {
-		validDirs[filepath.Base(cam.RecordDir)] = true
-	}
-	nvr.mu.RUnlock()
+// Preserve all root .tmp entries, including empty files: age and size cannot
+// establish whether a recorder owns a file. Event staging is also opaque here.
+// An inspection error fails closed rather than treating a directory as empty.
+func recoveryArtifactsPresent(dir string) (bool,error) {
+ info,err:=os.Lstat(dir)
+ if err!=nil {return true,err}
+ if !info.IsDir() || info.Mode()&os.ModeSymlink!=0 {return true,nil}
+ entries,err:=os.ReadDir(dir)
+ if err!=nil {return true,err}
+ for _,entry:=range entries {if strings.HasSuffix(entry.Name(),".tmp") {return true,nil}}
+ staging:=filepath.Join(dir,"temp")
+ info,err=os.Lstat(staging)
+ if os.IsNotExist(err) {return false,nil}
+ if err!=nil {return true,err}
+ if !info.IsDir() || info.Mode()&os.ModeSymlink!=0 {return true,nil}
+ f,err:=os.Open(staging)
+ if err!=nil {return true,err}
+ defer f.Close()
+ names,err:=f.Readdirnames(1)
+ if len(names)>0 {return true,nil}
+ if err==io.EOF {return false,nil}
+ return true,err
+}
 
-	totalDeleted := 0
-	var totalSize int64
+func cleanupOrphanedAt(root string,validDirs map[string]bool) (orphanCleanupResult,error) {
+ var result orphanCleanupResult
+ entries,err:=os.ReadDir(root)
+ if err!=nil {return result,err}
+ for _,entry:=range entries {
+  if !entry.IsDir() || validDirs[entry.Name()] {continue}
+  dir:=filepath.Join(root,entry.Name())
+  retained,err:=recoveryArtifactsPresent(dir)
+  if retained || err!=nil {
+   result.SkippedRecoveryDirs++
+   if err!=nil {result.Failures++}
+   continue
+  }
+  files,err:=filepath.Glob(filepath.Join(dir,"*.mp4"))
+  if err!=nil {result.Failures++;continue}
+  for _,file:=range files {
+   info,err:=os.Lstat(file)
+   if err!=nil {if !os.IsNotExist(err) {result.Failures++};continue}
+   if !info.Mode().IsRegular() {continue}
+   if err:=os.Remove(file);err!=nil {result.Failures++;continue}
+   result.Count++;result.Bytes+=info.Size()
+  }
+  // Never recursively remove directories or their opaque contents.
+  _=os.Remove(dir)
+ }
+ return result,nil
+}
 
-	entries, err := os.ReadDir("/recordings")
-	if err != nil {
-		log.Printf("Failed to read recordings directory: %v", err)
-		http.Error(w, "Failed to read recordings directory", http.StatusInternalServerError)
-		return
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-
-		dirPath := filepath.Join("/recordings", entry.Name())
-
-		// Clean up orphaned directories (from deleted cameras)
-		if !validDirs[entry.Name()] {
-			pattern := filepath.Join(dirPath, "*.mp4")
-			files, err := filepath.Glob(pattern)
-			if err != nil {
-				continue
-			}
-
-			for _, file := range files {
-				info, err := os.Stat(file)
-				if err != nil {
-					continue
-				}
-				totalSize += info.Size()
-
-				if err := os.Remove(file); err != nil {
-					log.Printf("Failed to delete orphaned recording %s: %v", file, err)
-				} else {
-					totalDeleted++
-				}
-			}
-
-			os.Remove(dirPath)
-		} else {
-			// For valid camera directories, clean up stale .tmp files
-			tmpFiles, err := filepath.Glob(filepath.Join(dirPath, "*.tmp"))
-			if err != nil {
-				continue
-			}
-
-			// Sort by modification time to identify the most recent one
-			type fileInfo struct {
-				path    string
-				modTime time.Time
-				size    int64
-			}
-
-			var tmpFileInfos []fileInfo
-			for _, file := range tmpFiles {
-				info, err := os.Stat(file)
-				if err != nil {
-					continue
-				}
-				tmpFileInfos = append(tmpFileInfos, fileInfo{
-					path:    file,
-					modTime: info.ModTime().UTC(),
-					size:    info.Size(),
-				})
-			}
-
-			// Sort by modification time descending (most recent first)
-			sort.Slice(tmpFileInfos, func(i, j int) bool {
-				return tmpFileInfos[i].modTime.After(tmpFileInfos[j].modTime)
-			})
-
-			// Delete all but the most recent .tmp file (which might be in-progress)
-			for i, tmpFile := range tmpFileInfos {
-				if i == 0 {
-					// Skip the most recent .tmp file
-					log.Printf("Skipping most recent .tmp file (in-progress): %s", filepath.Base(tmpFile.path))
-					continue
-				}
-
-				totalSize += tmpFile.size
-				if err := os.Remove(tmpFile.path); err != nil {
-					log.Printf("Failed to delete stale .tmp file %s: %v", tmpFile.path, err)
-				} else {
-					totalDeleted++
-					log.Printf("Deleted stale .tmp file: %s (%.2f MB)", 
-						filepath.Base(tmpFile.path), float64(tmpFile.size)/(1024*1024))
-				}
-			}
-		}
-	}
-
-	sizeMB := float64(totalSize) / (1024 * 1024)
-	log.Printf("Cleaned up %d orphaned files (%.2f MB)", totalDeleted, sizeMB)
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
-		"count":   totalDeleted,
-		"size_mb": sizeMB,
-	})
+func cleanupOrphanedRecordingsHandler(w http.ResponseWriter,r *http.Request) {
+ if r.Method!=http.MethodPost {w.Header().Set("Allow","POST");http.Error(w,"Method not allowed",405);return}
+ // Serialize with recorder mode changes and camera deletion. This does not
+ // make arbitrary external filesystem edits safe during cleanup.
+ recordingControlMu.Lock();defer recordingControlMu.Unlock()
+ nvr.mu.RLock()
+ validDirs:=make(map[string]bool,len(nvr.cameras))
+ for _,cam:=range nvr.cameras {validDirs[filepath.Base(cam.RecordDir)]=true}
+ nvr.mu.RUnlock()
+ result,err:=cleanupOrphanedAt("/recordings",validDirs)
+ if err!=nil {http.Error(w,"Failed to read recordings directory",500);return}
+ w.Header().Set("Content-Type","application/json")
+ json.NewEncoder(w).Encode(map[string]interface{}{
+  "success":result.Failures==0,"count":result.Count,"size_mb":float64(result.Bytes)/(1024*1024),
+  "skipped_recovery_dirs":result.SkippedRecoveryDirs,"failures":result.Failures,
+ })
 }
 
 // cleanupEvents - Removes events that exceed their camera's retention period or belong to deleted cameras
 func cleanupEvents() {
-	nvr.mu.Lock()
-
-	// Map camera names to their retention duration
-	retentionMap := make(map[string]time.Duration)
-	for _, cam := range nvr.cameras {
-		days := cam.RetentionDays
-		if days == 0 {
-			days = 7
-		}
-		retentionMap[cam.Name] = time.Duration(days) * 24 * time.Hour
-	}
-
-	now := time.Now().UTC()
-	var validEvents []Event
-	deletedCount := 0
-
-	for _, event := range nvr.events {
-		retention, exists := retentionMap[event.CameraName]
-		
-		if !exists {
-			// Orphaned event (camera was deleted)
-			deletedCount++
-			continue
-		}
-
-		cutoff := now.Add(-retention)
-		if event.StartTime.Before(cutoff) {
-			// Expired event
-			deletedCount++
-			continue
-		}
-
-		validEvents = append(validEvents, event)
-	}
-
-	eventsChanged := len(validEvents) != len(nvr.events)
-	nvr.events = validEvents
-	nvr.mu.Unlock()
-
-	if eventsChanged {
-		log.Printf("Cleaned up %d old/orphaned events from memory", deletedCount)
-		if err := nvr.save(); err != nil {
-			log.Printf("Failed to save events after cleanup: %v", err)
-		}
-	}
+ nvr.mu.Lock()
+ retentionMap:=make(map[string]time.Duration)
+ for _,cam:=range nvr.cameras {
+  days:=cam.RetentionDays;if days==0 {days=7}
+  retentionMap[cam.Name]=time.Duration(days)*24*time.Hour
+ }
+ now:=time.Now().UTC()
+ var validEvents []Event
+ deletedCount:=0
+ for _,event:=range nvr.events {
+  retention,exists:=retentionMap[event.CameraName]
+  if !exists || event.StartTime.Before(now.Add(-retention)) {deletedCount++;continue}
+  validEvents=append(validEvents,event)
+ }
+ eventsChanged:=len(validEvents)!=len(nvr.events)
+ nvr.events=validEvents
+ nvr.mu.Unlock()
+ if eventsChanged {
+  log.Printf("Cleaned up %d old/orphaned events from memory",deletedCount)
+  if err:=nvr.save();err!=nil {log.Printf("Failed to save events after cleanup: %v",err)}
+ }
 }
 
-// cleanupRoutine - Background task that runs every 5 minutes to clean old recordings
 func cleanupRoutine() {
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
-
-	log.Println("Cleanup routine started")
-	for range ticker.C {
-		// Clean up event metadata first
-		cleanupEvents()
-
-		// Clean up video files
-		nvr.mu.RLock()
-		for _, cam := range nvr.cameras {
-			retentionDays := cam.RetentionDays
-			if retentionDays == 0 {
-				retentionDays = 7
-			}
-			retention := time.Duration(retentionDays) * 24 * time.Hour
-			cleanupOldRecordings(cam.RecordDir, retention)
-			cleanupTempFiles(cam.RecordDir) // Clean up stale .tmp files
-		}
-		nvr.mu.RUnlock()
-	}
+ ticker:=time.NewTicker(5*time.Minute);defer ticker.Stop()
+ log.Println("Cleanup routine started")
+ for range ticker.C {
+  cleanupEvents()
+  nvr.mu.RLock()
+  for _,cam:=range nvr.cameras {
+   days:=cam.RetentionDays;if days==0 {days=7}
+   cleanupOldRecordings(cam.RecordDir,time.Duration(days)*24*time.Hour)
+   cleanupTempFiles(cam.RecordDir)
+  }
+  nvr.mu.RUnlock()
+ }
 }
 
-// cleanupOldRecordings - Delete recordings older than retention period
-func cleanupOldRecordings(dir string, retention time.Duration) {
-	files, err := filepath.Glob(filepath.Join(dir, "*.mp4"))
-	if err != nil {
-		return
-	}
-
-	cutoff := time.Now().UTC().Add(-retention)
-	for _, file := range files {
-		filename := filepath.Base(file)
-		if len(filename) < 15 {
-			continue
-		}
-
-		// Extract timestamp from filename (e.g., "20241105_120000_camera.mp4")
-		timeStr := filename[0:15]
-		
-		// Parse filenames strictly in UTC
-		recordingStart, err := time.ParseInLocation("20060102_150405", timeStr, time.UTC)
-		if err != nil {
-			// Fallback to ModTime for files with non-standard names
-			info, err := os.Stat(file)
-			if err != nil {
-				continue
-			}
-			if info.ModTime().UTC().Before(cutoff) {
-				size := float64(info.Size()) / (1024 * 1024)
-				if err := os.Remove(file); err != nil {
-					log.Printf("Failed to delete old recording %s: %v", file, err)
-				} else {
-					log.Printf("Cleaned up old recording: %s (%.2f MB, age: %.1f days)",
-						filename, size, time.Since(info.ModTime()).Hours()/24)
-				}
-			}
-			continue
-		}
-
-		if recordingStart.Before(cutoff) {
-			info, _ := os.Stat(file)
-			size := float64(info.Size()) / (1024 * 1024)
-			if err := os.Remove(file); err != nil {
-				log.Printf("Failed to delete old recording %s: %v", file, err)
-			} else {
-				log.Printf("Cleaned up old recording: %s (%.2f MB, started at %s UTC)",
-					filename, size, recordingStart.Format("2006-01-02 15:04:05"))
-			}
-		}
-	}
+// Published .mp4 files, including published _partial.mp4 files, remain subject
+// to the existing camera retention policy. Opaque staging is never traversed.
+func cleanupOldRecordings(dir string,retention time.Duration) {
+ files,err:=filepath.Glob(filepath.Join(dir,"*.mp4"))
+ if err!=nil {return}
+ cutoff:=time.Now().UTC().Add(-retention)
+ for _,file:=range files {
+  name:=filepath.Base(file)
+  if len(name)<15 {continue}
+  info,err:=os.Lstat(file)
+  if err!=nil || !info.Mode().IsRegular() {continue}
+  start,err:=time.ParseInLocation("20060102_150405",name[:15],time.UTC)
+  if err!=nil {start=info.ModTime().UTC()}
+  if !start.Before(cutoff) {continue}
+  if err:=os.Remove(file);err!=nil {log.Printf("Unable to remove expired recording %s",name)}
+ }
 }
 
-// cleanupTempFiles - Delete stale .tmp files (older than 15 minutes)
-func cleanupTempFiles(dir string) {
-	files, err := filepath.Glob(filepath.Join(dir, "*.tmp"))
-	if err != nil {
-		return
-	}
-
-	// .tmp files older than 15 minutes are considered stale
-	cutoff := time.Now().UTC().Add(-15 * time.Minute)
-	for _, file := range files {
-		info, err := os.Stat(file)
-		if err != nil {
-			continue
-		}
-
-		if info.ModTime().UTC().Before(cutoff) {
-			size := float64(info.Size()) / (1024 * 1024)
-			err := os.Remove(file)
-			if err != nil {
-				log.Printf("Failed to delete stale temp file %s: %v", file, err)
-			} else {
-				log.Printf("Cleaned up stale temp file: %s (%.2f MB, age: %.1f minutes)",
-					filepath.Base(file), size, time.Since(info.ModTime()).Minutes())
-			}
-		}
-	}
-}
+// Kept as a compatibility boundary for existing callers. A .tmp file can be
+// active or retained recovery evidence; neither age nor zero length is proof
+// that deletion is safe. Only its owning recorder may remove an empty output.
+func cleanupTempFiles(_ string) {}
