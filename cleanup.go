@@ -1,6 +1,7 @@
 package main
 
 import (
+ "context"
  "encoding/json"
  "io"
  "log"
@@ -88,53 +89,82 @@ func cleanupOrphanedRecordingsHandler(w http.ResponseWriter,r *http.Request) {
  })
 }
 
-// cleanupEvents - Removes events that exceed their camera's retention period or belong to deleted cameras
-func cleanupEvents() {
- nvr.mu.Lock()
+func cleanupEvents() { cleanupEventsFor(context.Background(),nvr) }
+
+func cleanupEventsFor(ctx context.Context,n *NVR) {
+ if ctx.Err()!=nil {return}
+ n.mu.Lock()
+ if ctx.Err()!=nil {n.mu.Unlock();return}
  retentionMap:=make(map[string]time.Duration)
- for _,cam:=range nvr.cameras {
+ for _,cam:=range n.cameras {
   days:=cam.RetentionDays;if days==0 {days=7}
   retentionMap[cam.Name]=time.Duration(days)*24*time.Hour
  }
  now:=time.Now().UTC()
  var validEvents []Event
  deletedCount:=0
- for _,event:=range nvr.events {
+ for _,event:=range n.events {
+  if ctx.Err()!=nil {n.mu.Unlock();return}
   retention,exists:=retentionMap[event.CameraName]
   if !exists || event.StartTime.Before(now.Add(-retention)) {deletedCount++;continue}
   validEvents=append(validEvents,event)
  }
- eventsChanged:=len(validEvents)!=len(nvr.events)
- nvr.events=validEvents
- nvr.mu.Unlock()
+ eventsChanged:=len(validEvents)!=len(n.events)
+ n.events=validEvents
+ n.mu.Unlock()
  if eventsChanged {
   log.Printf("Cleaned up %d old/orphaned events from memory",deletedCount)
-  if err:=nvr.save();err!=nil {log.Printf("Failed to save events after cleanup: %v",err)}
+  if err:=n.save();err!=nil {log.Printf("Failed to save events after cleanup: %v",err)}
  }
 }
 
-func cleanupRoutine() {
+func cleanupRoutine(ctx context.Context,n *NVR) {
  ticker:=time.NewTicker(5*time.Minute);defer ticker.Stop()
  log.Println("Cleanup routine started")
- for range ticker.C {
-  cleanupEvents()
-  nvr.mu.RLock()
-  for _,cam:=range nvr.cameras {
-   days:=cam.RetentionDays;if days==0 {days=7}
-   cleanupOldRecordings(cam.RecordDir,time.Duration(days)*24*time.Hour)
-   cleanupTempFiles(cam.RecordDir)
+ runCleanupTicks(ctx,n,ticker.C)
+}
+
+func runCleanupTicks(ctx context.Context,n *NVR,ticks <-chan time.Time) {
+ for {
+  select {
+  case <-ctx.Done():return
+  case _,ok:=<-ticks:
+   if !ok || ctx.Err()!=nil {return}
+   cleanupEventsFor(ctx,n)
+   if ctx.Err()!=nil {return}
+   type target struct {dir string;retention time.Duration}
+   n.mu.RLock()
+   targets:=make([]target,0,len(n.cameras))
+   for _,cam:=range n.cameras {
+    days:=cam.RetentionDays;if days==0 {days=7}
+    targets=append(targets,target{cam.RecordDir,time.Duration(days)*24*time.Hour})
+   }
+   n.mu.RUnlock()
+   // Filesystem work must not hold the camera-registry lock. These are
+   // per-cycle snapshots, not authority to remove staging or recurse.
+   for _,item:=range targets {
+    if ctx.Err()!=nil {return}
+    cleanupOldRecordingsContext(ctx,item.dir,item.retention)
+    if ctx.Err()!=nil {return}
+    cleanupTempFiles(item.dir)
+   }
   }
-  nvr.mu.RUnlock()
  }
 }
 
 // Published .mp4 files, including published _partial.mp4 files, remain subject
 // to the existing camera retention policy. Opaque staging is never traversed.
 func cleanupOldRecordings(dir string,retention time.Duration) {
+ cleanupOldRecordingsContext(context.Background(),dir,retention)
+}
+
+func cleanupOldRecordingsContext(ctx context.Context,dir string,retention time.Duration) {
+ if ctx.Err()!=nil {return}
  files,err:=filepath.Glob(filepath.Join(dir,"*.mp4"))
  if err!=nil {return}
  cutoff:=time.Now().UTC().Add(-retention)
  for _,file:=range files {
+  if ctx.Err()!=nil {return}
   name:=filepath.Base(file)
   if len(name)<15 {continue}
   info,err:=os.Lstat(file)
@@ -142,6 +172,7 @@ func cleanupOldRecordings(dir string,retention time.Duration) {
   start,err:=time.ParseInLocation("20060102_150405",name[:15],time.UTC)
   if err!=nil {start=info.ModTime().UTC()}
   if !start.Before(cutoff) {continue}
+  if ctx.Err()!=nil {return}
   if err:=os.Remove(file);err!=nil {log.Printf("Unable to remove expired recording %s",name)}
  }
 }

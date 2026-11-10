@@ -133,7 +133,7 @@ func main() {
  gate:=newShutdownGate(auth.Handler(http.DefaultServeMux))
  server:=&http.Server{Addr:":443",Handler:gate,ReadHeaderTimeout:10*time.Second,ReadTimeout:30*time.Second,IdleTimeout:60*time.Second,MaxHeaderBytes:32768}
  autoStartRecordings()
- go cleanupRoutine()
+ gate.startBackgroundJob(func(ctx context.Context){cleanupRoutine(ctx,nvr)})
  log.Println("SimpleNVR starting authenticated HTTPS server on :443...")
  if err=runAuthenticatedServer(appCtx,nvr,gate,server,certPath,keyPath);err!=nil {log.Fatal("Shutdown/server failure: ",err)}
  log.Println("Shutdown complete; recording intent persisted")
