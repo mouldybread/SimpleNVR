@@ -66,10 +66,13 @@ func serveDownload(w http.ResponseWriter,r *http.Request,n *NVR,cache *durationC
  n.mu.RUnlock()
  if !exists {http.Error(w,"Camera not found",404);return}
  ctx,cancel:=context.WithTimeout(r.Context(),recordingMetadataBudget);defer cancel()
- clips,err:=collectRecordingIntervals(ctx,[]timelineCamera{camera},timelineWindow{Start:start.UTC(),End:end.UTC()},cache)
+ window:=timelineWindow{Start:start.UTC(),End:end.UTC()}
+ clips,err:=collectRecordingIntervals(ctx,[]timelineCamera{camera},window,cache)
  if err!=nil {writeRecordingIntervalError(w,r,err);return}
  if len(clips)==0 {http.Error(w,"No recordings found in time range",404);return}
- pins,err:=pool.prepare(ctx,clips)
+ plan,err:=buildExportPlan(clips,window)
+ if err!=nil {writeExportPlanError(w,err);return}
+ pins,err:=pool.prepare(ctx,plan.clips())
  cancel()
  if err!=nil {
   if errors.Is(err,errExportInputLimit) {http.Error(w,"Too many export clips; reduce the requested time range",413)} else {writeRecordingIntervalError(w,r,err)}
@@ -83,6 +86,7 @@ func serveDownload(w http.ResponseWriter,r *http.Request,n *NVR,cache *durationC
  name:=fmt.Sprintf("%s_%s.mp4",sanitizeFilename(camera.Name),start.UTC().Format("20060102_150405"))
  w.Header().Set("Content-Type","video/mp4");w.Header().Set("Content-Disposition",fmt.Sprintf("attachment; filename=%q",name))
  w.Header().Set("X-Recording-Duration-Policy","probed-media");w.Header().Set("X-Export-Input-Policy","pinned-descriptors")
+ plan.setHeaders(w)
  cmd.Stdout=w;cmd.Stderr=os.Stderr
  if err:=cmd.Run();err!=nil {log.Printf("FFmpeg export ended for camera %s: %v",camera.ID,err)}
 }

@@ -131,7 +131,7 @@ func TestExportPinFailureDoesNotStartVideoResponse(t *testing.T) {
  n:=&NVR{cameras:map[string]*Camera{"front":{ID:"front",Name:"Front",RecordDir:dir}}}
  cache:=newDurationCache(1,1,func(context.Context,*os.File)(time.Duration,error){return time.Second,nil})
  pool:=newExportInputPool(1,1);pool.open=func(string)(*os.File,error){return nil,os.ErrNotExist}
- query:="/api/download?camera_id=front&start_time=2026-11-10T00:00:00Z&end_time=2026-11-10T00:01:00Z"
+ query:="/api/download?camera_id=front&start_time=2026-11-10T00:00:00Z&end_time=2026-11-10T00:00:01Z"
  response:=httptest.NewRecorder();serveDownload(response,httptest.NewRequest("GET",query,nil),n,cache,pool)
  if response.Code!=503 || strings.HasPrefix(response.Header().Get("Content-Type"),"video/") || response.Header().Get("Content-Disposition")!="" {t.Fatal("pin failure started an export response",response.Code,response.Header())}
  if len(pool.slots)!=0 {t.Fatal("slot leaked")}
