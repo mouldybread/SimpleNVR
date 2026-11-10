@@ -92,6 +92,11 @@ func cleanupOrphanedRecordingsHandler(w http.ResponseWriter,r *http.Request) {
 func cleanupEvents() { cleanupEventsFor(context.Background(),nvr) }
 
 func cleanupEventsFor(ctx context.Context,n *NVR) {
+ cleanupEventsForWithSave(ctx,n,n.save)
+}
+
+// Persistence injection keeps expiry tests isolated from the real config path.
+func cleanupEventsForWithSave(ctx context.Context,n *NVR,persist func() error) {
  if ctx.Err()!=nil {return}
  n.mu.Lock()
  if ctx.Err()!=nil {n.mu.Unlock();return}
@@ -100,7 +105,9 @@ func cleanupEventsFor(ctx context.Context,n *NVR) {
  for _,cam:=range n.cameras {
   retention,err:=cameraRetentionDuration(cam.RetentionDays)
   if err!=nil {invalidRetention[cam.Name]=true;log.Printf("Skipping invalid retention policy for camera %s",cam.ID);continue}
-  retentionMap[cam.Name]=retention
+  // Events lack camera IDs. Do not choose a shorter policy based on map
+  // iteration order when several registered cameras share the same name.
+  if retention>retentionMap[cam.Name] {retentionMap[cam.Name]=retention}
  }
  now:=time.Now().UTC()
  var validEvents []Event
@@ -119,7 +126,7 @@ func cleanupEventsFor(ctx context.Context,n *NVR) {
  n.mu.Unlock()
  if eventsChanged {
   log.Printf("Cleaned up %d old/orphaned events from memory",deletedCount)
-  if err:=n.save();err!=nil {log.Printf("Failed to save events after cleanup: %v",err)}
+  if err:=persist();err!=nil {log.Printf("Failed to save events after cleanup: %v",err)}
  }
 }
 
