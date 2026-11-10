@@ -96,15 +96,20 @@ func cleanupEventsFor(ctx context.Context,n *NVR) {
  n.mu.Lock()
  if ctx.Err()!=nil {n.mu.Unlock();return}
  retentionMap:=make(map[string]time.Duration)
+ invalidRetention:=make(map[string]bool)
  for _,cam:=range n.cameras {
-  days:=cam.RetentionDays;if days==0 {days=7}
-  retentionMap[cam.Name]=time.Duration(days)*24*time.Hour
+  retention,err:=cameraRetentionDuration(cam.RetentionDays)
+  if err!=nil {invalidRetention[cam.Name]=true;log.Printf("Skipping invalid retention policy for camera %s",cam.ID);continue}
+  retentionMap[cam.Name]=retention
  }
  now:=time.Now().UTC()
  var validEvents []Event
  deletedCount:=0
  for _,event:=range n.events {
   if ctx.Err()!=nil {n.mu.Unlock();return}
+  // An invalid policy is not equivalent to a missing camera. Preserve its
+  // events, including ambiguous names shared with another camera.
+  if invalidRetention[event.CameraName] {validEvents=append(validEvents,event);continue}
   retention,exists:=retentionMap[event.CameraName]
   if !exists || event.StartTime.Before(now.Add(-retention)) {deletedCount++;continue}
   validEvents=append(validEvents,event)
@@ -136,8 +141,8 @@ func runCleanupTicks(ctx context.Context,n *NVR,ticks <-chan time.Time) {
    n.mu.RLock()
    targets:=make([]target,0,len(n.cameras))
    for _,cam:=range n.cameras {
-    days:=cam.RetentionDays;if days==0 {days=7}
-    targets=append(targets,target{cam.RecordDir,time.Duration(days)*24*time.Hour})
+    retention,err:=cameraRetentionDuration(cam.RetentionDays);if err!=nil {continue}
+    targets=append(targets,target{cam.RecordDir,retention})
    }
    n.mu.RUnlock()
    // Filesystem work must not hold the camera-registry lock. These are
@@ -159,7 +164,7 @@ func cleanupOldRecordings(dir string,retention time.Duration) {
 }
 
 func cleanupOldRecordingsContext(ctx context.Context,dir string,retention time.Duration) {
- if ctx.Err()!=nil {return}
+ if ctx.Err()!=nil || retention<=0 {return}
  files,err:=filepath.Glob(filepath.Join(dir,"*.mp4"))
  if err!=nil {return}
  cutoff:=time.Now().UTC().Add(-retention)

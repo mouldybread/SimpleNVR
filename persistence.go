@@ -40,6 +40,7 @@ func decodeState(raw []byte) (persistedState, error) {
  for id, cam := range s.Cameras {
   if cam == nil || cam.ID != id { return s, fmt.Errorf("invalid camera entry %q", id) }
   if err := validateCameraPath(id, cam.RecordDir); err != nil { return s, err }
+  if _, err := cameraRetentionDuration(cam.RetentionDays); err != nil { return s, fmt.Errorf("invalid retention for camera %q: %w", id, err) }
   switch cam.RecordingMode {
   case ModeContinuous, ModeEventBased, ModeNoRecording:
   case "": cam.RecordingMode = ModeContinuous
