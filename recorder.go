@@ -22,7 +22,7 @@ const (bufferDuration=30*time.Second; segmentSize=5*time.Second; eventWorkers=2;
 var (errEventStopped=errors.New("event recorder stopping or unavailable");errEventBusy=errors.New("event recorder at capacity");errEventInvalid=errors.New("invalid event capture request"))
 
 type BufferSegment struct {StartTime time.Time; EndTime time.Time; FilePath string}
-type bufferEvent struct {event Event;preFiles []string;preStart time.Time;dir string}
+type bufferEvent struct {event Event;preFiles []string;preStart time.Time;dir string;keepStaging bool}
 type BufferManager struct {
  camera *Camera
  buffer []BufferSegment
@@ -78,13 +78,13 @@ func (bm *BufferManager) runWorkers(tasks []func(),handle func(*bufferEvent)) {
   for {select {
   case <-bm.ctx.Done():return
   case job:=<-bm.eventChan:
-   func(){defer bm.releaseJob(job);if bm.ctx.Err()==nil {handle(job)}}()
+   func(){defer bm.releaseJob(job);if bm.ctx.Err()==nil {handle(job)} else {job.keepStaging=len(job.preFiles)>0}}()
   }}
  }()}
  <-bm.ctx.Done()
  bm.queueMu.Lock();bm.stopping=true;bm.cancel();bm.queueMu.Unlock()
  children.Wait()
- for {select {case job:=<-bm.eventChan:bm.releaseJob(job);default:return}}
+ for {select {case job:=<-bm.eventChan:job.keepStaging=len(job.preFiles)>0;bm.releaseJob(job);default:return}}
 }
 
 func (bm *BufferManager) TriggerEvent(event Event) error {
@@ -96,7 +96,7 @@ func (bm *BufferManager) TriggerEvent(event Event) error {
  if err!=nil {<-bm.slots;return fmt.Errorf("pin completed prebuffer: %w",err)}
  select {
  case bm.eventChan<-job:return nil
- case <-bm.ctx.Done():bm.releaseJob(job);return errEventStopped
+ case <-bm.ctx.Done():job.keepStaging=len(job.preFiles)>0;bm.releaseJob(job);return errEventStopped
  default:bm.releaseJob(job);return errEventBusy
  }
 }
@@ -119,7 +119,9 @@ func (bm *BufferManager) pinBuffer(event Event) (*bufferEvent,error) {
 }
 
 func (bm *BufferManager) releaseJob(job *bufferEvent) {
- if err:=os.RemoveAll(job.dir);err!=nil {log.Printf("Unable to remove event staging for camera %s",bm.camera.ID)}
+ if job.keepStaging {
+  log.Printf("Retained event staging for camera %s event %s; inspection/recovery required",bm.camera.ID,job.event.ID)
+ } else if err:=os.RemoveAll(job.dir);err!=nil {log.Printf("Unable to remove event staging for camera %s",bm.camera.ID)}
  <-bm.slots
 }
 
@@ -128,8 +130,8 @@ func (bm *BufferManager) segmentBuffer() {
  for bm.ctx.Err()==nil {
   nonce:=generateID("buffer",time.Now())
   pattern:="buffer_%Y%m%d_%H%M%S_"+nonce+".mp4"
-  cmd:=exec.CommandContext(bm.ctx,"ffmpeg","-hide_banner","-loglevel","error","-nostats","-rtsp_transport","tcp","-i",bm.camera.RTSPUrl,"-c","copy","-f","segment","-segment_time","5","-segment_format","mp4","-reset_timestamps","1","-strftime","1","-segment_list","pipe:1","-segment_list_type","csv","-segment_list_size","0",pattern)
-  cmd.Dir=dir;cmd.Env=append(os.Environ(),"TZ=UTC");cmd.WaitDelay=5*time.Second
+  cmd:=ffmpegCommand(bm.ctx,"-hide_banner","-loglevel","error","-nostats","-rtsp_transport","tcp","-i",bm.camera.RTSPUrl,"-c","copy","-f","segment","-segment_time","5","-segment_format","mp4","-reset_timestamps","1","-strftime","1","-segment_list","pipe:1","-segment_list_type","csv","-segment_list_size","0",pattern)
+  cmd.Dir=dir;cmd.Env=append(os.Environ(),"TZ=UTC")
   stdout,err:=cmd.StdoutPipe()
   if err!=nil {if !waitRecordingRetry(bm.ctx) {return};continue}
   if err=cmd.Start();err!=nil {stdout.Close();if !waitRecordingRetry(bm.ctx) {return};continue}
@@ -193,19 +195,26 @@ func (bm *BufferManager) cleanupBuffer() {
 func (bm *BufferManager) handleEvent(job *bufferEvent) {
  file:=bm.recordEventDuration(job)
  if file=="" {return}
+ if bm.ctx.Err()!=nil {job.keepStaging=true;return}
  if final:=bm.concatenateEventRecording(job,file);final!="" {log.Printf("Event capture saved for camera %s event %s",bm.camera.ID,job.event.ID)}
 }
 
 func (bm *BufferManager) recordEventDuration(job *bufferEvent) string {
  file:=filepath.Join(job.dir,"event.mp4")
  ctx,cancel:=context.WithTimeout(bm.ctx,time.Duration(job.event.Duration)*time.Second+15*time.Second);defer cancel()
- cmd:=exec.CommandContext(ctx,"ffmpeg","-hide_banner","-loglevel","error","-nostats","-rtsp_transport","tcp","-i",bm.camera.RTSPUrl,"-t",strconv.Itoa(job.event.Duration),"-c","copy","-f","mp4","-movflags","faststart","-y",file)
- cmd.WaitDelay=5*time.Second
- if err:=cmd.Run();err!=nil {log.Printf("Event capture failed for camera %s event %s: %v",bm.camera.ID,job.event.ID,err);return ""}
+ cmd:=ffmpegCommand(ctx,"-hide_banner","-loglevel","error","-nostats","-rtsp_transport","tcp","-i",bm.camera.RTSPUrl,"-t",strconv.Itoa(job.event.Duration),"-c","copy","-f","mp4","-movflags","faststart","-y",file)
+ err:=cmd.Run()
+ if err!=nil || ctx.Err()!=nil {
+  job.keepStaging=len(job.preFiles)>0
+  if info,statErr:=os.Stat(file);statErr==nil && info.Size()>0 {job.keepStaging=true}
+  log.Printf("Event capture interrupted/failed for camera %s event %s; retained media needs inspection",bm.camera.ID,job.event.ID)
+  return ""
+ }
  return file
 }
 
 func (bm *BufferManager) concatenateEventRecording(job *bufferEvent,eventFile string) string {
+ job.keepStaging=true
  list,err:=os.Create(filepath.Join(job.dir,"concat.txt"));if err!=nil {return ""}
  files:=append(append([]string(nil),job.preFiles...),eventFile)
  for _,file:=range files {
@@ -217,13 +226,14 @@ func (bm *BufferManager) concatenateEventRecording(job *bufferEvent,eventFile st
  if err:=list.Close();err!=nil {return ""}
  name:=fmt.Sprintf("%s_%s_%s.mp4",job.preStart.UTC().Format("20060102_150405"),sanitizeFilename(job.event.Label),sanitizeFilename(job.event.ID))
  final:=filepath.Join(bm.camera.RecordDir,name);temp:=final+".tmp"
- defer os.Remove(temp)
  ctx,cancel:=context.WithTimeout(bm.ctx,2*time.Minute);defer cancel()
- cmd:=exec.CommandContext(ctx,"ffmpeg","-hide_banner","-loglevel","error","-nostats","-f","concat","-safe","1","-i","concat.txt","-c","copy","-f","mp4","-movflags","faststart","-y",temp)
- cmd.Dir=job.dir;cmd.WaitDelay=5*time.Second
- if err:=cmd.Run();err!=nil {log.Printf("Event assembly failed for camera %s event %s: %v",bm.camera.ID,job.event.ID,err);return ""}
- if err:=probeRecording(ctx,temp);err!=nil {return ""}
- if err:=os.Rename(temp,final);err!=nil {return ""}
+ cmd:=ffmpegCommand(ctx,"-hide_banner","-loglevel","error","-nostats","-f","concat","-safe","1","-i","concat.txt","-c","copy","-f","mp4","-movflags","faststart","-y",temp)
+ cmd.Dir=job.dir
+ runErr:=cmd.Run()
+ if runErr!=nil || ctx.Err()!=nil {final=partialRecordingName(final)}
+ finalizeCtx,finalizeCancel:=context.WithTimeout(context.WithoutCancel(bm.ctx),recordingFinalizeGrace);defer finalizeCancel()
+ if err:=publishRecording(finalizeCtx,temp,final);err!=nil {removeEmptyRecording(temp);log.Printf("Event assembly for camera %s event %s retained for inspection",bm.camera.ID,job.event.ID);return ""}
+ job.keepStaging=false
  return final
 }
 
@@ -237,22 +247,22 @@ func probeRecording(parent context.Context,path string) error {
  return nil
 }
 
-// Continuous MP4 finalization on cancellation remains a separate pending fix.
 func recordSegment(ctx context.Context,cam *Camera,durationSeconds int) error {
  now:=time.Now().UTC()
  filename:=fmt.Sprintf("%s_%s_%s.mp4",now.Format("20060102_150405"),sanitizeFilename(cam.Name),generateID("segment",now))
  filePath:=filepath.Join(cam.RecordDir,filename);tempPath:=filePath+".tmp"
  segmentCtx,cancel:=context.WithTimeout(ctx,time.Duration(durationSeconds)*time.Second+5*time.Second);defer cancel()
- cmd:=exec.CommandContext(segmentCtx,"ffmpeg","-hide_banner","-loglevel","error","-nostats","-rtsp_transport","tcp","-fflags","+genpts+igndts+ignidx+discardcorrupt","-i",cam.RTSPUrl,"-t",strconv.Itoa(durationSeconds),"-c","copy","-movflags","faststart","-f","mp4","-y",tempPath)
- cmd.WaitDelay=5*time.Second
- err:=cmd.Run()
+ cmd:=ffmpegCommand(segmentCtx,"-hide_banner","-loglevel","error","-nostats","-rtsp_transport","tcp","-fflags","+genpts+igndts+ignidx+discardcorrupt","-i",cam.RTSPUrl,"-t",strconv.Itoa(durationSeconds),"-c","copy","-movflags","faststart","-f","mp4","-y",tempPath)
+ runErr:=cmd.Run()
+ if runErr!=nil || segmentCtx.Err()!=nil {filePath=partialRecordingName(filePath)}
+ finalizeCtx,finalizeCancel:=context.WithTimeout(context.WithoutCancel(ctx),recordingFinalizeGrace);defer finalizeCancel()
+ if err:=publishRecording(finalizeCtx,tempPath,filePath);err!=nil {
+  removeEmptyRecording(tempPath)
+  return errors.Join(runErr,segmentCtx.Err(),err)
+ }
  if ctx.Err()!=nil {return ctx.Err()}
- if segmentCtx.Err()!=nil {os.Remove(tempPath);return segmentCtx.Err()}
- if err!=nil {os.Remove(tempPath);return err}
- info,err:=os.Stat(tempPath);if err!=nil {return err}
- if info.Size()<1000 {os.Remove(tempPath);return errors.New("recording file too small")}
- if err:=os.Rename(tempPath,filePath);err!=nil {return err}
- return nil
+ if segmentCtx.Err()!=nil {return segmentCtx.Err()}
+ return runErr
 }
 
 func sanitizeFilename(name string) string {
@@ -269,15 +279,14 @@ func recoverPartialRecordings() {
  cameras:=make([]*Camera,0,len(nvr.cameras));for _,cam:=range nvr.cameras {cameras=append(cameras,cam)}
  nvr.mu.RUnlock()
  for _,cam:=range cameras {
-  // Startup precedes workers. Preserve pinned crash staging rather than silently wiping it.
   os.RemoveAll(filepath.Join(cam.RecordDir,"buffer"))
   if entries,err:=os.ReadDir(filepath.Join(cam.RecordDir,"temp"));err==nil && len(entries)>0 {log.Printf("Preserved unassembled event staging for camera %s; manual recovery/cleanup required",cam.ID)}
   files,_:=filepath.Glob(filepath.Join(cam.RecordDir,"*.tmp"))
   for _,file:=range files {
-   if err:=probeRecording(context.Background(),file);err!=nil {log.Printf("Partial recording for camera %s could not be validated; left for inspection",cam.ID);continue}
-   final:=strings.TrimSuffix(file,".tmp")
-   if _,err:=os.Lstat(final);!os.IsNotExist(err) {continue}
-   if err:=os.Rename(file,final);err!=nil {log.Printf("Unable to recover partial recording for camera %s",cam.ID)}
+   final:=partialRecordingName(strings.TrimSuffix(file,".tmp"))
+   ctx,cancel:=context.WithTimeout(context.Background(),recordingFinalizeGrace)
+   err:=publishRecording(ctx,file,final);cancel()
+   if err!=nil {log.Printf("Partial recording for camera %s retained for inspection",cam.ID)}
   }
  }
 }

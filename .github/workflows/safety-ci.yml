@@ -15,12 +15,15 @@ jobs:
     timeout-minutes: 15
     env:
       GOFLAGS: -mod=readonly
+      SIMPLENVR_REQUIRE_FFMPEG: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.x'
           cache: false
+      - name: Install synthetic media test tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - name: Download and verify pinned dependencies
         run: |
           go mod download
@@ -28,7 +31,7 @@ jobs:
           git diff --exit-code -- go.mod go.sum
       - name: Build
         run: go build ./...
-      - name: Race-enabled tests
+      - name: Race-enabled tests including synthetic FFmpeg cancellation
         run: go test -race -count=1 -timeout=120s ./...
       - name: Static analysis
         if: always()
