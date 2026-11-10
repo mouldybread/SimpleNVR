@@ -1,0 +1,14 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const vm=require('node:vm');
+const context=vm.createContext({console,document:{readyState:'loading',addEventListener(){},getElementById(){return null;}},window:{addEventListener(){}}});
+vm.runInContext(fs.readFileSync('static/js/playback.js','utf8'),context,{filename:'static/js/playback.js'});
+assert.equal(vm.runInContext('typeof startDownload',context),'undefined');
+assert.equal(Object.prototype.hasOwnProperty.call(context,'startDownload'),false);
+assert.equal(vm.runInContext('typeof openDownloadModal',context),'function');
+assert.equal(vm.runInContext('typeof toggleDownloadCamera',context),'function');
+vm.runInContext(fs.readFileSync('static/js/export-ui.js','utf8'),context,{filename:'static/js/export-ui.js'});
+assert.equal(vm.runInContext('typeof startDownload',context),'undefined');
+assert.equal(vm.runInContext('typeof startExportDownloads',context),'function');
+assert.equal(vm.runInContext('typeof cancelExportDownloads',context),'function');
+console.log('Legacy direct-download global absent; monitored entry point available');

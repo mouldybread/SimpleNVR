@@ -334,12 +334,4 @@ function renderDownloadCameraSelection() {
   });
 }
 function toggleDownloadCamera(id) { downloadCameras=downloadCameras.includes(id)?downloadCameras.filter(camera=>camera!==id):[...downloadCameras,id]; renderDownloadCameraSelection(); }
-function startDownload() {
-  if (!downloadCameras.length) { playbackError('Please select at least one camera to download'); return; }
-  downloadCameras.forEach(id=>{ const camera=allCameras.find(cam=>cam.id===id); if (!camera) return;
-    const anchor=document.createElement('a'); anchor.href=`/api/download?camera_id=${encodeURIComponent(id)}&start_time=${encodeURIComponent(downloadStartTime.toISOString())}&end_time=${encodeURIComponent(downloadEndTime.toISOString())}`;
-    anchor.download=`${camera.name}_${downloadStartTime.toISOString().split('T')[0]}.mp4`; document.body.appendChild(anchor); anchor.click(); document.body.removeChild(anchor);
-  });
-  if (typeof showSuccess==='function') showSuccess('Download started for '+downloadCameras.length+' camera(s)'); closeDownloadModal();
-}
 if (document.readyState==='loading') document.addEventListener('DOMContentLoaded',initializeTimelinePlayback); else initializeTimelinePlayback();
