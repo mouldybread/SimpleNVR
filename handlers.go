@@ -1,12 +1,8 @@
 package main
 
 import (
- "strings"
- "net/url"
  "encoding/json"
  "fmt"
- "io"
- "log"
  "net/http"
  "os"
  "path/filepath"
@@ -110,52 +106,6 @@ func updateRetentionAllHandler(w http.ResponseWriter,r *http.Request) {
 func updateRecordingModeHandler(w http.ResponseWriter,r *http.Request) {
  req,ok:=decodeRecordingRequest(w,r);if !ok {return}
  if err:=nvr.transitionRecording(req.ID,"mode",req.Mode,runRecordingWorker);err!=nil {recordingError(w,err);return}
- finishCameraUpdate(w,r)
-}
-
-func scanGo2rtcHandler(w http.ResponseWriter, r *http.Request) {
- var go2rtcUrl string
- contentType:=r.Header.Get("Content-Type")
- if strings.Contains(contentType,"multipart/form-data") {
-  if err:=r.ParseMultipartForm(10<<20);err!=nil {log.Printf("Failed to parse multipart form: %v",err)}
-  if r.MultipartForm!=nil {defer r.MultipartForm.RemoveAll()}
- } else {if err:=r.ParseForm();err!=nil {log.Printf("Failed to parse form: %v",err)}}
- for _,key:=range []string{"go2rtc-url","go2rtc_url","url","go2rtcURL"} {if val:=r.Form.Get(key);val!="" {go2rtcUrl=val;break}}
- if go2rtcUrl=="" && r.Body!=nil {
-  bodyBytes,err:=io.ReadAll(r.Body)
-  if err==nil && len(bodyBytes)>0 {
-   var data map[string]interface{}
-   if json.Unmarshal(bodyBytes,&data)==nil {for _,key:=range []string{"go2rtc-url","go2rtc_url","url","go2rtcURL"} {if val,ok:=data[key].(string);ok && val!="" {go2rtcUrl=val;break}}}
-  }
- }
- if go2rtcUrl=="" {go2rtcUrl="http://go2rtc:1984"}
- go2rtcUrl=strings.TrimSuffix(go2rtcUrl,"/")
- parsedUrl,err:=url.Parse(go2rtcUrl)
- if err!=nil || (parsedUrl.Scheme!="http" && parsedUrl.Scheme!="https") || parsedUrl.Host=="" || parsedUrl.Port()=="" {http.Error(w,"Invalid format. Must be in the form http://websiteaddress:port",400);return}
- host:=parsedUrl.Hostname()
- resp,err:=http.Get(go2rtcUrl+"/api/streams")
- if err!=nil {http.Error(w,"Failed to connect to go2rtc: "+err.Error(),502);return}
- defer resp.Body.Close()
- body,_:=io.ReadAll(resp.Body)
- var streams map[string]interface{}
- json.Unmarshal(body,&streams)
- now:=time.Now().UTC()
- for streamName:=range streams {
-  rtspUrl:=fmt.Sprintf("rtsp://%s:8554/%s",host,streamName)
-  nvr.mu.RLock()
-  exists:=false
-  for _,cam:=range nvr.cameras {if cam.RTSPUrl==rtspUrl {exists=true;break}}
-  nvr.mu.RUnlock()
-  if exists {continue}
-  id:=generateID(streamName,now)
-  recordDir:=filepath.Join("/recordings",id)
-  if err:=os.MkdirAll(recordDir,0755);err!=nil {http.Error(w,"Unable to create recording directory",500);return}
-  cam:=&Camera{ID:id,Name:streamName,RTSPUrl:rtspUrl,RecordDir:recordDir,RetentionDays:7,RecordingMode:ModeContinuous,AddedAt:now}
-  nvr.mu.Lock()
-  nvr.cameras[id]=cam
-  nvr.cameraOrder=append(nvr.cameraOrder,id)
-  nvr.mu.Unlock()
- }
  finishCameraUpdate(w,r)
 }
 
