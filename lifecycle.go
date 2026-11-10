@@ -34,6 +34,7 @@ func startCameraWorkerLocked(n *NVR,cam *Camera,worker recordingWorker) error {
  // A loaded IsRecording=true with no runtime cancel function is restart intent.
  if cam.IsRecording && cam.recordCancel!=nil {return nil}
  if worker==nil {return errors.New("recording worker unavailable")}
+ if err:=checkRecordingStorage(cam.RecordDir);err!=nil {return err}
  ctx,cancel:=context.WithCancel(context.Background())
  mode:=cam.RecordingMode
  cam.recordCancel=cancel
@@ -74,6 +75,11 @@ func (n *NVR) transitionRecording(id,action string,mode RecordingMode,worker rec
  if !exists {n.mu.Unlock();return errCameraMissing}
  if action=="start" {err:=startCameraWorkerLocked(n,cam,worker);n.mu.Unlock();return err}
  if action=="mode" && cam.RecordingMode==mode {n.mu.Unlock();return nil}
+ // Reject a known storage failure before stopping the old mode. A second
+ // check at actual worker admission is still necessary; this reserves no space.
+ if action=="mode" && mode!=ModeNoRecording {
+  if err:=checkRecordingStorage(cam.RecordDir);err!=nil {n.mu.Unlock();return err}
+ }
  wasRecording:=cam.IsRecording
  n.mu.Unlock()
  stopManagedCamera(n,cam)
@@ -101,7 +107,13 @@ func decodeRecordingRequest(w http.ResponseWriter,r *http.Request) (recordingReq
 
 func recordingError(w http.ResponseWriter,err error) {
  status:=http.StatusInternalServerError
- switch {case errors.Is(err,errCameraMissing):status=404;case errors.Is(err,errRecordingDisabled):status=409;case errors.Is(err,errRecordingMode):status=400;case errors.Is(err,errRecorderShuttingDown):status=503;w.Header().Set("Retry-After","5")}
+ switch {
+ case errors.Is(err,errCameraMissing):status=404
+ case errors.Is(err,errRecordingDisabled):status=409
+ case errors.Is(err,errRecordingMode):status=400
+ case errors.Is(err,errStorageReserve):status=507
+ case errors.Is(err,errRecorderShuttingDown),errors.Is(err,errStorageUnavailable),errors.Is(err,errStoragePolicy):status=503;w.Header().Set("Retry-After","5")
+ }
  http.Error(w,err.Error(),status)
 }
 
