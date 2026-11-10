@@ -26,12 +26,14 @@ func TestPartialPinFailurePreservesEarlierLinks(t *testing.T) {
  got,err:=os.ReadFile(pinned);if err!=nil || string(got)!="recoverable prebuffer" {t.Fatalf("earlier pin lost: %q %v",got,err)}
 }
 
-func TestFirstPinFailureRemovesOnlyEmptyStaging(t *testing.T) {
+func TestFirstPinFailureRetainsRecoveryManifest(t *testing.T) {
  bm:=bufferFixture(t)
  now:=time.Now().UTC()
  bm.buffer=[]BufferSegment{{StartTime:now.Add(-time.Second),EndTime:now,FilePath:filepath.Join(bm.camera.RecordDir,"missing.mp4")}}
  if err:=bm.TriggerEvent(bufferTestEvent("first-pin-failed"));err==nil {t.Fatal("missing source accepted")}
- entries,err:=os.ReadDir(filepath.Join(bm.camera.RecordDir,"temp"));if err!=nil || len(entries)!=0 {t.Fatalf("empty staging not removed: %v %v",entries,err)}
+ entries,err:=os.ReadDir(filepath.Join(bm.camera.RecordDir,"temp"));if err!=nil || len(entries)!=1 {t.Fatalf("recovery staging not retained: %v %v",entries,err)}
+ m:=readRecoveryTest(t,filepath.Join(bm.camera.RecordDir,"temp",entries[0].Name()))
+ if m.State!="pin_failed" || m.PinnedCount!=0 {t.Fatalf("first-pin failure state lost: %+v",m)}
  if len(bm.slots)!=0 {t.Fatal("slot leaked")}
 }
 

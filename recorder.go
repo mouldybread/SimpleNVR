@@ -22,7 +22,7 @@ const (bufferDuration=30*time.Second; segmentSize=5*time.Second; eventWorkers=2;
 var (errEventStopped=errors.New("event recorder stopping or unavailable");errEventBusy=errors.New("event recorder at capacity");errEventInvalid=errors.New("invalid event capture request"))
 
 type BufferSegment struct {StartTime time.Time; EndTime time.Time; FilePath string}
-type bufferEvent struct {event Event;preFiles []string;preStart time.Time;dir string;keepStaging bool}
+type bufferEvent struct {event Event;preFiles []string;preStart time.Time;dir string;keepStaging bool;recovery *eventRecoveryManifest;recoveryFailed bool;recoveryWriter func(string,[]byte) error}
 type BufferManager struct {
  camera *Camera
  buffer []BufferSegment
@@ -108,25 +108,33 @@ func (bm *BufferManager) pinBuffer(event Event) (*bufferEvent,error) {
  job:=&bufferEvent{event:event,preStart:event.CreatedAt.UTC(),dir:dir}
  bm.bufferMutex.RLock();defer bm.bufferMutex.RUnlock()
  cutoff:=time.Now().UTC().Add(-bufferDuration)
+ selected:=make([]BufferSegment,0)
  for _,seg:=range bm.buffer {
+  if seg.EndTime.After(cutoff) {
+   if len(selected)>=maxRecoveryInputs {return nil,errors.New("too many recovery inputs")}
+   selected=append(selected,seg)
+  }
+ }
+ if err:=bm.beginEventRecovery(job,selected);err!=nil {return nil,err}
+ for _,seg:=range selected {
   if !seg.EndTime.After(cutoff) {continue}
   pinned:=filepath.Join(dir,fmt.Sprintf("pre_%03d.mp4",len(job.preFiles)))
   if err:=os.Link(seg.FilePath,pinned);err!=nil {
-   // Never recursively discard earlier pins after a later pin fails.
-   // With no successful pins, remove only an actually empty directory.
-   if len(job.preFiles)==0 { _=os.Remove(dir) } else {
-    log.Printf("Retained incomplete prebuffer staging for camera %s event %s; inspection/recovery required",bm.camera.ID,event.ID)
-   }
+   _=job.recoveryCheckpoint("pin_failed","link_failed")
+   log.Printf("Retained incomplete prebuffer staging for camera %s event %s; inspection/recovery required",bm.camera.ID,event.ID)
    return nil,err
   }
   if len(job.preFiles)==0 {job.preStart=seg.StartTime}
   job.preFiles=append(job.preFiles,pinned)
  }
+ if err:=job.recoveryCheckpoint("pinned","");err!=nil {return nil,err}
  return job,nil
 }
 
 func (bm *BufferManager) releaseJob(job *bufferEvent) {
+ if job.recoveryFailed {job.keepStaging=true}
  if job.keepStaging {
+  _=job.recoveryCheckpoint("retained","")
   log.Printf("Retained event staging for camera %s event %s; inspection/recovery required",bm.camera.ID,job.event.ID)
  } else if err:=os.RemoveAll(job.dir);err!=nil {log.Printf("Unable to remove event staging for camera %s",bm.camera.ID)}
  <-bm.slots
@@ -208,20 +216,25 @@ func (bm *BufferManager) handleEvent(job *bufferEvent) {
 
 func (bm *BufferManager) recordEventDuration(job *bufferEvent) string {
  file:=filepath.Join(job.dir,"event.mp4")
+ job.keepStaging=true
+ if err:=job.recoveryCheckpoint("capturing","");err!=nil {return ""}
  ctx,cancel:=context.WithTimeout(bm.ctx,time.Duration(job.event.Duration)*time.Second+15*time.Second);defer cancel()
  cmd:=ffmpegCommand(ctx,"-hide_banner","-loglevel","error","-nostats","-rtsp_transport","tcp","-i",bm.camera.RTSPUrl,"-t",strconv.Itoa(job.event.Duration),"-c","copy","-f","mp4","-movflags","faststart","-y",file)
  err:=cmd.Run()
  if err!=nil || ctx.Err()!=nil {
   // Failure, including inability to inspect output, never authorizes deletion.
   job.keepStaging=true
+  _=job.recoveryCheckpoint("capture_failed","process_failed_or_canceled")
   log.Printf("Event capture interrupted/failed for camera %s event %s; staging retained for inspection",bm.camera.ID,job.event.ID)
   return ""
  }
+ if err:=job.recoveryCheckpoint("captured","");err!=nil {return ""}
  return file
 }
 
 func (bm *BufferManager) concatenateEventRecording(job *bufferEvent,eventFile string) string {
  job.keepStaging=true
+ if err:=job.recoveryCheckpoint("assembling","");err!=nil {return ""}
  list,err:=os.Create(filepath.Join(job.dir,"concat.txt"));if err!=nil {return ""}
  files:=append(append([]string(nil),job.preFiles...),eventFile)
  for _,file:=range files {
@@ -239,11 +252,16 @@ func (bm *BufferManager) concatenateEventRecording(job *bufferEvent,eventFile st
  runErr:=cmd.Run()
  incomplete:=runErr!=nil || ctx.Err()!=nil
  if incomplete {final=partialRecordingName(final)}
+ job.recovery.OutputTemporary=filepath.Base(temp)
+ job.recovery.OutputPublished=filepath.Base(final)
+ job.recovery.Partial=incomplete
+ if err:=job.recoveryCheckpoint("publishing","");err!=nil {return ""}
  finalizeCtx,finalizeCancel:=context.WithTimeout(context.WithoutCancel(bm.ctx),recordingFinalizeGrace);defer finalizeCancel()
- if err:=publishRecording(finalizeCtx,temp,final);err!=nil {removeEmptyRecording(temp);log.Printf("Event assembly for camera %s event %s retained for inspection",bm.camera.ID,job.event.ID);return ""}
+ if err:=publishRecording(finalizeCtx,temp,final);err!=nil {_=job.recoveryCheckpoint("publication_failed","validation_or_publication_failed");removeEmptyRecording(temp);log.Printf("Event assembly for camera %s event %s retained for inspection",bm.camera.ID,job.event.ID);return ""}
  // A readable partial output is not a replacement for its recovery inputs.
  // Cancellation during publication also conservatively retains staging.
- job.keepStaging=incomplete || ctx.Err()!=nil || bm.ctx.Err()!=nil
+ checkpointErr:=job.recoveryCheckpoint("published","")
+ job.keepStaging=incomplete || ctx.Err()!=nil || bm.ctx.Err()!=nil || checkpointErr!=nil || job.recoveryFailed
  return final
 }
 
