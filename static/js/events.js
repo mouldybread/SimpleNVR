@@ -80,7 +80,7 @@ function loadEventsList() {
 function refreshEventsList() {
   currentPage = 1; loadEventsList();
   if (typeof renderTimeline === 'function') {
-    const dateStr = new Date().toISOString().split('T')[0];
+    const dateStr = localDateKey(new Date());
     if (typeof loadTimelineEvents === 'function') loadTimelineEvents(dateStr);
     renderTimeline();
   }
@@ -112,7 +112,8 @@ function applyFilters() {
   filteredEvents = allEvents.filter(event => {
     if (cameraFilter && event.camera_name !== cameraFilter) return false;
     if (typeFilter && event.label !== typeFilter) return false;
-    if (dateFilter && new Date(event.start_time).toISOString().split('T')[0] !== dateFilter) return false;
+    const date = new Date(event.start_time);
+    if (dateFilter && (!Number.isFinite(date.getTime()) || localDateKey(date) !== dateFilter)) return false;
     return true;
   });
   renderPaginatedEvents();
@@ -197,11 +198,5 @@ function renderEventsList(events) {
   listDiv.appendChild(list);
 }
 function seekToEvent(cameraName, startTimeStr) {
-  closeEventsModal();
-  const startTime = new Date(startTimeStr); const date = startTime.toISOString().split('T')[0];
-  const datePicker = document.getElementById('timeline-date-picker'); if (datePicker) datePicker.value = date;
-  const hours = startTime.getHours(); const minutes = startTime.getMinutes(); const seconds = startTime.getSeconds();
-  const timeInHours = hours + minutes / 60 + seconds / 3600;
-  if (typeof seekToTime === 'function') seekToTime(timeInHours);
-  if (typeof loadTimelineForDate === 'function') loadTimelineForDate(date);
+  return navigateToEvent(cameraName, startTimeStr);
 }

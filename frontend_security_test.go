@@ -1,17 +1,31 @@
 package main
 
 import (
+ "context"
  "os"
  "os/exec"
  "testing"
+ "time"
 )
 
-func TestFrontendEventRendering(t *testing.T) {
+func runFrontendRegression(t *testing.T,script,zone string) {
+ t.Helper()
  node,err:=exec.LookPath("node")
  if err!=nil {
-  if os.Getenv("SIMPLENVR_REQUIRE_FFMPEG")=="1" {t.Fatal("CI requires Node.js for frontend security regressions")}
-  t.Skip("Node.js unavailable; frontend security regressions not run")
+  if os.Getenv("SIMPLENVR_REQUIRE_FFMPEG")=="1" {t.Fatal("CI requires Node.js for frontend regressions")}
+  t.Skip("Node.js unavailable; frontend regressions not run")
  }
- output,err:=exec.Command(node,"tests/event-rendering.cjs").CombinedOutput()
- if err!=nil {t.Fatalf("frontend security regressions failed: %v\n%s",err,output)}
+ ctx,cancel:=context.WithTimeout(context.Background(),20*time.Second);defer cancel()
+ cmd:=exec.CommandContext(ctx,node,script)
+ cmd.Env=append(os.Environ(),"TZ="+zone)
+ output,err:=cmd.CombinedOutput()
+ if err!=nil {t.Fatalf("frontend regressions failed (%s, %s): %v\n%s",script,zone,err,output)}
+}
+
+func TestFrontendEventRendering(t *testing.T) {runFrontendRegression(t,"tests/event-rendering.cjs","UTC")}
+
+func TestFrontendEventNavigation(t *testing.T) {
+ for _,zone:=range []string{"UTC","Asia/Hong_Kong","America/Chicago"} {
+  t.Run(zone,func(t *testing.T){runFrontendRegression(t,"tests/event-navigation.cjs",zone)})
+ }
 }
