@@ -72,21 +72,24 @@ func serveDownload(w http.ResponseWriter,r *http.Request,n *NVR,cache *durationC
  if len(clips)==0 {http.Error(w,"No recordings found in time range",404);return}
  plan,err:=buildExportPlan(clips,window)
  if err!=nil {writeExportPlanError(w,err);return}
- pins,err:=pool.prepare(ctx,plan.clips())
- cancel()
- if err!=nil {
-  if errors.Is(err,errExportInputLimit) {http.Error(w,"Too many export clips; reduce the requested time range",413)} else {writeRecordingIntervalError(w,r,err)}
+ pins,err:=pool.prepare(ctx,plan.clips());cancel()
+ if err!=nil {if errors.Is(err,errExportInputLimit) {http.Error(w,"Too many export clips; reduce the requested time range",413)} else {writeRecordingIntervalError(w,r,err)};return}
+ defer pins.Close()
+ name:=fmt.Sprintf("%s_%s.mp4",sanitizeFilename(camera.Name),start.UTC().Format("20060102_150405"))
+ headers:=func(){
+  w.Header().Set("Content-Type","video/mp4");w.Header().Set("Content-Disposition",fmt.Sprintf("attachment; filename=%q",name))
+  w.Header().Set("X-Recording-Duration-Policy","probed-media");w.Header().Set("X-Export-Input-Policy","pinned-descriptors");plan.setHeaders(w)
+ }
+ if plan.NeedsTrim {
+  output,err:=renderTrimmedExport(r.Context(),pins,plan,pool.tempDir,maxTrimBytes)
+  if err!=nil {writeTrimError(w,r,err);return}
+  defer output.Close()
+  headers();output.setHeaders(w,plan)
+  http.ServeContent(w,r,name,time.Time{},output.file)
   return
  }
- // Close only after Run returns, including failure/cancellation paths. The
- // shutdown gate joins the handler after this deferred cleanup has completed.
- defer pins.Close()
- cmd,err:=pins.command(r.Context())
- if err!=nil {writeRecordingIntervalError(w,r,err);return}
- name:=fmt.Sprintf("%s_%s.mp4",sanitizeFilename(camera.Name),start.UTC().Format("20060102_150405"))
- w.Header().Set("Content-Type","video/mp4");w.Header().Set("Content-Disposition",fmt.Sprintf("attachment; filename=%q",name))
- w.Header().Set("X-Recording-Duration-Policy","probed-media");w.Header().Set("X-Export-Input-Policy","pinned-descriptors")
- plan.setHeaders(w)
+ cmd,err:=pins.command(r.Context());if err!=nil {writeRecordingIntervalError(w,r,err);return}
+ headers();w.Header().Set("X-Export-Trim-Applied","false")
  cmd.Stdout=w;cmd.Stderr=os.Stderr
  if err:=cmd.Run();err!=nil {log.Printf("FFmpeg export ended for camera %s: %v",camera.ID,err)}
 }

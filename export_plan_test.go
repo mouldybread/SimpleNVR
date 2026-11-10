@@ -31,7 +31,6 @@ func TestExportPlanIntersectionsAndOrdering(t *testing.T) {
   for _,part:=range plan.Parts {total+=part.End.Sub(part.Start);if part.In<0 || part.Out<=part.In {t.Fatal("invalid offsets")}}
   if total!=10*time.Second || plan.clips()[0].Path!="a" {t.Fatal("plan is not ordered exact requested coverage")}
  })}
- // Retain fractional boundaries rather than round to whole seconds.
  window=timelineWindow{Start:base.Add(500*time.Millisecond),End:base.Add(1500*time.Millisecond)}
  plan,err:=buildExportPlan([]recordingInterval{planClip(base,"a",0,2*time.Second)},window)
  if err!=nil || plan.Parts[0].In!=500*time.Millisecond || plan.Parts[0].Out!=1500*time.Millisecond {t.Fatal(plan,err)}
@@ -66,18 +65,18 @@ func TestExportPlanRejectsBeforePinningOrVideoHeaders(t *testing.T) {
   if response.Code!=409 || response.Header().Get("X-Export-Plan-Status")!=kind || opened || strings.HasPrefix(response.Header().Get("Content-Type"),"video/") || response.Header().Get("Content-Disposition")!="" {t.Fatal("invalid plan reached streaming",response.Code,response.Header())}
  })}
 }
-func TestWholeClipExportDeclaresPendingTrimExecution(t *testing.T) {
+func TestWholeClipExportDeclaresRangePolicy(t *testing.T) {
  dir:=t.TempDir();clips:=syntheticExportClips(t,dir)
  for index,path:=range []string{"20261110_000000_a.mp4","20261110_000002_b.mp4"} {if err:=os.Rename(clips[index].Path,filepath.Join(dir,path));err!=nil {t.Fatal(err)}}
  n:=&NVR{cameras:map[string]*Camera{"front":{ID:"front",Name:"Front",RecordDir:dir}}}
  pool:=newExportInputPool(1,2);pool.tempDir=t.TempDir();cache:=newDurationCache(2,2,probeVideoDuration)
  ctx,cancel:=context.WithTimeout(context.Background(),15*time.Second);defer cancel()
- request:=httptest.NewRequest("GET","/api/download?camera_id=front&start_time=2026-11-10T00:00:00.5Z&end_time=2026-11-10T00:00:03.5Z",nil).WithContext(ctx)
+ request:=httptest.NewRequest("GET","/api/download?camera_id=front&start_time=2026-11-10T00:00:00Z&end_time=2026-11-10T00:00:04Z",nil).WithContext(ctx)
  response:=httptest.NewRecorder();serveDownload(response,request,n,cache,pool)
- if response.Code!=200 || response.Header().Get("X-Export-Range-Policy")!="whole-clips-untrimmed" || response.Header().Get("X-Export-Trim-Required")!="true" || response.Header().Get("X-Export-Requested-Start")!="2026-11-10T00:00:00.5Z" || response.Header().Get("X-Export-Media-End")!="2026-11-10T00:00:04Z" {t.Fatal("incorrect range policy",response.Code,response.Header())}
+ if response.Code!=200 || response.Header().Get("X-Export-Range-Policy")!="whole-clips-untrimmed" || response.Header().Get("X-Export-Trim-Required")!="false" || response.Header().Get("X-Export-Trim-Applied")!="false" || response.Header().Get("X-Export-Media-End")!="2026-11-10T00:00:04Z" {t.Fatal("incorrect whole-clip policy",response.Code,response.Header())}
  output:=filepath.Join(dir,"output.mp4");if err:=os.WriteFile(output,response.Body.Bytes(),0600);err!=nil {t.Fatal(err)}
  file,err:=os.Open(output);if err!=nil {t.Fatal(err)};defer file.Close()
  duration,err:=probeVideoDuration(ctx,file)
- if err!=nil || duration<3900*time.Millisecond || duration>4100*time.Millisecond {t.Fatal("whole-clip output was misrepresented as trimmed",duration,err)}
+ if err!=nil || duration<3900*time.Millisecond || duration>4100*time.Millisecond {t.Fatal(duration,err)}
  if len(pool.slots)!=0 {t.Fatal("export slot leaked")}
 }

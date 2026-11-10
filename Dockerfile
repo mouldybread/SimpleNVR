@@ -7,7 +7,7 @@ COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -o simplenvr . && sha256sum -c /tmp/dependencies.sha256
 
 FROM alpine:latest
-RUN apk add --no-cache ffmpeg ca-certificates
+RUN apk add --no-cache ffmpeg ca-certificates && ffmpeg -hide_banner -encoders 2>/dev/null | grep -q '[[:space:]]libx264[[:space:]]'
 WORKDIR /app
 COPY --from=builder /app/simplenvr /app/simplenvr
 COPY --from=builder /app/templates /app/templates
