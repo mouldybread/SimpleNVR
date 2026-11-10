@@ -6,6 +6,8 @@ let seekTimeoutId = null, loadDataTimeoutId = null, pendingVideoTimeouts = [];
 let downloadStartTime = null, downloadEndTime = null, downloadCameras = [];
 let timelineEvents = [], eventTooltip = null;
 let timelineRequestVersion = 0, timelineAbort = null, pendingEventNavigation = null, cameraLoadVersion = 0;
+let playbackIntentVersion = 0;
+const playbackSessions = new Map();
 let seekGeneration = 0, mediaCleanups = [], segmentCleanups = [];
 const EVENT_ICONS = {'Motion Detected':'???','Person Detected':'??','Vehicle Detected':'??','Intrusion':'??','Loitering':'??','Object Removed':'??','Object Left Behind':'??','Sound Alert':'??','Line Crossing':'??','Tamper Alert':'??'};
 let cameraColorMap = {};
@@ -30,7 +32,7 @@ function getUTCDateString(date) { return localDateKey(date); }
 function playbackError(message) { if (typeof showError === 'function') showError(message); else console.error(message); }
 function getOrderedSelectedCameras() { return allCameras.filter(cam => selectedCameras.includes(cam.id)).map(cam => cam.id); }
 function cancelPlaybackTasks() {
-  seekGeneration++;
+  seekGeneration++; playbackIntentVersion++;
   if (seekTimeoutId !== null) clearTimeout(seekTimeoutId);
   seekTimeoutId = null;
   pendingVideoTimeouts.forEach(clearTimeout); pendingVideoTimeouts = [];
@@ -251,6 +253,46 @@ function scheduleVideoTask(fn,delay,generation) {
   const timer=setTimeout(() => { pendingVideoTimeouts=pendingVideoTimeouts.filter(id=>id!==timer); if (generation===seekGeneration) fn(); },delay);
   pendingVideoTimeouts.push(timer);
 }
+function setPlaybackButton() {
+  const button=document.getElementById('play-pause');
+  if (button) button.textContent=isPlaying?'? Pause':'? Play';
+}
+function stopMediaPlayback(message,video) {
+  cancelPlaybackTasks();isPlaying=false;
+  videoPlayers.forEach(player=>{if(player)player.pause();});
+  if (video) {
+    video.style.display='none';
+    const unavailable=video.parentElement?.querySelector('.no-video-message');
+    if (unavailable) unavailable.style.display='block';
+  }
+  setPlaybackButton();renderTimeline();playbackError(message);
+}
+function attachPlaybackSession(video,index,generation) {
+  const session={video,index,generation,playToken:0,resumeEnded:null};
+  session.valid=()=>generation===seekGeneration && videoPlayers[index]===video && playbackSessions.get(video)===session;
+  const failed=()=>{if(session.valid())stopMediaPlayback('Playback media failed; select a time to retry',video);};
+  const cleanup=()=>{
+    video.removeEventListener('error',failed);
+    if (playbackSessions.get(video)===session) playbackSessions.delete(video);
+    segmentCleanups=segmentCleanups.filter(fn=>fn!==cleanup);
+  };
+  playbackSessions.set(video,session);segmentCleanups.push(cleanup);
+  video.addEventListener('error',failed);return session;
+}
+function playSession(session) {
+  if (!session || !session.valid() || !isPlaying) return;
+  const intent=playbackIntentVersion,token=++session.playToken;
+  const rejected=()=>{
+    if (!session.valid() || !isPlaying || intent!==playbackIntentVersion || token!==session.playToken) return;
+    playbackIntentVersion++;isPlaying=false;
+    videoPlayers.forEach(player=>{if(player)player.pause();});
+    setPlaybackButton();playbackError('Playback could not start; press Play to retry or select another time');
+  };
+  try {
+    const result=session.video.play();
+    if (result!==undefined) Promise.resolve(result).catch(rejected);
+  } catch (_) {rejected();}
+}
 // This first continuation policy deliberately excludes multi-camera playback.
 function attachSingleCameraContinuation(video,index,segment,generation) {
   const cameras=getOrderedSelectedCameras();
@@ -281,7 +323,9 @@ function attachSingleCameraContinuation(video,index,segment,generation) {
     cancelPlaybackTasks();currentTimePosition=end;lastSeekTime=end;
     performSeek(new Date(end),seekGeneration);
   };
-  const cleanup=()=>{video.removeEventListener('timeupdate',update);video.removeEventListener('ended',ended);segmentCleanups=segmentCleanups.filter(fn=>fn!==cleanup);};
+  const session=playbackSessions.get(video);
+  if (session) session.resumeEnded=ended;
+  const cleanup=()=>{video.removeEventListener('timeupdate',update);video.removeEventListener('ended',ended);if(session && session.resumeEnded===ended)session.resumeEnded=null;segmentCleanups=segmentCleanups.filter(fn=>fn!==cleanup);};
   segmentCleanups.push(cleanup);video.addEventListener('timeupdate',update);video.addEventListener('ended',ended);
 }
 function performSeek(time,generation=seekGeneration) {
@@ -299,10 +343,11 @@ function performSeek(time,generation=seekGeneration) {
       const metadata=() => {
         cleanup(); if (generation!==seekGeneration || videoPlayers[index]!==video) return;
         video.currentTime=Math.max(0,Math.min(offset,video.duration)); video.playbackRate=playbackSpeed;
+        const session=attachPlaybackSession(video,index,generation);
         attachSingleCameraContinuation(video,index,segment,generation);
-        if (isPlaying) { const promise=video.play(); if (promise!==undefined) promise.catch(()=>{}); }
+        if (isPlaying) playSession(session);
       };
-      const failed=() => { cleanup(); if (generation!==seekGeneration || videoPlayers[index]!==video) return; video.style.display='none'; if (message) message.style.display='block'; };
+      const failed=() => { cleanup(); if (generation!==seekGeneration || videoPlayers[index]!==video) return; stopMediaPlayback('Unable to load playback media; select a time to retry',video); };
       mediaCleanups.push(cleanup); video.addEventListener('loadedmetadata',metadata); video.addEventListener('error',failed); video.src=segment.file_path;
     },10,generation);
   },index*150,generation));
@@ -310,8 +355,22 @@ function performSeek(time,generation=seekGeneration) {
   if (!isPlaying) { isPlaying=true; const button=document.getElementById('play-pause'); if (button) button.textContent='? Pause'; }
 }
 function togglePlayPause() {
-  isPlaying=!isPlaying; videoPlayers.forEach(video=>{ if (!video) return; if (isPlaying) { const promise=video.play(); if (promise!==undefined) promise.catch(()=>{}); } else video.pause(); });
-  const button=document.getElementById('play-pause'); if (button) button.textContent=isPlaying?'? Pause':'? Play';
+  playbackIntentVersion++;
+  if (isPlaying) {
+    isPlaying=false;videoPlayers.forEach(video=>{if(video)video.pause();});setPlaybackButton();return;
+  }
+  const sessions=videoPlayers.filter(Boolean).map(video=>playbackSessions.get(video)).filter(session=>session && session.valid());
+  if (!sessions.length && !mediaCleanups.length && !pendingVideoTimeouts.length && seekTimeoutId===null) {
+    playbackError('Select a recording time before starting playback');return;
+  }
+  isPlaying=true;setPlaybackButton();
+  const ended=sessions.filter(session=>session.video.ended);
+  if (ended.length) {
+    if (sessions.length===1 && getOrderedSelectedCameras().length===1 && ended[0].resumeEnded) ended[0].resumeEnded();
+    else stopMediaPlayback('Ended playback cannot advance safely; select another time');
+    return;
+  }
+  sessions.forEach(playSession);
 }
 function toggleFullscreen() {
   const container=document.getElementById('fullscreen-wrapper'); if (!container) return;

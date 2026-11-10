@@ -26,8 +26,9 @@ function harness(){
 {
  const h=harness();h.seek(12.5);assert.deepEqual(h.video.assignments,['/first.mp4']);h.video.emit('loadedmetadata');
  assert.equal(h.video.currentTime,12.5);assert.equal(h.video.playCount,1);assert.equal(h.video.playbackRate,1);
- assert.equal(h.video.handlers('loadedmetadata').length,0);assert.equal(h.video.handlers('error').length,0);
+ assert.equal(h.video.handlers('loadedmetadata').length,0);assert.equal(h.video.handlers('error').length,1);
  assert.equal(h.run('mediaCleanups.length'),0);
+ h.c.invalidateTimelineLoad();assert.equal(h.video.handlers('error').length,0);assert.equal(h.run('playbackSessions.size'),0);
 }
 {
  const h=harness();h.seek();const metadata=h.video.handlers('loadedmetadata')[0],failed=h.video.handlers('error')[0];
