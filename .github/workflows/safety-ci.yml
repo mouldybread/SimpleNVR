@@ -39,6 +39,27 @@ jobs:
       - name: Assert dependency files remain unchanged
         if: always()
         run: git diff --exit-code -- go.mod go.sum
+      - name: Isolated real storage failures (private tmpfs namespace)
+        shell: bash
+        run: |
+          set -euo pipefail
+          go_bin=$(command -v go)
+          unshare_bin=$(command -v unshare)
+          host_mnt_ns=$(readlink /proc/self/ns/mnt)
+          module_cache=$(go env GOMODCACHE)
+          cache_dir=$(mktemp -d "${RUNNER_TEMP:?}/simplenvr-storage-go-cache.XXXXXX")
+          trap 'sudo rm -rf -- "$cache_dir"' EXIT
+          sudo env \
+            SIMPLENVR_STORAGE_FAILURE_TESTS=1 \
+            SIMPLENVR_STORAGE_HOST_MNT_NS="$host_mnt_ns" \
+            SIMPLENVR_REQUIRE_FFMPEG=1 \
+            GOFLAGS=-mod=readonly \
+            GOMODCACHE="$module_cache" \
+            GOCACHE="$cache_dir" \
+            "$unshare_bin" --mount --propagation private --fork \
+            "$go_bin" test -race -count=1 -timeout=120s -v \
+            -run '^TestStorageFailureMountNamespace' ./...
+          git diff --exit-code -- go.mod go.sum
       - name: Verify runtime image builds
         run: docker build -t simplenvr-safety-test .
       - name: Runtime container SIGTERM smoke test
