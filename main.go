@@ -117,7 +117,12 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
- var err error
+ if len(os.Args)>1 && os.Args[1]=="auth" {
+  if err:=authCommand(os.Args[2:]);err!=nil {log.Fatal(err)}
+  return
+ }
+ auth,err:=newAuth(authFile())
+ if err!=nil {log.Fatal(err)}
  templates, err = template.ParseGlob("templates/*.html")
  if err != nil { log.Fatal("Failed to load templates: ", err) }
  if err = nvr.load(); err != nil { log.Fatal("Refusing startup with invalid camera configuration: ", err) }
@@ -152,6 +157,7 @@ func main() {
  if err = os.MkdirAll("/certs", 0755); err != nil { log.Fatal(err) }
  certPath, keyPath := filepath.Join("/certs", "cert.pem"), filepath.Join("/certs", "key.pem")
  if err = ensureTLSCertificates(certPath, keyPath); err != nil { log.Fatal("Failed to initialize TLS certificates: ", err) }
- log.Println("SimpleNVR starting HTTPS server on :443...")
- if err = http.ListenAndServeTLS(":443", certPath, keyPath, nil); err != nil { log.Fatal(err) }
+ server:=&http.Server{Addr:":443",Handler:auth.Handler(http.DefaultServeMux),ReadHeaderTimeout:10*time.Second,ReadTimeout:30*time.Second,IdleTimeout:60*time.Second,MaxHeaderBytes:32768}
+ log.Println("SimpleNVR starting authenticated HTTPS server on :443...")
+ if err = server.ListenAndServeTLS(certPath,keyPath); err != nil {log.Fatal(err)}
 }
