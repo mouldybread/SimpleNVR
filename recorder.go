@@ -97,7 +97,7 @@ func (bm *BufferManager) TriggerEvent(event Event) error {
  select {
  case bm.eventChan<-job:return nil
  case <-bm.ctx.Done():job.keepStaging=len(job.preFiles)>0;bm.releaseJob(job);return errEventStopped
- default:bm.releaseJob(job);return errEventBusy
+ default:job.keepStaging=len(job.preFiles)>0;bm.releaseJob(job);return errEventBusy
  }
 }
 
@@ -111,7 +111,14 @@ func (bm *BufferManager) pinBuffer(event Event) (*bufferEvent,error) {
  for _,seg:=range bm.buffer {
   if !seg.EndTime.After(cutoff) {continue}
   pinned:=filepath.Join(dir,fmt.Sprintf("pre_%03d.mp4",len(job.preFiles)))
-  if err:=os.Link(seg.FilePath,pinned);err!=nil {os.RemoveAll(dir);return nil,err}
+  if err:=os.Link(seg.FilePath,pinned);err!=nil {
+   // Never recursively discard earlier pins after a later pin fails.
+   // With no successful pins, remove only an actually empty directory.
+   if len(job.preFiles)==0 { _=os.Remove(dir) } else {
+    log.Printf("Retained incomplete prebuffer staging for camera %s event %s; inspection/recovery required",bm.camera.ID,event.ID)
+   }
+   return nil,err
+  }
   if len(job.preFiles)==0 {job.preStart=seg.StartTime}
   job.preFiles=append(job.preFiles,pinned)
  }
@@ -196,7 +203,7 @@ func (bm *BufferManager) handleEvent(job *bufferEvent) {
  file:=bm.recordEventDuration(job)
  if file=="" {return}
  if bm.ctx.Err()!=nil {job.keepStaging=true;return}
- if final:=bm.concatenateEventRecording(job,file);final!="" {log.Printf("Event capture saved for camera %s event %s",bm.camera.ID,job.event.ID)}
+ if final:=bm.concatenateEventRecording(job,file);final!="" {log.Printf("Event output published for camera %s event %s; publication does not certify complete capture",bm.camera.ID,job.event.ID)}
 }
 
 func (bm *BufferManager) recordEventDuration(job *bufferEvent) string {
@@ -205,9 +212,9 @@ func (bm *BufferManager) recordEventDuration(job *bufferEvent) string {
  cmd:=ffmpegCommand(ctx,"-hide_banner","-loglevel","error","-nostats","-rtsp_transport","tcp","-i",bm.camera.RTSPUrl,"-t",strconv.Itoa(job.event.Duration),"-c","copy","-f","mp4","-movflags","faststart","-y",file)
  err:=cmd.Run()
  if err!=nil || ctx.Err()!=nil {
-  job.keepStaging=len(job.preFiles)>0
-  if info,statErr:=os.Stat(file);statErr==nil && info.Size()>0 {job.keepStaging=true}
-  log.Printf("Event capture interrupted/failed for camera %s event %s; retained media needs inspection",bm.camera.ID,job.event.ID)
+  // Failure, including inability to inspect output, never authorizes deletion.
+  job.keepStaging=true
+  log.Printf("Event capture interrupted/failed for camera %s event %s; staging retained for inspection",bm.camera.ID,job.event.ID)
   return ""
  }
  return file
@@ -230,10 +237,13 @@ func (bm *BufferManager) concatenateEventRecording(job *bufferEvent,eventFile st
  cmd:=ffmpegCommand(ctx,"-hide_banner","-loglevel","error","-nostats","-f","concat","-safe","1","-i","concat.txt","-c","copy","-f","mp4","-movflags","faststart","-y",temp)
  cmd.Dir=job.dir
  runErr:=cmd.Run()
- if runErr!=nil || ctx.Err()!=nil {final=partialRecordingName(final)}
+ incomplete:=runErr!=nil || ctx.Err()!=nil
+ if incomplete {final=partialRecordingName(final)}
  finalizeCtx,finalizeCancel:=context.WithTimeout(context.WithoutCancel(bm.ctx),recordingFinalizeGrace);defer finalizeCancel()
  if err:=publishRecording(finalizeCtx,temp,final);err!=nil {removeEmptyRecording(temp);log.Printf("Event assembly for camera %s event %s retained for inspection",bm.camera.ID,job.event.ID);return ""}
- job.keepStaging=false
+ // A readable partial output is not a replacement for its recovery inputs.
+ // Cancellation during publication also conservatively retains staging.
+ job.keepStaging=incomplete || ctx.Err()!=nil || bm.ctx.Err()!=nil
  return final
 }
 
