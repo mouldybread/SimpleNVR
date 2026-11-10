@@ -15,6 +15,16 @@ const CHUNK_SIZE_MS = 10 * 60 * 1000;
 function localDateKey(date) {
   return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
 }
+// Construct each boundary as local calendar midnight, not start + 24 hours.
+function timelineWindowForDay(day) {
+  const match = typeof day === 'string' && /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  if (!match) throw new RangeError('Invalid timeline day');
+  const year = Number(match[1]), month = Number(match[2]), date = Number(match[3]);
+  const start = new Date(0); start.setFullYear(year,month-1,date); start.setHours(0,0,0,0);
+  const end = new Date(0); end.setFullYear(year,month-1,date+1); end.setHours(0,0,0,0);
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || localDateKey(start) !== day || end <= start || end-start > 26*3600000) throw new RangeError('Invalid timeline day');
+  return {start_time:start.toISOString(),end_time:end.toISOString()};
+}
 // Compatibility alias; this has always formatted local calendar fields.
 function getUTCDateString(date) { return localDateKey(date); }
 function playbackError(message) { if (typeof showError === 'function') showError(message); else console.error(message); }
@@ -124,7 +134,9 @@ async function performLoadTimelineData(version = timelineRequestVersion,day = lo
   if (version !== timelineRequestVersion) return false;
   const controller = new AbortController(); timelineAbort = controller;
   try {
-    const response = await fetch(`/api/timeline/recordings?date=${encodeURIComponent(day)}`,{signal:controller.signal});
+    const bounds = timelineWindowForDay(day);
+    const query = `start_time=${encodeURIComponent(bounds.start_time)}&end_time=${encodeURIComponent(bounds.end_time)}`;
+    const response = await fetch(`/api/timeline/recordings?${query}`,{signal:controller.signal});
     if (!response.ok) throw new Error('Timeline request failed');
     const segments = await response.json();
     if (version !== timelineRequestVersion || controller.signal.aborted || localDateKey(currentDate) !== day || JSON.stringify(cameras) !== JSON.stringify(selectedCameras)) return false;
