@@ -42,9 +42,10 @@ func triggerEventHandlerWithState(w http.ResponseWriter,r *http.Request,n *NVR,p
   if cam==nil {status=404;return}
   if active {
    if bm==nil {status=503;return}
-   // Check before TriggerEvent can reserve a slot, create staging or pin
-   // prebuffer files. Metadata-only logging intentionally bypasses this.
+   // Both checks precede slot reservation, staging creation and prebuffer pinning.
+   // Metadata-only logging intentionally bypasses capture admission policies.
    if storageErr=checkRecordingStorage(cam.RecordDir);storageErr!=nil {return}
+   if storageErr=checkEventStagingAdmission(r.Context(),cam.RecordDir);storageErr!=nil {return}
    if err:=bm.TriggerEvent(event);err!=nil {
     switch {case errors.Is(err,errEventBusy):status=429;case errors.Is(err,errEventStopped):status=503;default:status=500}
     return

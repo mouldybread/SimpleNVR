@@ -111,8 +111,8 @@ func recordingError(w http.ResponseWriter,err error) {
  case errors.Is(err,errCameraMissing):status=404
  case errors.Is(err,errRecordingDisabled):status=409
  case errors.Is(err,errRecordingMode):status=400
- case errors.Is(err,errStorageReserve):status=507
- case errors.Is(err,errRecorderShuttingDown),errors.Is(err,errStorageUnavailable),errors.Is(err,errStoragePolicy):status=503;w.Header().Set("Retry-After","5")
+ case errors.Is(err,errStorageReserve),errors.Is(err,errEventStagingLimit):status=507
+ case errors.Is(err,errRecorderShuttingDown),errors.Is(err,errStorageUnavailable),errors.Is(err,errStoragePolicy),errors.Is(err,errEventStagingUnavailable),errors.Is(err,errEventStagingPolicy):status=503;w.Header().Set("Retry-After","5")
  }
  http.Error(w,err.Error(),status)
 }
