@@ -137,21 +137,9 @@ func runCleanupTicks(ctx context.Context,n *NVR,ticks <-chan time.Time) {
    if !ok || ctx.Err()!=nil {return}
    cleanupEventsFor(ctx,n)
    if ctx.Err()!=nil {return}
-   type target struct {dir string;retention time.Duration}
-   n.mu.RLock()
-   targets:=make([]target,0,len(n.cameras))
-   for _,cam:=range n.cameras {
-    retention,err:=cameraRetentionDuration(cam.RetentionDays);if err!=nil {continue}
-    targets=append(targets,target{cam.RecordDir,retention})
-   }
-   n.mu.RUnlock()
-   // Filesystem work must not hold the camera-registry lock. These are
-   // per-cycle snapshots, not authority to remove staging or recurse.
-   for _,item:=range targets {
+   for _,target:=range snapshotRetentionCleanup(n) {
     if ctx.Err()!=nil {return}
-    cleanupOldRecordingsContext(ctx,item.dir,item.retention)
-    if ctx.Err()!=nil {return}
-    cleanupTempFiles(item.dir)
+    cleanupRetentionSnapshot(ctx,n,target)
    }
   }
  }

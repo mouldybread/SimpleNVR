@@ -1,0 +1,11 @@
+# Retention updates versus periodic deletion
+
+Periodic published-media cleanup now snapshots camera ID, object identity, directory, raw retention days and validated duration. Immediately before a camera's deletion pass, it revalidates all of them against the live registry. Removed/replaced cameras, changed directories, changed retention values and invalid policies cause that snapshot to be skipped. A later tick can use a fresh snapshot.
+
+Single-camera and bulk retention API mutations use the exclusive side of retentionPolicyMu; a validated published-media cleanup pass holds its shared side until filesystem work returns. The lock order is retentionPolicyMu before NVR.mu. The registry lock is released before filesystem operations. Thus a retention update that wins first invalidates the old snapshot, while an already-running deletion pass finishes before the update can take effect. An update cannot restore files already deleted before it took effect.
+
+This intentionally serializes retention updates against each camera's deletion pass. Slow filesystem operations can delay retention API responses and cannot be interrupted by mutex cancellation. Shutdown remains cooperative and joins cleanup within the existing overall budget. Waiting cleanup rechecks cancellation after obtaining the policy lock.
+
+This addresses the concurrent API-policy snapshot limitation previously listed in RETENTION_POLICY.md. It does not make explicit camera deletion, arbitrary internal field writes, concurrent configuration reload, or external directory replacement transactional with retention cleanup. Startup load is not a supported live reload path. Manual orphan cleanup remains an explicit destructive operation with its existing recovery-artifact guards. Root .tmp files and nested staging retain their protections; no quota, staging expiry or disk-full recovery is added.
+
+Regression tests cover single/bulk retention increases, replacement/removal/path/policy invalidation, exclusion of policy writers during an injected deletion phase, registry-lock release during that phase, cancellation and continued deletion under fresh valid policies. These tests do not simulate blocked filesystem syscalls. Keep the audit branch unmerged.

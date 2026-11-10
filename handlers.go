@@ -85,11 +85,10 @@ func updateRetentionHandler(w http.ResponseWriter,r *http.Request) {
  var data struct {ID string `json:"id"`;RetentionDays int `json:"retention_days"`}
  if err:=json.NewDecoder(r.Body).Decode(&data);err!=nil {http.Error(w,"Invalid request",400);return}
  if data.RetentionDays<1 || data.RetentionDays>maxCameraRetentionDays {http.Error(w,"Retention days must be between 1 and 365",400);return}
- nvr.mu.Lock()
- cam,exists:=nvr.cameras[data.ID]
- if exists {cam.RetentionDays=data.RetentionDays}
- nvr.mu.Unlock()
- if !exists {http.Error(w,"Camera not found",404);return}
+ if err:=setCameraRetention(nvr,data.ID,data.RetentionDays);err!=nil {
+  status:=400;if err==errCameraMissing {status=404}
+  http.Error(w,err.Error(),status);return
+ }
  finishCameraUpdate(w,r)
 }
 
@@ -97,9 +96,7 @@ func updateRetentionAllHandler(w http.ResponseWriter,r *http.Request) {
  var data struct {RetentionDays int `json:"retention_days"`}
  if err:=json.NewDecoder(r.Body).Decode(&data);err!=nil {http.Error(w,"Invalid request",400);return}
  if data.RetentionDays<1 || data.RetentionDays>maxCameraRetentionDays {http.Error(w,"Retention days must be between 1 and 365",400);return}
- nvr.mu.Lock()
- for _,cam:=range nvr.cameras {cam.RetentionDays=data.RetentionDays}
- nvr.mu.Unlock()
+ if err:=setAllCameraRetention(nvr,data.RetentionDays);err!=nil {http.Error(w,err.Error(),400);return}
  finishCameraUpdate(w,r)
 }
 
