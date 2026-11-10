@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"net/url"
 	"encoding/json"
 	"fmt"
@@ -8,7 +9,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -240,6 +240,7 @@ func deleteAllRecordingsHandler(w http.ResponseWriter, r *http.Request) {
 
 // handleDownload - Concatenates recordings and streams to client
 func handleDownload(w http.ResponseWriter, r *http.Request) {
+	if r.Context().Err()!=nil {return}
 	cameraID := r.URL.Query().Get("camera_id")
 	startTimeStr := r.URL.Query().Get("start_time")
 	endTimeStr := r.URL.Query().Get("end_time")
@@ -280,6 +281,7 @@ func handleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, file := range files {
+		if r.Context().Err()!=nil {return}
 		filename := filepath.Base(file)
 		if len(filename) < 15 {
 			continue
@@ -315,12 +317,17 @@ func handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer os.Remove(tmpFile.Name())
+	defer tmpFile.Close()
 
 	for _, file := range recordingFiles {
-		absPath, _ := filepath.Abs(file)
-		fmt.Fprintf(tmpFile, "file '%s'\n", absPath)
+		if r.Context().Err()!=nil {return}
+		absPath, err := filepath.Abs(file)
+		if err!=nil {http.Error(w,"Invalid recording path",500);return}
+		if _,err=fmt.Fprintf(tmpFile, "file '%s'\n", absPath);err!=nil {http.Error(w,"Failed to write temp file",500);return}
 	}
-	tmpFile.Close()
+
+	if err=tmpFile.Close();err!=nil {http.Error(w,"Failed to close temp file",500);return}
+	if r.Context().Err()!=nil {return}
 
 	// Output filename
 	outputFilename := fmt.Sprintf("%s_%s.mp4",
@@ -331,8 +338,9 @@ func handleDownload(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "video/mp4")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", outputFilename))
 
-	// Run FFmpeg to concatenate and stream directly to response
-	cmd := exec.Command("ffmpeg",
+	// Run synchronously: the gate joins this handler only after Run reaps FFmpeg
+	// and deferred concat-list cleanup completes.
+	cmd := ffmpegCommand(r.Context(),
 		"-f", "concat",
 		"-safe", "0",
 		"-i", tmpFile.Name(),
@@ -347,68 +355,53 @@ func handleDownload(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Starting FFmpeg concatenation for %s (%d files)", camera.Name, len(recordingFiles))
 	if err := cmd.Run(); err != nil {
-		log.Printf("FFmpeg error for camera %s: %v", camera.Name, err)
+		log.Printf("FFmpeg export ended for camera %s: %v", camera.Name, err)
 	} else {
 		log.Printf("Download completed successfully for camera %s", camera.Name)
 	}
 }
 
+var liveProxyClient = &http.Client{
+ Transport:&http.Transport{
+  Proxy:http.ProxyFromEnvironment,
+  DialContext:(&net.Dialer{Timeout:10*time.Second,KeepAlive:30*time.Second}).DialContext,
+  TLSHandshakeTimeout:10*time.Second,
+  ResponseHeaderTimeout:10*time.Second,
+  IdleConnTimeout:90*time.Second,
+  ForceAttemptHTTP2:true,
+ },
+ CheckRedirect:func(_ *http.Request,_ []*http.Request) error {return http.ErrUseLastResponse},
+}
+
+func relayLiveStream(w http.ResponseWriter,r *http.Request,target string,client *http.Client) {
+ req,err:=http.NewRequestWithContext(r.Context(),r.Method,target,nil)
+ if err!=nil {http.Error(w,"Failed to create proxy request",500);return}
+ for _,key:=range []string{"Accept","Range"} {if value:=r.Header.Get(key);value!="" {req.Header.Set(key,value)}}
+ resp,err:=client.Do(req)
+ if err!=nil {
+  if r.Context().Err()==nil {http.Error(w,"Failed to connect to stream",502)}
+  return
+ }
+ defer resp.Body.Close()
+ for _,key:=range []string{"Content-Type","Content-Length","Content-Range","Accept-Ranges"} {
+  if value:=resp.Header.Get(key);value!="" {w.Header().Set(key,value)}
+ }
+ w.Header().Set("Cache-Control","no-store")
+ w.WriteHeader(resp.StatusCode)
+ if r.Method!=http.MethodHead {_,_=io.Copy(w,resp.Body)}
+}
+
 // streamProxyHandler - Proxy live streams from go2rtc
 func streamProxyHandler(w http.ResponseWriter, r *http.Request) {
-	cameraName := r.URL.Path[len("/api/stream/"):]
-	if cameraName == "" {
-		http.Error(w, "Camera name required", http.StatusBadRequest)
-		return
-	}
-
-	// Find the camera to extract the correct hostname from its saved RTSP URL
-	nvr.mu.RLock()
-	var targetCam *Camera
-	for _, cam := range nvr.cameras {
-		if cam.Name == cameraName {
-			targetCam = cam
-			break
-		}
-	}
-	nvr.mu.RUnlock()
-
-	if targetCam == nil {
-		http.Error(w, "Camera not found", http.StatusNotFound)
-		return
-	}
-
-	// Dynamically reconstruct the proxy URL using the host from the RTSP string
-	parsedUrl, err := url.Parse(targetCam.RTSPUrl)
-	host := "go2rtc"
-	if err == nil && parsedUrl.Hostname() != "" {
-		host = parsedUrl.Hostname()
-	}
-
-	go2rtcURL := fmt.Sprintf("http://%s:1984/api/stream.mp4?src=%s", host, cameraName)
-	log.Printf("Proxying stream for camera: %s from %s", cameraName, go2rtcURL)
-
-	proxyReq, err := http.NewRequest("GET", go2rtcURL, nil)
-	if err != nil {
-		http.Error(w, "Failed to create proxy request", http.StatusInternalServerError)
-		return
-	}
-
-	proxyReq.Header = r.Header.Clone()
-	client := &http.Client{Timeout: 0}
-	resp, err := client.Do(proxyReq)
-	if err != nil {
-		log.Printf("Failed to connect to go2rtc for camera %s: %v", cameraName, err)
-		http.Error(w, "Failed to connect to stream", http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	for key, values := range resp.Header {
-		for _, value := range values {
-			w.Header().Add(key, value)
-		}
-	}
-
-	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+ cameraName:=strings.TrimPrefix(r.URL.Path,"/api/stream/")
+ if cameraName=="" {http.Error(w,"Camera name required",400);return}
+ nvr.mu.RLock()
+ rtspURL:="";found:=false
+ for _,cam:=range nvr.cameras {if cam.Name==cameraName {rtspURL=cam.RTSPUrl;found=true;break}}
+ nvr.mu.RUnlock()
+ if !found {http.Error(w,"Camera not found",404);return}
+ host:="go2rtc"
+ if parsed,err:=url.Parse(rtspURL);err==nil && parsed.Hostname()!="" {host=parsed.Hostname()}
+ target:=url.URL{Scheme:"http",Host:net.JoinHostPort(host,"1984"),Path:"/api/stream.mp4",RawQuery:url.Values{"src":{cameraName}}.Encode()}
+ relayLiveStream(w,r,target.String(),liveProxyClient)
 }

@@ -21,23 +21,50 @@ type shutdownGate struct {
  mutations sync.WaitGroup
  once sync.Once
  drained chan struct{}
+ jobs map[uint64]context.CancelFunc
+ nextJob uint64
 }
 
-func newShutdownGate(next http.Handler) *shutdownGate {return &shutdownGate{next:next,drained:make(chan struct{})}}
+func newShutdownGate(next http.Handler) *shutdownGate {return &shutdownGate{next:next,drained:make(chan struct{}),jobs:make(map[uint64]context.CancelFunc)}}
 
 func (g *shutdownGate) ServeHTTP(w http.ResponseWriter,r *http.Request) {
  g.mu.Lock()
  if g.closing {g.mu.Unlock();w.Header().Set("Retry-After","5");http.Error(w,"Server shutting down",503);return}
- mutation:=mutationPaths[r.URL.Path]
- if mutation {g.mutations.Add(1)}
+ job:=r.URL.Path=="/api/download" || strings.HasPrefix(r.URL.Path,"/api/stream/")
+ tracked:=mutationPaths[r.URL.Path] || job
+ if tracked {g.mutations.Add(1)}
+ var cancel context.CancelFunc
+ var id uint64
+ if job {
+  var ctx context.Context
+  ctx,cancel=context.WithCancel(r.Context());r=r.WithContext(ctx)
+  g.nextJob++;id=g.nextJob;g.jobs[id]=cancel
+ }
  g.mu.Unlock()
- if mutation {defer g.mutations.Done()}
+ if tracked {defer g.mutations.Done()}
+ if job {
+  callbackDone:=make(chan struct{})
+  stop:=context.AfterFunc(r.Context(),func(){
+   // Closing the upstream alone cannot release a blocked downstream write.
+   _=http.NewResponseController(w).SetWriteDeadline(time.Now())
+   close(callbackDone)
+  })
+  defer func(){
+   if !stop() {<-callbackDone}
+   cancel()
+   g.mu.Lock();delete(g.jobs,id);g.mu.Unlock()
+  }()
+ }
  g.next.ServeHTTP(w,r)
 }
 
 func (g *shutdownGate) beginShutdown() <-chan struct{} {
  g.once.Do(func(){
-  g.mu.Lock();g.closing=true;g.mu.Unlock()
+  g.mu.Lock();g.closing=true
+  cancels:=make([]context.CancelFunc,0,len(g.jobs))
+  for _,cancel:=range g.jobs {cancels=append(cancels,cancel)}
+  g.mu.Unlock()
+  for _,cancel:=range cancels {cancel()}
   go func(){g.mutations.Wait();close(g.drained)}()
  })
  return g.drained
