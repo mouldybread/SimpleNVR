@@ -122,7 +122,7 @@ func probeVideoDuration(ctx context.Context,file *os.File) (time.Duration,error)
  return decodeVideoDuration(output.Bytes())
 }
 
-type recordingInterval struct {CameraID,CameraName,Path string;Start,End time.Time;Size int64}
+type recordingInterval struct {CameraID,CameraName,Path string;Start,End time.Time;Size int64;identity os.FileInfo}
 func intervalsOverlap(start,end,windowStart,windowEnd time.Time) bool {return start.Before(windowEnd) && end.After(windowStart)}
 func collectRecordingIntervals(ctx context.Context,cameras []timelineCamera,window timelineWindow,cache *durationCache) ([]recordingInterval,error) {
  result:=make([]recordingInterval,0)
@@ -154,7 +154,7 @@ func collectRecordingIntervals(ctx context.Context,cameras []timelineCamera,wind
      if err!=nil {return err}
      end:=start.Add(duration)
      if end.Year()>9999 || !end.After(start) {return errRecordingMetadata}
-     if intervalsOverlap(start,end,window.Start,window.End) {result=append(result,recordingInterval{cam.ID,cam.Name,path,start,end,info.Size()})}
+     if intervalsOverlap(start,end,window.Start,window.End) {result=append(result,recordingInterval{cam.ID,cam.Name,path,start,end,info.Size(),info})}
     }
     if readErr==io.EOF {return nil}
     if readErr!=nil {return errRecordingMetadata}

@@ -2,6 +2,7 @@ package main
 
 import (
  "context"
+ "errors"
  "net"
  "net/url"
  "encoding/json"
@@ -51,40 +52,37 @@ func deleteAllRecordingsHandler(w http.ResponseWriter,r *http.Request) {
  w.Header().Set("Content-Type","application/json");json.NewEncoder(w).Encode(map[string]interface{}{"success":true,"deleted":count,"size_mb":float64(size)/(1024*1024)})
 }
 
-func handleDownload(w http.ResponseWriter,r *http.Request) {
+func handleDownload(w http.ResponseWriter,r *http.Request) {serveDownload(w,r,nvr,recordingDurations,exportInputPins)}
+func serveDownload(w http.ResponseWriter,r *http.Request,n *NVR,cache *durationCache,pool *exportInputPool) {
  if r.Context().Err()!=nil {return}
  query:=r.URL.Query()
  if len(query["camera_id"])!=1 || len(query["start_time"])!=1 || len(query["end_time"])!=1 || query.Get("camera_id")=="" {http.Error(w,"One camera_id, start_time and end_time are required",400);return}
  start,err:=time.Parse(time.RFC3339Nano,query.Get("start_time"));if err!=nil {http.Error(w,"Invalid start_time",400);return}
  end,err:=time.Parse(time.RFC3339Nano,query.Get("end_time"));if err!=nil || !end.After(start) {http.Error(w,"Invalid end_time or empty/reversed range",400);return}
- nvr.mu.RLock()
- cam,exists:=nvr.cameras[query.Get("camera_id")]
+ n.mu.RLock()
+ cam,exists:=n.cameras[query.Get("camera_id")]
  var camera timelineCamera
  if exists {camera=timelineCamera{cam.ID,cam.Name,cam.RecordDir}}
- nvr.mu.RUnlock()
+ n.mu.RUnlock()
  if !exists {http.Error(w,"Camera not found",404);return}
- ctx,cancel:=context.WithTimeout(r.Context(),recordingMetadataBudget)
- clips,err:=collectRecordingIntervals(ctx,[]timelineCamera{camera},timelineWindow{Start:start.UTC(),End:end.UTC()},recordingDurations)
- cancel()
+ ctx,cancel:=context.WithTimeout(r.Context(),recordingMetadataBudget);defer cancel()
+ clips,err:=collectRecordingIntervals(ctx,[]timelineCamera{camera},timelineWindow{Start:start.UTC(),End:end.UTC()},cache)
  if err!=nil {writeRecordingIntervalError(w,r,err);return}
  if len(clips)==0 {http.Error(w,"No recordings found in time range",404);return}
- tmp,err:=os.CreateTemp("","concat-*.txt")
- if err!=nil {http.Error(w,"Failed to create temp file",500);return}
- defer os.Remove(tmp.Name());defer tmp.Close()
- for _,clip:=range clips {
-  if r.Context().Err()!=nil {return}
-  path,err:=filepath.Abs(clip.Path)
-  // Refuse paths that cannot be safely represented by this concat writer.
-  if err!=nil || strings.ContainsAny(path,"'\\\r\n") {http.Error(w,"Unsupported recording path for export",500);return}
-  if _,err:=fmt.Fprintf(tmp,"file '%s'\n",path);err!=nil {http.Error(w,"Failed to write temp file",500);return}
+ pins,err:=pool.prepare(ctx,clips)
+ cancel()
+ if err!=nil {
+  if errors.Is(err,errExportInputLimit) {http.Error(w,"Too many export clips; reduce the requested time range",413)} else {writeRecordingIntervalError(w,r,err)}
+  return
  }
- if err:=tmp.Close();err!=nil {http.Error(w,"Failed to close temp file",500);return}
- if r.Context().Err()!=nil {return}
+ // Close only after Run returns, including failure/cancellation paths. The
+ // shutdown gate joins the handler after this deferred cleanup has completed.
+ defer pins.Close()
+ cmd,err:=pins.command(r.Context())
+ if err!=nil {writeRecordingIntervalError(w,r,err);return}
  name:=fmt.Sprintf("%s_%s.mp4",sanitizeFilename(camera.Name),start.UTC().Format("20060102_150405"))
  w.Header().Set("Content-Type","video/mp4");w.Header().Set("Content-Disposition",fmt.Sprintf("attachment; filename=%q",name))
- w.Header().Set("X-Recording-Duration-Policy","probed-media")
- // Selection is duration-aware; trimming, gap and duplicate-clip policy are not.
- cmd:=ffmpegCommand(r.Context(),"-f","concat","-safe","0","-i",tmp.Name(),"-c","copy","-f","mp4","-movflags","frag_keyframe+empty_moov","pipe:1")
+ w.Header().Set("X-Recording-Duration-Policy","probed-media");w.Header().Set("X-Export-Input-Policy","pinned-descriptors")
  cmd.Stdout=w;cmd.Stderr=os.Stderr
  if err:=cmd.Run();err!=nil {log.Printf("FFmpeg export ended for camera %s: %v",camera.ID,err)}
 }
