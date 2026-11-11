@@ -6,7 +6,8 @@ import json
 import os
 import subprocess
 from pathlib import Path
-from urllib.parse import urlencode
+from collections import deque
+from urllib.parse import urlencode, urlsplit
 from playwright.async_api import async_playwright
 
 BASE = "2026-11-10T12:00:"
@@ -38,6 +39,43 @@ async def wait_pids(container, present):
     raise AssertionError("runtime FFmpeg ownership did not reach expected state")
 
 
+async def playback_snapshot(page):
+    return await page.evaluate("""() => {
+        const finite=value=>Number.isFinite(value)?value:null;
+        const players=typeof videoPlayers==='undefined'?[]:videoPlayers;
+        return {
+            gridUpdating:typeof isUpdatingGrid==='undefined'?null:isUpdatingGrid,
+            playingIntent:typeof isPlaying==='undefined'?null:isPlaying,
+            pendingSeek:typeof pendingSeekTime==='undefined'?null:pendingSeekTime,
+            generation:typeof seekGeneration==='undefined'?null:seekGeneration,
+            sessions:typeof playbackSessions==='undefined'?null:playbackSessions.size,
+            selected:typeof selectedCameras==='undefined'?[]:selectedCameras,
+            segments:typeof timelineSegments==='undefined'?[]:timelineSegments.slice(0,8),
+            players:players.filter(Boolean).slice(0,4).map(video=>({
+                source:video.getAttribute('src'),currentSource:video.currentSrc,
+                connected:video.isConnected,muted:video.muted,paused:video.paused,
+                readyState:video.readyState,networkState:video.networkState,
+                currentTime:finite(video.currentTime),duration:finite(video.duration),
+                error:video.error?{code:video.error.code,message:video.error.message}:null,
+                mp4Support:video.canPlayType('video/mp4'),
+                h264Support:video.canPlayType('video/mp4; codecs="avc1.64000a"')
+            })),
+            visibleText:document.body.innerText.slice(-2000)
+        };
+    }""")
+
+
+async def private_media_preflight(context, origin):
+    path = "/recordings/id_browser/20261110_120000_fixture.mp4"
+    response = await context.request.get(origin + path, headers={"Range": "bytes=0-11"})
+    body = await response.body()
+    result = {"status": response.status, "type": response.headers.get("content-type"), "content_range": response.headers.get("content-range"), "prefix_hex": body[:12].hex()}
+    assert response.status == 206, result
+    assert response.headers.get("content-type", "").split(";")[0] == "video/mp4", result
+    assert len(body) == 12 and body[4:8] == b"ftyp", result
+    return result
+
+
 async def application_ready(page, origin):
     await page.goto(origin + "/")
     await page.wait_for_function("typeof allCameras !== 'undefined' && allCameras.some(c => c.id === 'id_browser')")
@@ -45,6 +83,7 @@ async def application_ready(page, origin):
     await picker.fill("2026-11-10")
     await picker.dispatch_event("change")
     await page.wait_for_function("timelineSegments.some(s => s.camera_id === 'id_browser' && s.start_time === '2026-11-10T12:00:00Z')")
+    await page.wait_for_function("!isUpdatingGrid && timelineAbort === null && loadDataTimeoutId === null && videoPlayers.length === 1")
     assert await page.locator("#video-grid video").count() == 1
 
 
@@ -67,11 +106,23 @@ async def run(args):
         browser = await p.chromium.launch(headless=True)
         report["browser"] = browser.version
         context = await browser.new_context(ignore_https_errors=True, accept_downloads=True, timezone_id="UTC")
+        page = None
+        errors = []
+        media_network = deque(maxlen=100)
+        def remember_response(response):
+            path = urlsplit(response.url).path
+            if path.startswith('/recordings/') or path == '/api/timeline/recordings':
+                media_network.append({"event":"response","path":path,"status":response.status,"resource_type":response.request.resource_type})
+        def remember_failure(request):
+            path = urlsplit(request.url).path
+            if path.startswith('/recordings/') or path == '/api/timeline/recordings':
+                media_network.append({"event":"requestfailed","path":path,"failure":request.failure})
         try:
             context.set_default_timeout(30000)
             page = await context.new_page()
-            errors = []
-            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.on("pageerror", lambda error: errors.append(str(error)[:1000]) if len(errors)<30 else None)
+            page.on("response", remember_response)
+            page.on("requestfailed", remember_failure)
             await page.goto(args.origin + "/auth/login")
             await page.locator('[name="username"]').fill("ci-browser")
             await page.locator('[name="password"]').fill(password)
@@ -80,10 +131,17 @@ async def run(args):
             checks.append("real-login-form-session")
             await application_ready(page, args.origin)
             checks.append("real-camera-template-and-timeline")
+            report["private_media_preflight"] = await private_media_preflight(context, args.origin)
+            checks.append("authenticated-private-media-range-preflight")
+            report["before_first_seek"] = await playback_snapshot(page)
 
             await page.evaluate("() => {videoPlayers[0].muted=true; seekToTime(new Date('2026-11-10T12:00:01Z'));}")
-            await page.wait_for_function("videoPlayers[0]?.readyState >= 2 && videoPlayers[0].currentTime > 1.3 && !videoPlayers[0].paused")
-            frames = await page.evaluate("() => new Promise(resolve => videoPlayers[0].requestVideoFrameCallback((_,m) => resolve({frames:m.presentedFrames,width:m.width,height:m.height})))")
+            await page.wait_for_function("videoPlayers[0]?.error || (videoPlayers[0]?.readyState >= 2 && videoPlayers[0].currentTime > 1.3 && !videoPlayers[0].paused)")
+            state = await playback_snapshot(page)
+            report["first_playback"] = state
+            video = state["players"][0]
+            assert video["error"] is None and video["readyState"] >= 2 and video["currentTime"] > 1.3 and not video["paused"], state
+            frames = await page.evaluate("() => new Promise((resolve,reject) => {const timer=setTimeout(()=>reject(new Error('No native decoded-frame callback within 5 seconds')),5000);videoPlayers[0].requestVideoFrameCallback((_,m) => {clearTimeout(timer);resolve({frames:m.presentedFrames,width:m.width,height:m.height});});})")
             assert frames["frames"] > 0 and frames["width"] == 256 and frames["height"] == 144
             checks.append("native-h264-playback-decoded-frames")
             await page.evaluate("togglePlayPause()")
@@ -170,8 +228,16 @@ async def run(args):
             report["status"] = "passed"
         except Exception as error:
             report["failure"] = type(error).__name__ + ": " + str(error)[:2000]
+            if page is not None:
+                try:
+                    report["failure_playback_snapshot"] = await asyncio.wait_for(playback_snapshot(page), timeout=5)
+                except Exception as diagnostic_error:
+                    report["diagnostic_failure"] = str(diagnostic_error)[:1000]
             raise
         finally:
+            report["page_errors"] = errors
+            report["media_network"] = list(media_network)
+            print(json.dumps({key:report[key] for key in ["failure", "failure_playback_snapshot", "private_media_preflight", "page_errors", "media_network"] if key in report}, indent=2), flush=True)
             (args.evidence / "runtime-browser-report.json").write_text(json.dumps(report, indent=2) + "\n")
             await context.close()
             await browser.close()
