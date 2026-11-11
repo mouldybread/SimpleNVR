@@ -72,8 +72,8 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/simplenvr-browser-venv"
           . "$RUNNER_TEMP/simplenvr-browser-venv/bin/activate"
           python -m pip install 'playwright==1.56.0'
-          python -m playwright install --with-deps chromium
-      - name: Real runtime HTTPS exports and Chromium playback/downloads
+          python -m playwright install --with-deps chrome
+      - name: Real runtime HTTPS exports and Chrome playback/downloads
         shell: bash
         run: |
           set -euo pipefail

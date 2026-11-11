@@ -103,8 +103,9 @@ async def run(args):
     checks = report["checks_passed"]
     password = os.environ["SIMPLENVR_E2E_PASSWORD"]
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await p.chromium.launch(channel="chrome", headless=True)
         report["browser"] = browser.version
+        report["browser_channel"] = "chrome"
         context = await browser.new_context(ignore_https_errors=True, accept_downloads=True, timezone_id="UTC")
         page = None
         errors = []
@@ -120,6 +121,11 @@ async def run(args):
         try:
             context.set_default_timeout(30000)
             page = await context.new_page()
+            report["codec_support"] = await page.evaluate("""() => {
+                const video=document.createElement('video');
+                return {h264:video.canPlayType('video/mp4; codecs="avc1.64000a"'),aac:video.canPlayType('audio/mp4; codecs="mp4a.40.2"')};
+            }""")
+            assert report["codec_support"]["h264"], "Selected Chrome channel lacks required H264 support: " + json.dumps(report["codec_support"])
             page.on("pageerror", lambda error: errors.append(str(error)[:1000]) if len(errors)<30 else None)
             page.on("response", remember_response)
             page.on("requestfailed", remember_failure)
@@ -237,7 +243,7 @@ async def run(args):
         finally:
             report["page_errors"] = errors
             report["media_network"] = list(media_network)
-            print(json.dumps({key:report[key] for key in ["failure", "failure_playback_snapshot", "private_media_preflight", "page_errors", "media_network"] if key in report}, indent=2), flush=True)
+            print(json.dumps({key:report[key] for key in ["browser", "browser_channel", "codec_support", "failure", "failure_playback_snapshot", "private_media_preflight", "page_errors", "media_network"] if key in report}, indent=2), flush=True)
             (args.evidence / "runtime-browser-report.json").write_text(json.dumps(report, indent=2) + "\n")
             await context.close()
             await browser.close()
