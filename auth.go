@@ -15,7 +15,6 @@ import (
  "path/filepath"
  "strings"
  "sync"
- "syscall"
  "time"
  "unicode"
  "unicode/utf8"
@@ -172,24 +171,7 @@ func (a *authManager) logout(w http.ResponseWriter, r *http.Request) {
 }
 
 func servePrivateRecording(w http.ResponseWriter, r *http.Request) {
- parts := strings.Split(strings.TrimPrefix(r.URL.Path,"/recordings/"),"/")
- if len(parts)!=2 || parts[1]=="" || strings.ContainsAny(parts[1],"\\") || filepath.Ext(parts[1])!=".mp4" { http.NotFound(w,r); return }
- nvr.mu.RLock()
- cam, exists := nvr.cameras[parts[0]]
- dir := ""
- if exists { dir = cam.RecordDir }
- nvr.mu.RUnlock()
- if !exists || validateCameraPath(parts[0],dir)!=nil { http.NotFound(w,r); return }
- root, err := os.OpenRoot("/recordings")
- if err != nil { http.NotFound(w,r); return }
- defer root.Close()
- f, err := root.OpenFile(parts[0]+"/"+parts[1],os.O_RDONLY|syscall.O_NOFOLLOW,0)
- if err != nil { http.NotFound(w,r); return }
- defer f.Close()
- info, err := f.Stat()
- if err != nil || !info.Mode().IsRegular() { http.NotFound(w,r); return }
- w.Header().Set("Content-Type","video/mp4")
- http.ServeContent(w,r,info.Name(),info.ModTime(),f)
+ servePrivateRecordingAt(w,r,nvr,"/recordings")
 }
 
 func authCommand(args []string) error {
