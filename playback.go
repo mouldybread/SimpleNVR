@@ -4,7 +4,6 @@ import (
  "context"
  "errors"
  "net"
- "net/url"
  "encoding/json"
  "fmt"
  "io"
@@ -13,7 +12,6 @@ import (
  "os"
  "path/filepath"
  "sort"
- "strings"
  "time"
 )
 
@@ -99,24 +97,23 @@ var liveProxyClient=&http.Client{
  CheckRedirect:func(_ *http.Request,_ []*http.Request) error {return http.ErrUseLastResponse},
 }
 func relayLiveStream(w http.ResponseWriter,r *http.Request,target string,client *http.Client) {
+ w.Header().Set("Cache-Control","no-store");w.Header().Set("X-Content-Type-Options","nosniff")
  req,err:=http.NewRequestWithContext(r.Context(),r.Method,target,nil)
  if err!=nil {http.Error(w,"Failed to create proxy request",500);return}
  for _,key:=range []string{"Accept","Range"} {if value:=r.Header.Get(key);value!="" {req.Header.Set(key,value)}}
  resp,err:=client.Do(req)
  if err!=nil {if r.Context().Err()==nil {http.Error(w,"Failed to connect to stream",502)};return}
  defer resp.Body.Close()
- for _,key:=range []string{"Content-Type","Content-Length","Content-Range","Accept-Ranges"} {if value:=resp.Header.Get(key);value!="" {w.Header().Set(key,value)}}
- w.Header().Set("Cache-Control","no-store");w.WriteHeader(resp.StatusCode)
+ if resp.StatusCode==http.StatusRequestedRangeNotSatisfiable {
+  if value,ok:=safeUnsatisfiedStreamRange(resp.Header.Get("Content-Range"));ok {
+   w.Header().Set("Content-Range",value);http.Error(w,"Requested stream range unavailable",416);return
+  }
+ }
+ if resp.StatusCode!=http.StatusOK && resp.StatusCode!=http.StatusPartialContent {http.Error(w,"Unexpected upstream stream response",502);return}
+ if !liveStreamMediaType(resp.Header.Get("Content-Type")) {http.Error(w,"Unexpected upstream stream media type",502);return}
+ w.Header().Set("Content-Type","video/mp4")
+ for _,key:=range []string{"Content-Length","Content-Range","Accept-Ranges"} {if value:=resp.Header.Get(key);value!="" {w.Header().Set(key,value)}}
+ w.WriteHeader(resp.StatusCode)
  if r.Method!=http.MethodHead {_,_=io.Copy(w,resp.Body)}
 }
-func streamProxyHandler(w http.ResponseWriter,r *http.Request) {
- name:=strings.TrimPrefix(r.URL.Path,"/api/stream/")
- if name=="" {http.Error(w,"Camera name required",400);return}
- nvr.mu.RLock();raw:="";found:=false
- for _,cam:=range nvr.cameras {if cam.Name==name {raw=cam.RTSPUrl;found=true;break}}
- nvr.mu.RUnlock()
- if !found {http.Error(w,"Camera not found",404);return}
- host:="go2rtc";if parsed,err:=url.Parse(raw);err==nil && parsed.Hostname()!="" {host=parsed.Hostname()}
- target:=url.URL{Scheme:"http",Host:net.JoinHostPort(host,"1984"),Path:"/api/stream.mp4",RawQuery:url.Values{"src":{name}}.Encode()}
- relayLiveStream(w,r,target.String(),liveProxyClient)
-}
+func streamProxyHandler(w http.ResponseWriter,r *http.Request) {serveLiveProxy(w,r,nvr,liveProxyClient)}

@@ -1,0 +1,25 @@
+# Live-proxy target and response boundaries
+
+## Findings and scoped remediation
+
+Preparation inspected playback.go, http_jobs_test.go and auth_test.go at c9358ba. The selected private-media changes remain intact. Three source-level gaps are addressed in this separate draft: map-order-dependent selection for duplicate camera names, silent go2rtc fallback when a stored RTSP URL cannot supply a usable host, and relaying arbitrary upstream content types/error bodies through the session-authenticated NVR origin.
+
+live_proxy.go resolves exactly one matching camera, snapshots its URL under NVR.mu and releases the lock before parsing or network work. Missing cameras return 404; ambiguous names return 409; malformed/non-rtsp(s), opaque, fragmented, missing-host, malformed bracket-address or invalid-port sources return 503. These errors use fixed text, not credential-bearing URLs. GET/HEAD and a nonempty stream route are required. Camera-ID migration is not added; duplicate names still exist elsewhere and remain unresolved for event attribution.
+
+For a valid stored rtsp/rtsps URL, the destination remains HTTP to that host on port 1984 at /api/stream.mp4, with one encoded src value containing the selected camera name. Stored userinfo, RTSP port/path/query and caller query do not select HTTP credentials, destination paths or extra query fields. IPv4, DNS names, IPv6 and scoped IPv6 remain supported by this policy. rtsps does not imply HTTPS to port 1984; that pre-existing go2rtc endpoint convention is unchanged.
+
+The relay admits only HTTP 200/206 with a parseable video/mp4 content type, then normalizes the downstream type to video/mp4. Missing/other/malformed types, redirects and unexpected statuses return a fixed 502 without relaying the upstream body. A 416 with strictly validated bytes */N metadata returns a fixed plain-text 416 and that Content-Range; malformed metadata returns 502. It does not validate the entire MP4 or promise complete/decodable media. Response Cache-Control is no-store and nosniff is explicit, including failures.
+
+Request headers remain limited to Accept and Range; browser Cookie, Authorization, Proxy-Authorization, forwarding headers and hop-by-hop headers are not copied. Response cookies, Location, Content-Disposition and hop-by-hop headers are not copied. The existing production no-redirect policy is preserved. Unexpected upstream HTML is no longer relayed as HTML; this is not a whole-application XSS clearance.
+
+## Compatibility and remaining trust decisions
+
+Live sources must have unique camera names, valid rtsp/rtsps URLs, and an upstream endpoint reporting video/mp4 on successful 200/206 responses. Previously tolerated malformed/non-RTSP URLs, untyped/application-octet-stream responses, redirects and arbitrary upstream error-body/status pass-through now fail closed. Check the actual deployed go2rtc response before qualification. No automatic camera rename, configuration rewrite, alternate MIME fallback or arbitrary upstream error excerpt is added.
+
+The configured administrator still chooses camera hosts and discovery URLs. Private/loopback addresses are intentional in this LAN NVR. This is not an IP allowlist, DNS-rebinding defense, address pinning, port-1984 service-identity check or general SSRF prevention. Environment-proxy behavior and its configured credentials remain unchanged and trusted; inbound Proxy-Authorization filtering does not remove credentials deliberately configured for an outbound environment proxy. go2rtc discovery/network policy is not modified. Registry snapshots are not camera-deletion leases. Other proxy/SSRF, destructive-path, credential and lock-order review remains open.
+
+## Regression scope and evidence
+
+New tests cover duplicate/missing/nil camera entries, malformed URLs/ports/bracket addresses, safe IPv6/credential/query target construction, no transport access on rejection, route/method errors, session-only media authorization and denial of event-bearer access. Actual loopback HTTP fixtures cover media success/HEAD/ranges, MIME parameters, hostile HTML/missing/malformed types, redirects, upstream errors and sanitized 416 responses. The injected-transport target tests are not live DNS or camera acceptance. Existing header and shutdown/client-disconnect tests remain separate; the stalled-body fixture explicitly declares MP4 so MIME rejection cannot mask its body-cancellation scenario.
+
+The draft changes playback.go, adds live_proxy.go/live_proxy_test.go, updates the one existing HTTP fixture, and documents acceptance scope. No modules, CI wiring, media files, evidence deletion or recovery automation are added. Go/gofmt and a Go parser are unavailable in preparation, so new tests have not run. Existing source blob hashes and patch round-trip checks are preparation evidence only, not compilation or tests. The base c9358ba was still being validated during preparation; the user subsequently reported it green. This new batch is not covered by that result. Keep the branch unmerged and require exact-action approval before pushing this draft.

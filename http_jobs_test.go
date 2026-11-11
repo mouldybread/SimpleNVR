@@ -59,7 +59,7 @@ func TestProxyJobShutdownCancelsHeadersAndBody(t *testing.T) {
  for _,bodyStall:=range []bool{false,true} {t.Run(fmt.Sprint(bodyStall),func(t *testing.T){
   entered:=make(chan struct{});disconnected:=make(chan struct{})
   upstream:=httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
-   if bodyStall {w.WriteHeader(200);io.WriteString(w,"partial");w.(http.Flusher).Flush()}
+   if bodyStall {w.Header().Set("Content-Type","video/mp4");w.WriteHeader(200);io.WriteString(w,"partial");w.(http.Flusher).Flush()}
    close(entered);<-r.Context().Done();close(disconnected)
   }));defer upstream.Close()
   gate:=newShutdownGate(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){relayLiveStream(w,r,upstream.URL,upstream.Client())}))
