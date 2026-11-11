@@ -74,9 +74,9 @@ func shutdownApplication(ctx context.Context,n *NVR,gate *shutdownGate,server *h
   if err!=nil {closeErr:=server.Close();if errors.Is(err,context.DeadlineExceeded) && ctx.Err()==nil {err=closeErr} else {err=errors.Join(err,closeErr)}}
   httpDone<-err
  }()
- done:=make(chan error,1)
- go func(){<-workersDone;<-mutationsDone;httpErr:=<-httpDone;if persist==nil {done<-errors.Join(httpErr,errors.New("shutdown persistence callback missing"));return};done<-errors.Join(httpErr,persist())}()
- select {case err:=<-done:return err;case <-ctx.Done():if server!=nil {server.Close()};return ctx.Err()}
+ err:=completeApplicationShutdown(ctx,workersDone,mutationsDone,httpDone,persist)
+ if ctx.Err()!=nil {if server!=nil {server.Close()};return errors.Join(err,ctx.Err())}
+ return err
 }
 func runAuthenticatedServer(ctx context.Context,n *NVR,gate *shutdownGate,server *http.Server,cert,key string) error {
  var serveErr error;var serveDone chan error;received:=false

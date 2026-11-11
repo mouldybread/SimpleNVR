@@ -62,6 +62,9 @@ jobs:
           git diff --exit-code -- go.mod go.sum
       - name: Verify runtime image builds
         run: docker build -t simplenvr-safety-test .
+      - name: Active runtime-container recording, SIGTERM and restart intent
+        shell: bash
+        run: bash tests/active-container-storage.sh simplenvr-safety-test
       - name: Runtime container SIGTERM smoke test
         shell: bash
         run: |
