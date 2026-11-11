@@ -49,14 +49,21 @@ func TestUnreportedActiveSegmentIsNotPinned(t *testing.T) {
  if len(job.preFiles)!=1 {t.Fatal("active segment was admitted")}
 }
 
-func TestEventAdmissionBoundedAndCancellationDrainsStaging(t *testing.T) {
+func TestEventAdmissionBoundedAndCancellationRetainsCheckpoints(t *testing.T) {
  bm:=bufferFixture(t)
  for _,id:=range []string{"one","two"} {if err:=bm.TriggerEvent(bufferTestEvent(id));err!=nil {t.Fatal(err)}}
  if err:=bm.TriggerEvent(bufferTestEvent("three"));!errors.Is(err,errEventBusy) {t.Fatalf("expected capacity error: %v",err)}
  bm.cancel()
  bm.runWorkers(nil,func(job *bufferEvent){t.Error("canceled job executed")})
  if len(bm.slots)!=0 || len(bm.eventChan)!=0 {t.Fatal("canceled jobs leaked slots")}
- entries,err:=os.ReadDir(filepath.Join(bm.camera.RecordDir,"temp"));if err!=nil || len(entries)!=0 {t.Fatal("canceled staging leaked",err)}
+ entries,err:=os.ReadDir(filepath.Join(bm.camera.RecordDir,"temp"));if err!=nil || len(entries)!=2 {t.Fatal("canceled checkpoints lost",err)}
+ seen:=make(map[string]bool)
+ for _,entry:=range entries {
+  m:=readRecoveryTest(t,filepath.Join(bm.camera.RecordDir,"temp",entry.Name()))
+  if m.State!="pinned" || m.PinnedCount!=0 || len(m.Inputs)!=0 || m.Revision!=3 || m.OutputPublished!="" {t.Fatalf("bad retained checkpoint: %+v",m)}
+  seen[m.EventID]=true
+ }
+ if !seen["one"] || !seen["two"] {t.Fatal("retained event identities changed")}
  if err:=bm.TriggerEvent(bufferTestEvent("late"));!errors.Is(err,errEventStopped) {t.Fatalf("stopped recorder accepted event: %v",err)}
 }
 
@@ -91,4 +98,52 @@ func TestInvalidEventDurationDoesNotReserveSlot(t *testing.T) {
   if err:=bm.TriggerEvent(event);!errors.Is(err,errEventInvalid) {t.Fatal(err)}
  }
  if len(bm.slots)!=0 {t.Fatal("invalid event reserved slot")}
+}
+
+// No consumer makes queue refusal deterministic. Cancellation is synchronized
+// after slot acquisition but before pinning finishes, not with a timing guess.
+func TestEventQueueRefusalAndCancellationRetainCheckpoints(t *testing.T) {
+ for _,pins:=range []bool{false,true} {
+  for _,cancelDuringPin:=range []bool{false,true} {
+   name:="no-pins";if pins {name="pins"};if cancelDuringPin {name+="/canceled"} else {name+="/refused"}
+   t.Run(name,func(t *testing.T){
+    bm:=bufferFixture(t)
+    bm.eventChan=make(chan *bufferEvent)
+    source:=filepath.Join(bm.camera.RecordDir,"source.mp4")
+    content:=strings.Repeat("p",2048)
+    if pins {
+     if err:=os.WriteFile(source,[]byte(content),0600);err!=nil {t.Fatal(err)}
+     now:=time.Now().UTC();bm.registerCompleted(source,now.Add(-time.Second),now)
+    }
+    want:=errEventBusy
+    var got error
+    if cancelDuringPin {
+     want=errEventStopped
+     bm.bufferMutex.Lock()
+     result:=make(chan error,1)
+     go func(){result<-bm.TriggerEvent(bufferTestEvent("unprocessed"))}()
+     deadline:=time.Now().Add(5*time.Second)
+     for len(bm.slots)==0 && time.Now().Before(deadline) {time.Sleep(time.Millisecond)}
+     admitted:=len(bm.slots)==1
+     bm.cancel()
+     bm.bufferMutex.Unlock()
+     select {case got=<-result:case <-time.After(5*time.Second):t.Fatal("admission did not join")}
+     if !admitted {t.Fatal("admission never acquired slot")}
+    } else {got=bm.TriggerEvent(bufferTestEvent("unprocessed"))}
+    if !errors.Is(got,want) {t.Fatalf("admission error=%v, want %v",got,want)}
+    if len(bm.slots)!=0 || len(bm.eventChan)!=0 {t.Fatal("unprocessed job leaked capacity")}
+    entries,err:=os.ReadDir(filepath.Join(bm.camera.RecordDir,"temp"));if err!=nil || len(entries)!=1 {t.Fatal("checkpoint staging lost",err)}
+    dir:=filepath.Join(bm.camera.RecordDir,"temp",entries[0].Name())
+    m:=readRecoveryTest(t,dir)
+    count:=0;if pins {count=1}
+    if m.EventID!="unprocessed" || m.CameraID!=bm.camera.ID || m.State!="pinned" || m.Revision!=3 || m.PinnedCount!=count || len(m.Inputs)!=count || m.OutputPublished!="" {t.Fatalf("bad retained checkpoint: %+v",m)}
+    if _,err:=os.Stat(filepath.Join(dir,"event.mp4"));!os.IsNotExist(err) {t.Fatal("unprocessed event acquired output",err)}
+    if pins {
+     got,err:=os.ReadFile(source);if err!=nil || string(got)!=content {t.Fatal("source changed",err)}
+     bm.pruneBefore(time.Now().UTC().Add(time.Second))
+     got,err=os.ReadFile(filepath.Join(dir,"pre_000.mp4"));if err!=nil || string(got)!=content {t.Fatal("retained pin lost after pruning",err)}
+    }
+   })
+  }
+ }
 }

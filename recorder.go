@@ -69,6 +69,7 @@ func recordCameraEventBased(ctx context.Context,cam *Camera) {
 }
 
 // All Add calls finish before Wait. Event workers never spawn untracked work.
+// Unprocessed jobs retain their recovery checkpoint even without prebuffer pins.
 func (bm *BufferManager) runWorkers(tasks []func(),handle func(*bufferEvent)) {
  var children sync.WaitGroup
  children.Add(len(tasks)+eventWorkers)
@@ -78,13 +79,13 @@ func (bm *BufferManager) runWorkers(tasks []func(),handle func(*bufferEvent)) {
   for {select {
   case <-bm.ctx.Done():return
   case job:=<-bm.eventChan:
-   func(){defer bm.releaseJob(job);if bm.ctx.Err()==nil {handle(job)} else {job.keepStaging=len(job.preFiles)>0}}()
+   func(){defer bm.releaseJob(job);if bm.ctx.Err()==nil {handle(job)} else {job.keepStaging=true}}()
   }}
  }()}
  <-bm.ctx.Done()
  bm.queueMu.Lock();bm.stopping=true;bm.cancel();bm.queueMu.Unlock()
  children.Wait()
- for {select {case job:=<-bm.eventChan:job.keepStaging=len(job.preFiles)>0;bm.releaseJob(job);default:return}}
+ for {select {case job:=<-bm.eventChan:job.keepStaging=true;bm.releaseJob(job);default:return}}
 }
 
 func (bm *BufferManager) TriggerEvent(event Event) error {
@@ -96,8 +97,8 @@ func (bm *BufferManager) TriggerEvent(event Event) error {
  if err!=nil {<-bm.slots;return fmt.Errorf("pin completed prebuffer: %w",err)}
  select {
  case bm.eventChan<-job:return nil
- case <-bm.ctx.Done():job.keepStaging=len(job.preFiles)>0;bm.releaseJob(job);return errEventStopped
- default:job.keepStaging=len(job.preFiles)>0;bm.releaseJob(job);return errEventBusy
+ case <-bm.ctx.Done():job.keepStaging=true;bm.releaseJob(job);return errEventStopped
+ default:job.keepStaging=true;bm.releaseJob(job);return errEventBusy
  }
 }
 

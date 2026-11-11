@@ -4,7 +4,13 @@ Keep fix/recording-safety-audit unmerged. Passing CI or successfully pushing a b
 
 ## Current evidence
 
-User-reported CI is green through 26a7bc0. Its preparation ran full-script Node syntax plus new failure/updated lifecycle stub suites in UTC and America/Chicago, not Go or browser integration. This recovery-inspection batch has not run Go compilation, vet, race tests or live-system validation. Re-record evidence for each exact committed SHA; never carry a prior green result forward.
+User-reported Safety verification is green through 2074785f3fb924f8a8b191903ce314cc2cdc4999 (2074785), including the mandatory isolated tmpfs storage-failure step. Results were reported by the user, not independently inspected Actions logs. Later reported-green batches after 26a7bc0 include recovery inspection (1cff006), no-replace publication (607bf98), HTTPS export lifecycle (117ac28), forced render cancellation (f0c2cb7) and isolated storage failures (2074785).
+
+Historical preparation-time nonexecution remains historical: the 26a7bc0 preparation ran full-script Node syntax and failure/lifecycle stub suites in UTC and America/Chicago, not Go or browser integration. Subsequent user-reported CI results do not turn local preparation into local Go execution.
+
+The queued-event preservation fix retains initialized recovery staging on cancellation or queue refusal even without prebuffer pins. Regression coverage checks retained checkpoints, released capacity and pinned-input preservation; this preparation has not run Go compilation, gofmt, vet or race tests because Go tooling is unavailable locally. Record CI evidence for its resulting exact commit before treating it as verified. It does not validate active-recorder RTSP interruption, full-server shutdown, production filesystems or real browsers. Broader gates remain unchecked.
+
+Scoped export and storage tests do not close broader acceptance: HTTPS application-shutdown fixtures used server=nil; forced renderer tests used SIGSTOP; tmpfs tests are not deployment-filesystem or power-loss tests. Ordinary graceful render cancellation, probe cancellation, full HTTP-server/runtime-image shutdown with active recorders, remaining runtime storage failures and real-system/browser validation remain outstanding. Re-record evidence for each exact committed SHA; never carry a prior green result forward.
 
 ## Required before proposing a merge
 
