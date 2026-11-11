@@ -1,0 +1,185 @@
+"""Live HTTPS application/runtime-image acceptance; no routed responses or DOM stubs."""
+import argparse
+import asyncio
+import hashlib
+import json
+import os
+import subprocess
+from pathlib import Path
+from urllib.parse import urlencode
+from playwright.async_api import async_playwright
+
+BASE = "2026-11-10T12:00:"
+CAMERA = "id_browser"
+
+
+def export_path(start, end):
+    return "/api/download?" + urlencode({"camera_id": CAMERA, "start_time": start, "end_time": end})
+
+
+def decode(path):
+    subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", str(path), "-f", "null", "-"], check=True, timeout=30, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    result = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", str(path)], check=True, timeout=10, capture_output=True)
+    return float(json.loads(result.stdout)["format"]["duration"])
+
+
+def ffmpeg_pids(container):
+    result = subprocess.run(["docker", "exec", container, "pidof", "ffmpeg"], timeout=10, capture_output=True, text=True)
+    assert result.returncode in (0, 1), result.stderr
+    return result.stdout.split()
+
+
+async def wait_pids(container, present):
+    for _ in range(100):
+        pids = await asyncio.to_thread(ffmpeg_pids, container)
+        if bool(pids) == present:
+            return pids
+        await asyncio.sleep(0.1)
+    raise AssertionError("runtime FFmpeg ownership did not reach expected state")
+
+
+async def application_ready(page, origin):
+    await page.goto(origin + "/")
+    await page.wait_for_function("typeof allCameras !== 'undefined' && allCameras.some(c => c.id === 'id_browser')")
+    picker = page.locator("#timeline-date-picker")
+    await picker.fill("2026-11-10")
+    await picker.dispatch_event("change")
+    await page.wait_for_function("timelineSegments.some(s => s.camera_id === 'id_browser' && s.start_time === '2026-11-10T12:00:00Z')")
+    assert await page.locator("#video-grid video").count() == 1
+
+
+async def prepare_ui(page, start, end):
+    if await page.locator("#download-modal").is_visible():
+        await page.locator("#download-modal .close").click()
+    await page.locator("#download-btn").click()
+    # There are no short-range text inputs in this UI. Select a deterministic
+    # range through its real application state, without replacing functions.
+    await page.evaluate("([start,end]) => {downloadCameras=['id_browser']; downloadStartTime=new Date(start); downloadEndTime=new Date(end);}", [start, end])
+    await page.locator("#export-start-btn").click()
+
+
+async def run(args):
+    args.evidence.mkdir(parents=True, exist_ok=True)
+    report = {"commit": args.commit, "image_id": args.image_id, "backend": "real HTTPS runtime container", "routed_responses": False, "checks_passed": [], "status": "failed", "limits": "Synthetic H264/AAC files, headless Chromium, test-directed seek/range selection. No live RTSP, OS save dialog, late transport truncation, metadata-delay or autoplay-denial acceptance."}
+    checks = report["checks_passed"]
+    password = os.environ["SIMPLENVR_E2E_PASSWORD"]
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        report["browser"] = browser.version
+        context = await browser.new_context(ignore_https_errors=True, accept_downloads=True, timezone_id="UTC")
+        try:
+            context.set_default_timeout(30000)
+            page = await context.new_page()
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            await page.goto(args.origin + "/auth/login")
+            await page.locator('[name="username"]').fill("ci-browser")
+            await page.locator('[name="password"]').fill(password)
+            await page.get_by_role("button", name="Sign in", exact=True).click()
+            await page.wait_for_url(args.origin + "/")
+            checks.append("real-login-form-session")
+            await application_ready(page, args.origin)
+            checks.append("real-camera-template-and-timeline")
+
+            await page.evaluate("() => {videoPlayers[0].muted=true; seekToTime(new Date('2026-11-10T12:00:01Z'));}")
+            await page.wait_for_function("videoPlayers[0]?.readyState >= 2 && videoPlayers[0].currentTime > 1.3 && !videoPlayers[0].paused")
+            frames = await page.evaluate("() => new Promise(resolve => videoPlayers[0].requestVideoFrameCallback((_,m) => resolve({frames:m.presentedFrames,width:m.width,height:m.height})))")
+            assert frames["frames"] > 0 and frames["width"] == 256 and frames["height"] == 144
+            checks.append("native-h264-playback-decoded-frames")
+            await page.evaluate("togglePlayPause()")
+            paused = await page.evaluate("videoPlayers[0].currentTime")
+            await page.wait_for_timeout(400)
+            assert await page.evaluate("videoPlayers[0].paused && !isPlaying")
+            assert abs(await page.evaluate("videoPlayers[0].currentTime") - paused) < 0.1
+            await page.evaluate("togglePlayPause()")
+            await page.wait_for_function("before => !videoPlayers[0].paused && videoPlayers[0].currentTime > before + 0.2", arg=paused)
+            checks.append("application-pause-resume-with-native-clock")
+            await page.evaluate("() => {videoPlayers[0].currentTime=7.6;}")
+            await page.wait_for_function("videoPlayers[0]?.currentSrc.includes('20261110_120008') && videoPlayers[0].currentTime > 0.1 && !videoPlayers[0].paused")
+            checks.append("native-ended-contiguous-clip-transition")
+            # A real 404 and native media error, not a dispatched fake event.
+            await page.evaluate("() => {videoPlayers[0].src='/recordings/id_browser/missing.mp4';}")
+            await page.wait_for_function("!isPlaying && videoPlayers[0].error !== null")
+            await page.evaluate("seekToTime(new Date('2026-11-10T12:00:01Z'))")
+            await page.wait_for_function("videoPlayers[0]?.readyState >= 2 && !videoPlayers[0].paused && videoPlayers[0].currentTime > 1.2 && !videoPlayers[0].error")
+            checks.append("native-404-media-failure-and-application-retry")
+            await page.evaluate("togglePlayPause()")
+
+            anonymous = await p.request.new_context(ignore_https_errors=True)
+            try:
+                for path in [export_path(BASE + "00Z", BASE + "16Z"), "/recordings/id_browser/20261110_120000_fixture.mp4"]:
+                    response = await anonymous.get(args.origin + path)
+                    assert response.status == 401
+                    assert response.headers.get("content-type", "").split(";")[0] != "video/mp4"
+            finally:
+                await anonymous.dispose()
+            checks.append("unauthenticated-export-and-private-media-refused")
+
+            response = await context.request.get(args.origin + export_path(BASE + "00Z", BASE + "16Z"), timeout=90000)
+            assert response.status == 200, (response.status, await response.text())
+            assert response.headers.get("x-export-range-policy") == "whole-clips-untrimmed"
+            whole = args.evidence / "runtime-whole-copy.mp4"
+            whole.write_bytes(await response.body())
+            duration = await asyncio.to_thread(decode, whole)
+            assert abs(duration - 16) < 0.3, duration
+            checks.append("runtime-whole-clip-export-external-decode")
+
+            for start, end, status, header, value in [
+                (BASE + "15Z", BASE + "20Z", 409, "x-export-plan-status", "gap"),
+                ("2026-11-10T12:30:00.5Z", "2026-11-10T12:30:03.5Z", 422, "x-export-trim-status", "unsupported"),
+            ]:
+                response = await context.request.get(args.origin + export_path(start, end), timeout=30000)
+                assert response.status == status, (response.status, await response.text())
+                assert response.headers.get(header) == value
+                assert response.headers.get("content-type", "").split(";")[0] != "video/mp4"
+            checks.append("runtime-gap-and-audio-trim-refusals")
+
+            start, end = BASE + "00.5Z", BASE + "15.5Z"
+            await prepare_ui(page, start, end)
+            pids = await wait_pids(args.container, True)
+            await page.locator(".export-job").get_by_role("button", name="Cancel", exact=True).click()
+            await page.wait_for_selector('.export-job[data-state="canceled"]')
+            await page.wait_for_function("!exportUiBatch.running")
+            await wait_pids(args.container, False)
+            assert await page.evaluate("exportUiBatch.jobs[0].url") is None
+            report["canceled_runtime_ffmpeg_pids"] = pids
+            checks.append("ui-cancel-active-paced-runtime-render-and-child-reap")
+
+            await prepare_ui(page, start, end)
+            await page.wait_for_selector('.export-job[data-state="ready"]', timeout=90000)
+            assert "Frame-granular trim" in await page.locator(".export-job").inner_text()
+            url = await page.evaluate("exportUiBatch.jobs[0].url")
+            received_hash = await page.evaluate("async url => {const bytes=await (await fetch(url)).arrayBuffer();return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))).map(x=>x.toString(16).padStart(2,'0')).join('');}", url)
+            async with page.expect_download() as pending:
+                await page.get_by_role("button", name="Hand received file to browser", exact=True).click()
+            download = await pending.value
+            assert await download.failure() is None
+            saved = args.evidence / "browser-saved-trim.mp4"
+            await download.save_as(saved)
+            assert hashlib.sha256(saved.read_bytes()).hexdigest() == received_hash
+            duration = await asyncio.to_thread(decode, saved)
+            assert abs(duration - 15) < 0.3, duration
+            assert "not verified" in await page.locator(".export-job").inner_text()
+            await page.get_by_role("button", name="Release prepared file / continue", exact=True).click()
+            await page.wait_for_function("!exportUiBatch.running && exportUiBatch.jobs[0].url === null")
+            assert await page.evaluate("async url => {try{await fetch(url);return false;}catch(_){return true;}}", url)
+            await wait_pids(args.container, False)
+            checks.append("real-ui-trim-save-hash-duration-decode-and-object-url-release")
+            report.update({"saved_trim_sha256": received_hash, "saved_trim_duration_seconds": duration, "native_frame_witness": frames})
+            assert not errors, errors
+            report["status"] = "passed"
+        except Exception as error:
+            report["failure"] = type(error).__name__ + ": " + str(error)[:2000]
+            raise
+        finally:
+            (args.evidence / "runtime-browser-report.json").write_text(json.dumps(report, indent=2) + "\n")
+            await context.close()
+            await browser.close()
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    for name in ["origin", "container", "commit", "image-id"]:
+        parser.add_argument("--" + name, required=True)
+    parser.add_argument("--evidence", type=Path, required=True)
+    asyncio.run(run(parser.parse_args()))
