@@ -39,16 +39,7 @@ func serveRecordingHandler(w http.ResponseWriter,r *http.Request) {
  http.ServeFile(w,r,fullPath)
 }
 
-func deleteAllRecordingsHandler(w http.ResponseWriter,r *http.Request) {
- if r.Method!="POST" {http.Error(w,"Method not allowed",405);return}
- nvr.mu.RLock();defer nvr.mu.RUnlock()
- count:=0;var size int64
- for _,cam:=range nvr.cameras {
-  files,err:=filepath.Glob(filepath.Join(cam.RecordDir,"*.mp4"));if err!=nil {continue}
-  for _,file:=range files {info,err:=os.Stat(file);if err!=nil {continue};size+=info.Size();if err:=os.Remove(file);err==nil {count++} else {log.Printf("Failed to delete recording %s: %v",file,err)}}
- }
- w.Header().Set("Content-Type","application/json");json.NewEncoder(w).Encode(map[string]interface{}{"success":true,"deleted":count,"size_mb":float64(size)/(1024*1024)})
-}
+func deleteAllRecordingsHandler(w http.ResponseWriter,r *http.Request) {serveDeletePublishedRecordings(w,r,nvr,deletePublishedRecordings)}
 
 func handleDownload(w http.ResponseWriter,r *http.Request) {serveDownload(w,r,nvr,recordingDurations,exportInputPins)}
 func serveDownload(w http.ResponseWriter,r *http.Request,n *NVR,cache *durationCache,pool *exportInputPool) {

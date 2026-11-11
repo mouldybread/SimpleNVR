@@ -17,6 +17,7 @@ var (
  errRecordingDisabled=errors.New("recording is disabled; change the recording mode first")
  errRecordingMode=errors.New("invalid recording mode")
  errRecordingAction=errors.New("invalid recording action")
+ errRecordingStateChanged=errors.New("camera state changed during recording admission; retry")
  errRecorderShuttingDown=errors.New("server shutting down; recording control rejected")
 )
 
@@ -26,34 +27,47 @@ func runRecordingWorker(ctx context.Context,cam *Camera,mode RecordingMode) {
  switch mode {case ModeContinuous:recordCamera(ctx,cam);case ModeEventBased:recordCameraEventBased(ctx,cam);default:cam.recordWG.Done()}
 }
 
-// Caller holds NVR.mu and recordingControlMu. Workers own Done after children join.
-func startCameraWorkerLocked(n *NVR,cam *Camera,worker recordingWorker) error {
+// Caller holds recordingControlMu, but never NVR.mu across admission I/O.
+// Workers own Done after children join. The callback is per-call, not global.
+func startCameraWorkerWithAdmission(n *NVR,cam *Camera,worker recordingWorker,check func(string) error) error {
+ if cam==nil {return errCameraMissing}
+ n.mu.RLock()
+ if n.shuttingDown.Load() {n.mu.RUnlock();return errRecorderShuttingDown}
+ id,dir,mode:=cam.ID,cam.RecordDir,cam.RecordingMode
+ if n.cameras[id]!=cam {n.mu.RUnlock();return errCameraMissing}
+ if mode==ModeNoRecording {n.mu.RUnlock();return errRecordingDisabled}
+ if mode!=ModeContinuous && mode!=ModeEventBased {n.mu.RUnlock();return errRecordingMode}
+ active:=cam.IsRecording && cam.recordCancel!=nil
+ n.mu.RUnlock()
+ if active {return nil}
+ if worker==nil || check==nil {return errors.New("recording worker or admission unavailable")}
+ admissionErr:=check(dir)
+ n.mu.Lock();defer n.mu.Unlock()
  if n.shuttingDown.Load() {return errRecorderShuttingDown}
- if cam.RecordingMode==ModeNoRecording {return errRecordingDisabled}
- if cam.RecordingMode!=ModeContinuous && cam.RecordingMode!=ModeEventBased {return errRecordingMode}
- // A loaded IsRecording=true with no runtime cancel function is restart intent.
+ if n.cameras[id]!=cam {return errCameraMissing}
+ if cam.ID!=id || cam.RecordDir!=dir || cam.RecordingMode!=mode {return errRecordingStateChanged}
+ if admissionErr!=nil {return admissionErr}
  if cam.IsRecording && cam.recordCancel!=nil {return nil}
- if worker==nil {return errors.New("recording worker unavailable")}
- if err:=checkRecordingStorage(cam.RecordDir);err!=nil {return err}
  ctx,cancel:=context.WithCancel(context.Background())
- mode:=cam.RecordingMode
- cam.recordCancel=cancel
- cam.recordWG.Add(1)
- cam.IsRecording=true
+ cam.recordCancel=cancel;cam.recordWG.Add(1);cam.IsRecording=true
  go worker(ctx,cam,mode)
  return nil
 }
 
-func (n *NVR) resumeRecordings(worker recordingWorker) error {
+func (n *NVR) resumeRecordings(worker recordingWorker) error {return n.resumeRecordingsWithAdmission(worker,checkRecordingStorage)}
+func (n *NVR) resumeRecordingsWithAdmission(worker recordingWorker,check func(string) error) error {
  recordingControlMu.Lock();defer recordingControlMu.Unlock()
- n.mu.Lock();defer n.mu.Unlock()
- if n.shuttingDown.Load() {return errRecorderShuttingDown}
- var result error
+ n.mu.Lock()
+ if n.shuttingDown.Load() {n.mu.Unlock();return errRecorderShuttingDown}
+ cameras:=make([]*Camera,0,len(n.cameras))
  for _,cam:=range n.cameras {
-  if !cam.IsRecording {continue}
+  if cam==nil || !cam.IsRecording {continue}
   if cam.RecordingMode!=ModeContinuous && cam.RecordingMode!=ModeEventBased {cam.IsRecording=false;continue}
-  result=errors.Join(result,startCameraWorkerLocked(n,cam,worker))
+  cameras=append(cameras,cam)
  }
+ n.mu.Unlock()
+ var result error
+ for _,cam:=range cameras {result=errors.Join(result,startCameraWorkerWithAdmission(n,cam,worker,check))}
  return result
 }
 
@@ -65,30 +79,45 @@ func stopManagedCamera(n *NVR,cam *Camera) {
  n.mu.Lock();cam.IsRecording=false;cam.recordCancel=nil;cam.bufferManager=nil;n.mu.Unlock()
 }
 
-func (n *NVR) transitionRecording(id,action string,mode RecordingMode,worker recordingWorker) error {
+func (n *NVR) transitionRecording(id,action string,mode RecordingMode,worker recordingWorker) error {return n.transitionRecordingWithAdmission(id,action,mode,worker,checkRecordingStorage)}
+func (n *NVR) transitionRecordingWithAdmission(id,action string,mode RecordingMode,worker recordingWorker,check func(string) error) error {
  if action!="start" && action!="stop" && action!="mode" {return errRecordingAction}
  if action=="mode" && mode!=ModeContinuous && mode!=ModeEventBased && mode!=ModeNoRecording {return errRecordingMode}
  recordingControlMu.Lock();defer recordingControlMu.Unlock()
  n.mu.Lock()
  if n.shuttingDown.Load() {n.mu.Unlock();return errRecorderShuttingDown}
- cam,exists:=n.cameras[id]
- if !exists {n.mu.Unlock();return errCameraMissing}
- if action=="start" {err:=startCameraWorkerLocked(n,cam,worker);n.mu.Unlock();return err}
+ cam:=n.cameras[id]
+ if cam==nil {n.mu.Unlock();return errCameraMissing}
+ if action=="start" {n.mu.Unlock();return startCameraWorkerWithAdmission(n,cam,worker,check)}
  if action=="mode" && cam.RecordingMode==mode {n.mu.Unlock();return nil}
- // Reject a known storage failure before stopping the old mode. A second
- // check at actual worker admission is still necessary; this reserves no space.
- if action=="mode" && mode!=ModeNoRecording {
-  if err:=checkRecordingStorage(cam.RecordDir);err!=nil {n.mu.Unlock();return err}
- }
- wasRecording:=cam.IsRecording
+ wasRecording,dir,oldMode:=cam.IsRecording,cam.RecordDir,cam.RecordingMode
  n.mu.Unlock()
+ // First reject a known failure without disturbing the existing worker.
+ // The second check at replacement admission is still not a reservation.
+ if action=="mode" && mode!=ModeNoRecording {
+  if check==nil {return errors.New("recording admission unavailable")}
+  if err:=check(dir);err!=nil {return err}
+  n.mu.RLock()
+  shuttingDown:=n.shuttingDown.Load()
+  same:=n.cameras[id]==cam && cam.ID==id && cam.RecordDir==dir && cam.RecordingMode==oldMode
+  n.mu.RUnlock()
+  if shuttingDown {return errRecorderShuttingDown}
+  if !same {return errRecordingStateChanged}
+ }
  stopManagedCamera(n,cam)
- n.mu.Lock();defer n.mu.Unlock()
- if n.cameras[id]!=cam {return errCameraMissing}
+ n.mu.Lock()
+ if n.cameras[id]!=cam {n.mu.Unlock();return errCameraMissing}
  if action=="mode" {
-  if n.shuttingDown.Load() {cam.IsRecording=wasRecording;return errRecorderShuttingDown}
+  if n.shuttingDown.Load() {cam.IsRecording=wasRecording;n.mu.Unlock();return errRecorderShuttingDown}
   cam.RecordingMode=mode
-  if mode!=ModeNoRecording {return startCameraWorkerLocked(n,cam,worker)}
+ }
+ n.mu.Unlock()
+ if action=="mode" && mode!=ModeNoRecording {
+  err:=startCameraWorkerWithAdmission(n,cam,worker,check)
+  if errors.Is(err,errRecorderShuttingDown) {
+   n.mu.Lock();if n.cameras[id]==cam && cam.recordCancel==nil {cam.IsRecording=wasRecording};n.mu.Unlock()
+  }
+  return err
  }
  return nil
 }
@@ -109,7 +138,7 @@ func recordingError(w http.ResponseWriter,err error) {
  status:=http.StatusInternalServerError
  switch {
  case errors.Is(err,errCameraMissing):status=404
- case errors.Is(err,errRecordingDisabled):status=409
+ case errors.Is(err,errRecordingDisabled),errors.Is(err,errRecordingStateChanged):status=409
  case errors.Is(err,errRecordingMode):status=400
  case errors.Is(err,errStorageReserve),errors.Is(err,errEventStagingLimit):status=507
  case errors.Is(err,errRecorderShuttingDown),errors.Is(err,errStorageUnavailable),errors.Is(err,errStoragePolicy),errors.Is(err,errEventStagingUnavailable),errors.Is(err,errEventStagingPolicy):status=503;w.Header().Set("Retry-After","5")
