@@ -8,7 +8,7 @@ import subprocess
 from pathlib import Path
 from collections import deque
 from urllib.parse import urlencode, urlsplit
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, Error as PlaywrightError
 
 BASE = "2026-11-10T12:00:"
 CAMERA = "id_browser"
@@ -76,8 +76,34 @@ async def private_media_preflight(context, origin):
     return result
 
 
+async def submit_login_once(page, origin, report, network_events):
+    root = origin + "/"
+    # Observe the real form POST; never resubmit credentials on a network error.
+    async with page.expect_response(lambda response: response.url == origin + "/auth/login" and response.request.method == "POST") as pending:
+        await page.get_by_role("button", name="Sign in", exact=True).click(no_wait_after=True)
+    response = await pending.value
+    location = response.headers.get("location", "")
+    report["login_response"] = {"status": response.status, "redirect_path": urlsplit(location).path}
+    assert response.status == 303 and location == "/", report["login_response"]
+    try:
+        await page.wait_for_url(root, wait_until="load")
+    except PlaywrightError as error:
+        report["login_navigation_failure"] = {"error": str(error)[:2000], "page_url": page.url}
+        changed = any(event.get("event") == "requestfailed" and event.get("path") == "/" and event.get("method") == "GET" and event.get("resource_type") == "document" and event.get("failure") == "net::ERR_NETWORK_CHANGED" for event in network_events)
+        if not changed:
+            raise
+        # Only this observed error, after a proven successful POST, gets one
+        # GET recovery. A second failure propagates; there is no retry loop.
+        report["login_navigation_recovery"] = {"method": "GET", "path": "/", "attempt": 1, "reason": "net::ERR_NETWORK_CHANGED", "completed": False}
+        recovered = await page.goto(root, wait_until="load")
+        assert recovered is not None and recovered.status == 200 and page.url == root, "Login GET recovery did not return the authenticated root document"
+        report["login_navigation_recovery"]["completed"] = True
+    roots = [event for event in network_events if event.get("event") == "response" and event.get("path") == "/" and event.get("method") == "GET" and event.get("resource_type") == "document"]
+    assert page.url == root and roots and roots[-1]["status"] == 200, "Authenticated root navigation did not complete successfully"
+
+
 async def application_ready(page, origin):
-    await page.goto(origin + "/")
+    assert page.url == origin + "/", "Application readiness requires the authenticated root document"
     await page.wait_for_function("typeof allCameras !== 'undefined' && allCameras.some(c => c.id === 'id_browser')")
     picker = page.locator("#timeline-date-picker")
     await picker.fill("2026-11-10")
@@ -112,12 +138,12 @@ async def run(args):
         media_network = deque(maxlen=100)
         def remember_response(response):
             path = urlsplit(response.url).path
-            if path.startswith('/recordings/') or path == '/api/timeline/recordings':
-                media_network.append({"event":"response","path":path,"status":response.status,"resource_type":response.request.resource_type})
+            if path.startswith('/recordings/') or path in ('/api/timeline/recordings', '/auth/login', '/'):
+                media_network.append({"event":"response","path":path,"method":response.request.method,"status":response.status,"resource_type":response.request.resource_type})
         def remember_failure(request):
             path = urlsplit(request.url).path
-            if path.startswith('/recordings/') or path == '/api/timeline/recordings':
-                media_network.append({"event":"requestfailed","path":path,"failure":request.failure})
+            if path.startswith('/recordings/') or path in ('/api/timeline/recordings', '/auth/login', '/'):
+                media_network.append({"event":"requestfailed","path":path,"method":request.method,"resource_type":request.resource_type,"failure":request.failure})
         try:
             context.set_default_timeout(30000)
             page = await context.new_page()
@@ -132,8 +158,7 @@ async def run(args):
             await page.goto(args.origin + "/auth/login")
             await page.locator('[name="username"]').fill("ci-browser")
             await page.locator('[name="password"]').fill(password)
-            await page.get_by_role("button", name="Sign in", exact=True).click()
-            await page.wait_for_url(args.origin + "/")
+            await submit_login_once(page, args.origin, report, media_network)
             checks.append("real-login-form-session")
             await application_ready(page, args.origin)
             checks.append("real-camera-template-and-timeline")
@@ -231,7 +256,7 @@ async def run(args):
             checks.append("real-ui-trim-save-hash-duration-decode-and-object-url-release")
             report.update({"saved_trim_sha256": received_hash, "saved_trim_duration_seconds": duration, "native_frame_witness": frames})
             assert not errors, errors
-            report["status"] = "passed"
+            report["status"] = "passed-with-navigation-recovery" if report.get("login_navigation_recovery") else "passed"
         except Exception as error:
             report["failure"] = type(error).__name__ + ": " + str(error)[:2000]
             if page is not None:
@@ -243,7 +268,7 @@ async def run(args):
         finally:
             report["page_errors"] = errors
             report["media_network"] = list(media_network)
-            print(json.dumps({key:report[key] for key in ["browser", "browser_channel", "codec_support", "failure", "failure_playback_snapshot", "private_media_preflight", "page_errors", "media_network"] if key in report}, indent=2), flush=True)
+            print(json.dumps({key:report[key] for key in ["browser", "browser_channel", "codec_support", "login_response", "login_navigation_failure", "login_navigation_recovery", "failure", "failure_playback_snapshot", "private_media_preflight", "page_errors", "media_network"] if key in report}, indent=2), flush=True)
             (args.evidence / "runtime-browser-report.json").write_text(json.dumps(report, indent=2) + "\n")
             await context.close()
             await browser.close()
