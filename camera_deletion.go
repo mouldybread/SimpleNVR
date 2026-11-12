@@ -68,18 +68,31 @@ func deleteManagedCameras(ctx context.Context,n *NVR,selection []string,deps cam
   // explicit API stop. A failed save prohibits the first destructive unlink.
   if err:=deps.persist();err!=nil {return errors.Join(result,fmt.Errorf("%w: camera stopped; no file deletion attempted for this camera: %w",errCameraDeletePersistence,err))}
   if err:=guard();err!=nil {return errors.Join(result,err)}
-  if err:=deps.remove(ctx,item.dir,guard);err!=nil {result=errors.Join(result,err);continue}
-  if err:=guard();err!=nil {return errors.Join(result,err)}
-  n.mu.Lock()
-  if n.cameras[item.id]!=item.cam || item.cam.ID!=item.id || item.cam.RecordDir!=item.dir {n.mu.Unlock();return errors.Join(result,errRecordingStateChanged)}
-  delete(n.cameras,item.id)
-  order:=make([]string,0,len(n.cameraOrder))
-  for _,id:=range n.cameraOrder {if id!=item.id {order=append(order,id)}}
-  n.cameraOrder=order
-  n.mu.Unlock()
-  // Persist each completed camera before proceeding to another. No rollback
-  // can restore already-unlinked recordings on a final-save failure.
-  if err:=deps.persist();err!=nil {return errors.Join(result,fmt.Errorf("%w: camera removed in memory but final save failed: %w",errCameraDeletePersistence,err))}
+  // A finishing worker may need media ownership. Join and persist stopped
+  // intent FIRST, with no media lease, then wait without holding NVR.mu.
+  lease,err:=recordingMediaOwnership.acquire(ctx)
+  if err!=nil {return errors.Join(result,err)}
+  targetErr,fatal:=func() (error,bool) {
+   defer lease.release()
+   // State may have changed while admission was blocked.
+   if err:=guard();err!=nil {return err,true}
+   // The callback borrows ownership; it must not reacquire or release it.
+   if err:=deps.remove(ctx,item.dir,guard);err!=nil {return err,false}
+   if err:=guard();err!=nil {return err,true}
+   n.mu.Lock()
+   if n.cameras[item.id]!=item.cam || item.cam.ID!=item.id || item.cam.RecordDir!=item.dir {n.mu.Unlock();return errRecordingStateChanged,true}
+   delete(n.cameras,item.id)
+   order:=make([]string,0,len(n.cameraOrder))
+   for _,id:=range n.cameraOrder {if id!=item.id {order=append(order,id)}}
+   n.cameraOrder=order
+   n.mu.Unlock()
+   // Keep ownership through final persistence, independently of NVR.mu.
+   // No rollback can restore already-unlinked recordings on save failure.
+   if err:=deps.persist();err!=nil {return fmt.Errorf("%w: camera removed in memory but final save failed: %w",errCameraDeletePersistence,err),true}
+   return nil,false
+  }()
+  result=errors.Join(result,targetErr)
+  if fatal {return result}
  }
  return result
 }
