@@ -62,7 +62,11 @@ done
 test "$ready" -eq 1
 port=$(docker inspect -f '{{(index (index .NetworkSettings.Ports "443/tcp") 0).HostPort}}' "$name")
 image_id=$(docker image inspect -f '{{.Id}}' "$image")
-timeout 300 python3 tests/runtime-browser-acceptance.py \
+host_ifindex=$(docker exec "$name" cat /sys/class/net/eth0/iflink)
+[[ "$host_ifindex" =~ ^[1-9][0-9]*$ ]]
+timeout --kill-after=10 340 python3 tests/browser_network_ready.py \
+  --ifindex "$host_ifindex" --evidence "$evidence" -- \
+  python3 tests/runtime-browser-acceptance.py \
   --origin "https://127.0.0.1:$port" --container "$name" \
   --commit "${GITHUB_SHA:-$(git rev-parse HEAD)}" --image-id "$image_id" --evidence "$evidence"
 docker stop --timeout 75 "$name" >/dev/null

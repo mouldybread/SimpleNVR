@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   core:
+    name: Core — build, race, storage & lifecycle
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
@@ -19,7 +20,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Browser CI diagnostic helper regression tests
-        run: python3 -m unittest discover -s tests -p 'test_browser_ci_diagnostics.py' -v
+        run: |
+          python3 -m unittest discover -s tests -p 'test_browser_ci_diagnostics.py' -v
+          python3 -m unittest discover -s tests -p 'test_browser_network_ready.py' -v
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.x'
@@ -94,6 +97,7 @@ jobs:
           sudo python3 -c 'import json,os,stat,sys; p=sys.argv[1]; s=os.stat(p); assert stat.S_ISREG(s.st_mode); assert stat.S_IMODE(s.st_mode) == 0o600, oct(stat.S_IMODE(s.st_mode)); d=json.load(open(p)); assert d["cameras"] == {}' "$state/cameras.json"
 
   browser:
+    name: Chrome acceptance — isolated run ${{ matrix.attempt }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     strategy:
@@ -137,6 +141,7 @@ jobs:
           retention-days: 14
 
   verify:
+    name: Required checks — all must pass
     if: always()
     needs: [core, browser]
     runs-on: ubuntu-24.04
