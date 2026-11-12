@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  verify:
+  core:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
@@ -18,12 +18,18 @@ jobs:
       SIMPLENVR_REQUIRE_FFMPEG: '1'
     steps:
       - uses: actions/checkout@v4
+      - name: Browser CI diagnostic helper regression tests
+        run: python3 -m unittest discover -s tests -p 'test_browser_ci_diagnostics.py' -v
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.x'
           cache: false
       - name: Install synthetic media test tools
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg python3-venv
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o APT::Update::Error-Mode=any update
+          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y --no-install-recommends ffmpeg python3-venv
       - name: Download and verify pinned dependencies
         run: |
           go mod download
@@ -65,28 +71,6 @@ jobs:
       - name: Active runtime-container recording, SIGTERM and restart intent
         shell: bash
         run: bash tests/active-container-storage.sh simplenvr-safety-test
-      - name: Install pinned browser acceptance tooling
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 -m venv "$RUNNER_TEMP/simplenvr-browser-venv"
-          . "$RUNNER_TEMP/simplenvr-browser-venv/bin/activate"
-          python -m pip install 'playwright==1.56.0'
-          python -m playwright install --with-deps chrome
-      - name: Real runtime HTTPS exports and Chrome playback/downloads
-        shell: bash
-        run: |
-          set -euo pipefail
-          . "$RUNNER_TEMP/simplenvr-browser-venv/bin/activate"
-          bash tests/runtime-browser-acceptance.sh simplenvr-safety-test "$RUNNER_TEMP/simplenvr-browser-evidence"
-      - name: Retain runtime-browser acceptance evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: runtime-browser-acceptance-${{ github.sha }}
-          path: ${{ runner.temp }}/simplenvr-browser-evidence
-          if-no-files-found: warn
-          retention-days: 14
       - name: Runtime container SIGTERM smoke test
         shell: bash
         run: |
@@ -108,3 +92,62 @@ jobs:
           test "$(docker inspect -f '{{.State.ExitCode}}' "$name")" -eq 0
           docker logs "$name" 2>&1 | grep -F 'Shutdown complete; recording intent persisted'
           sudo python3 -c 'import json,os,stat,sys; p=sys.argv[1]; s=os.stat(p); assert stat.S_ISREG(s.st_mode); assert stat.S_IMODE(s.st_mode) == 0o600, oct(stat.S_IMODE(s.st_mode)); d=json.load(open(p)); assert d["cameras"] == {}' "$state/cameras.json"
+
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        attempt: [1, 2]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install synthetic media test tools
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o APT::Update::Error-Mode=any update
+          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y --no-install-recommends ffmpeg python3-venv
+      - name: Build the exact checkout runtime image
+        timeout-minutes: 8
+        run: docker build -t simplenvr-safety-test .
+      - name: Install pinned browser acceptance tooling
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/simplenvr-browser-venv"
+          . "$RUNNER_TEMP/simplenvr-browser-venv/bin/activate"
+          python -m pip install 'playwright==1.56.0'
+          python -m playwright install --with-deps chrome
+      - name: Real runtime HTTPS exports and Chrome playback/downloads
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          set -euo pipefail
+          . "$RUNNER_TEMP/simplenvr-browser-venv/bin/activate"
+          bash tests/runtime-browser-acceptance.sh simplenvr-safety-test "$RUNNER_TEMP/simplenvr-browser-evidence"
+      - name: Retain runtime-browser acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-browser-acceptance-${{ github.sha }}-${{ github.run_attempt }}-${{ matrix.attempt }}
+          path: ${{ runner.temp }}/simplenvr-browser-evidence
+          if-no-files-found: warn
+          retention-days: 14
+
+  verify:
+    if: always()
+    needs: [core, browser]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require core checks and both browser attempts
+        env:
+          CORE_RESULT: ${{ needs.core.result }}
+          BROWSER_RESULT: ${{ needs.browser.result }}
+        run: |
+          set -euo pipefail
+          printf 'core=%s browser=%s\n' "$CORE_RESULT" "$BROWSER_RESULT"
+          test "$CORE_RESULT" = success
+          test "$BROWSER_RESULT" = success

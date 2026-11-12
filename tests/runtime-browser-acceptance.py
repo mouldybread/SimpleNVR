@@ -9,6 +9,7 @@ from pathlib import Path
 from collections import deque
 from urllib.parse import urlencode, urlsplit
 from playwright.async_api import async_playwright, Error as PlaywrightError
+from browser_ci_diagnostics import BrowserNetworkEvidence, observe_login_post
 
 BASE = "2026-11-10T12:00:"
 CAMERA = "id_browser"
@@ -79,9 +80,7 @@ async def private_media_preflight(context, origin):
 async def submit_login_once(page, origin, report, network_events):
     root = origin + "/"
     # Observe the real form POST; never resubmit credentials on a network error.
-    async with page.expect_response(lambda response: response.url == origin + "/auth/login" and response.request.method == "POST") as pending:
-        await page.get_by_role("button", name="Sign in", exact=True).click(no_wait_after=True)
-    response = await pending.value
+    response = await observe_login_post(page, origin, report)
     location = response.headers.get("location", "")
     report["login_response"] = {"status": response.status, "redirect_path": urlsplit(location).path}
     assert response.status == 303 and location == "/", report["login_response"]
@@ -128,10 +127,12 @@ async def run(args):
     report = {"commit": args.commit, "image_id": args.image_id, "backend": "real HTTPS runtime container", "routed_responses": False, "checks_passed": [], "status": "failed", "limits": "Synthetic H264/AAC files, headless Chromium, test-directed seek/range selection. No live RTSP, OS save dialog, late transport truncation, metadata-delay or autoplay-denial acceptance."}
     checks = report["checks_passed"]
     password = os.environ["SIMPLENVR_E2E_PASSWORD"]
-    async with async_playwright() as p:
+    async with BrowserNetworkEvidence(args.evidence, args.origin) as diagnostics, async_playwright() as p:
         browser = await p.chromium.launch(channel="chrome", headless=True)
         report["browser"] = browser.version
         report["browser_channel"] = "chrome"
+        report["playwright_version"] = diagnostics.playwright_version
+        report["network_diagnostics"] = "browser-network-evidence.json"
         context = await browser.new_context(ignore_https_errors=True, accept_downloads=True, timezone_id="UTC")
         page = None
         errors = []
@@ -147,6 +148,7 @@ async def run(args):
         try:
             context.set_default_timeout(30000)
             page = await context.new_page()
+            await diagnostics.attach(context, page)
             report["codec_support"] = await page.evaluate("""() => {
                 const video=document.createElement('video');
                 return {h264:video.canPlayType('video/mp4; codecs="avc1.64000a"'),aac:video.canPlayType('audio/mp4; codecs="mp4a.40.2"')};
@@ -268,7 +270,7 @@ async def run(args):
         finally:
             report["page_errors"] = errors
             report["media_network"] = list(media_network)
-            print(json.dumps({key:report[key] for key in ["browser", "browser_channel", "codec_support", "login_response", "login_navigation_failure", "login_navigation_recovery", "failure", "failure_playback_snapshot", "private_media_preflight", "page_errors", "media_network"] if key in report}, indent=2), flush=True)
+            print(json.dumps({key:report[key] for key in ["status", "checks_passed", "browser", "browser_channel", "playwright_version", "network_diagnostics", "codec_support", "login_submission", "login_response", "login_navigation_failure", "login_navigation_recovery", "failure", "failure_playback_snapshot", "private_media_preflight", "page_errors", "media_network"] if key in report}, indent=2), flush=True)
             (args.evidence / "runtime-browser-report.json").write_text(json.dumps(report, indent=2) + "\n")
             await context.close()
             await browser.close()
