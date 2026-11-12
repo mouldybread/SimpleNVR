@@ -81,9 +81,15 @@ func stopManagedCamera(n *NVR,cam *Camera) {
 
 func (n *NVR) transitionRecording(id,action string,mode RecordingMode,worker recordingWorker) error {return n.transitionRecordingWithAdmission(id,action,mode,worker,checkRecordingStorage)}
 func (n *NVR) transitionRecordingWithAdmission(id,action string,mode RecordingMode,worker recordingWorker,check func(string) error) error {
+ recordingControlMu.Lock();defer recordingControlMu.Unlock()
+ return n.transitionRecordingLocked(id,action,mode,worker,check)
+}
+
+// Caller holds recordingControlMu; persistence-aware API control uses the same
+// transition without releasing serialization before its state has been saved.
+func (n *NVR) transitionRecordingLocked(id,action string,mode RecordingMode,worker recordingWorker,check func(string) error) error {
  if action!="start" && action!="stop" && action!="mode" {return errRecordingAction}
  if action=="mode" && mode!=ModeContinuous && mode!=ModeEventBased && mode!=ModeNoRecording {return errRecordingMode}
- recordingControlMu.Lock();defer recordingControlMu.Unlock()
  n.mu.Lock()
  if n.shuttingDown.Load() {n.mu.Unlock();return errRecorderShuttingDown}
  cam:=n.cameras[id]
@@ -137,6 +143,7 @@ func decodeRecordingRequest(w http.ResponseWriter,r *http.Request) (recordingReq
 func recordingError(w http.ResponseWriter,err error) {
  status:=http.StatusInternalServerError
  switch {
+ case errors.Is(err,errRecordingPersistence):status=500
  case errors.Is(err,errCameraMissing):status=404
  case errors.Is(err,errRecordingDisabled),errors.Is(err,errRecordingStateChanged):status=409
  case errors.Is(err,errRecordingMode):status=400

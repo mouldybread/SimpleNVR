@@ -59,20 +59,20 @@ func updateRetentionAllHandler(w http.ResponseWriter,r *http.Request) {
 
 func updateRecordingModeHandler(w http.ResponseWriter,r *http.Request) {
  req,ok:=decodeRecordingRequest(w,r);if !ok {return}
- if err:=nvr.transitionRecording(req.ID,"mode",req.Mode,runRecordingWorker);err!=nil {recordingError(w,err);return}
- finishCameraUpdate(w,r)
+ if err:=nvr.transitionRecordingAndSave(req.ID,"mode",req.Mode,runRecordingWorker,checkRecordingStorage,nvr.save);err!=nil {recordingError(w,err);return}
+ camerasHandler(w,r)
 }
 
 func startRecordingHandler(w http.ResponseWriter,r *http.Request) {
  req,ok:=decodeRecordingRequest(w,r);if !ok {return}
- if err:=nvr.transitionRecording(req.ID,"start","",runRecordingWorker);err!=nil {recordingError(w,err);return}
- finishCameraUpdate(w,r)
+ if err:=nvr.transitionRecordingAndSave(req.ID,"start","",runRecordingWorker,checkRecordingStorage,nvr.save);err!=nil {recordingError(w,err);return}
+ camerasHandler(w,r)
 }
 
 func stopRecordingHandler(w http.ResponseWriter,r *http.Request) {
  req,ok:=decodeRecordingRequest(w,r);if !ok {return}
- if err:=nvr.transitionRecording(req.ID,"stop","",runRecordingWorker);err!=nil {recordingError(w,err);return}
- finishCameraUpdate(w,r)
+ if err:=nvr.transitionRecordingAndSave(req.ID,"stop","",runRecordingWorker,checkRecordingStorage,nvr.save);err!=nil {recordingError(w,err);return}
+ camerasHandler(w,r)
 }
 
 func reorderCamerasHandler(w http.ResponseWriter,r *http.Request) {
