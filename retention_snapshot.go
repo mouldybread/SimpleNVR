@@ -2,6 +2,7 @@ package main
 
 import (
  "context"
+ "log"
  "sync"
  "time"
 )
@@ -48,7 +49,7 @@ func snapshotRetentionCleanup(n *NVR) []retentionCleanupSnapshot {
 }
 
 func cleanupRetentionSnapshot(ctx context.Context,n *NVR,target retentionCleanupSnapshot) bool {
- return cleanupRetentionSnapshotWith(ctx,n,target,cleanupOldRecordingsContext)
+ return admitRetentionDeletion(ctx,n,target,recordingMediaOwnership,cleanupExpiredPublishedLeased)
 }
 
 // The injected function lets tests hold the deletion phase without timing
@@ -58,30 +59,51 @@ func cleanupRetentionSnapshotWith(ctx context.Context,n *NVR,target retentionCle
  return cleanupRetentionSnapshotUsingGate(ctx,n,target,recordingMediaOwnership,remove)
 }
 
-// This is the sole admission layer for managed retention. The callback borrows
-// ownership and must not acquire the gate again. Injection uses the same path.
+type retentionDeletionOperation func(context.Context,*mediaMutationLease,string,time.Duration,func() error) error
+
+// Keep existing void-callback test seams; production uses the leased operation.
+func retentionRemovalAdapter(remove func(context.Context,string,time.Duration)) retentionDeletionOperation {
+ if remove==nil {return nil}
+ return func(ctx context.Context,_ *mediaMutationLease,dir string,duration time.Duration,guard func() error) error {
+  if err:=guard();err!=nil {return err}
+  remove(ctx,dir,duration);return nil
+ }
+}
 func cleanupRetentionSnapshotUsingGate(ctx context.Context,n *NVR,target retentionCleanupSnapshot,gate *mediaMutationGate,remove func(context.Context,string,time.Duration)) bool {
+ return admitRetentionDeletion(ctx,n,target,gate,retentionRemovalAdapter(remove))
+}
+func cleanupRetentionSnapshotLeased(ctx context.Context,n *NVR,target retentionCleanupSnapshot,lease *mediaMutationLease,remove func(context.Context,string,time.Duration)) bool {
+ return runRetentionDeletionLeased(ctx,n,target,lease,retentionRemovalAdapter(remove))
+}
+
+// Sole media acquisition layer. Never wait while holding policy or registry locks.
+func admitRetentionDeletion(ctx context.Context,n *NVR,target retentionCleanupSnapshot,gate *mediaMutationGate,remove retentionDeletionOperation) bool {
  if ctx.Err()!=nil || remove==nil || gate==nil || n.shuttingDown.Load() {return false}
  lease,err:=gate.acquire(ctx);if err!=nil {return false}
  defer lease.release()
- return cleanupRetentionSnapshotLeased(ctx,n,target,lease,remove)
+ return runRetentionDeletionLeased(ctx,n,target,lease,remove)
 }
 
-// Receiving a lease avoids hidden reentrant acquisition. Registry identity,
-// path, policy, shutdown and cancellation are revalidated AFTER admission.
-func cleanupRetentionSnapshotLeased(ctx context.Context,n *NVR,target retentionCleanupSnapshot,lease *mediaMutationLease,remove func(context.Context,string,time.Duration)) bool {
+func runRetentionDeletionLeased(ctx context.Context,n *NVR,target retentionCleanupSnapshot,lease *mediaMutationLease,remove retentionDeletionOperation) bool {
  if !lease.held() || remove==nil || ctx.Err()!=nil || n.shuttingDown.Load() {return false}
  retentionPolicyMu.RLock();defer retentionPolicyMu.RUnlock()
- if ctx.Err()!=nil || n.shuttingDown.Load() {return false}
- n.mu.RLock()
- cam:=n.cameras[target.id]
- valid:=cam!=nil && cam==target.camera && cam.ID==target.id && cam.RecordDir==target.dir && cam.RetentionDays==target.days
- if valid {duration,err:=cameraRetentionDuration(cam.RetentionDays);valid=err==nil && duration==target.duration}
- n.mu.RUnlock()
- if !valid || ctx.Err()!=nil || n.shuttingDown.Load() {return false}
- // Registry access remains available during I/O. Policy writers stay excluded
- // until this pass returns; the acquisition layer retains media ownership.
- remove(ctx,target.dir,target.duration)
+ // This guard borrows the policy read lock; never reacquire it from the engine.
+ guard:=func() error {
+  if err:=ctx.Err();err!=nil {return err}
+  if n.shuttingDown.Load() {return errRecorderShuttingDown}
+  n.mu.RLock()
+  cam:=n.cameras[target.id]
+  valid:=cam!=nil && cam==target.camera && cam.ID==target.id && cam.RecordDir==target.dir && cam.RetentionDays==target.days
+  if valid {duration,err:=cameraRetentionDuration(cam.RetentionDays);valid=err==nil && duration==target.duration}
+  n.mu.RUnlock()
+  if !valid {return errRecordingStateChanged}
+  if err:=ctx.Err();err!=nil {return err}
+  if n.shuttingDown.Load() {return errRecorderShuttingDown}
+  return nil
+ }
+ if err:=guard();err!=nil {return false}
+ if err:=remove(ctx,lease,target.dir,target.duration,guard);err!=nil {log.Printf("Retention deletion incomplete for camera %s; inspect media",target.id)}
  if ctx.Err()==nil {cleanupTempFiles(target.dir)}
+ // true still means invoked, not complete filesystem success.
  return true
 }
