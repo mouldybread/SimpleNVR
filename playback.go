@@ -39,7 +39,7 @@ func serveRecordingHandler(w http.ResponseWriter,r *http.Request) {
  http.ServeFile(w,r,fullPath)
 }
 
-func deleteAllRecordingsHandler(w http.ResponseWriter,r *http.Request) {serveDeletePublishedRecordings(w,r,nvr,deletePublishedRecordings)}
+func deleteAllRecordingsHandler(w http.ResponseWriter,r *http.Request) {serveManagedPublishedDeletion(w,r,nvr,deleteAllPublishedLeased)}
 
 func handleDownload(w http.ResponseWriter,r *http.Request) {serveDownload(w,r,nvr,recordingDurations,exportInputPins)}
 func serveDownload(w http.ResponseWriter,r *http.Request,n *NVR,cache *durationCache,pool *exportInputPool) {
