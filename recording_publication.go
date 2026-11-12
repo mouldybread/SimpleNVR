@@ -32,10 +32,27 @@ func samePublicationFile(before,after os.FileInfo) bool {
  return before!=nil && after!=nil && after.Mode().IsRegular() && os.SameFile(before,after) && before.Size()==after.Size() && before.ModTime().Equal(after.ModTime())
 }
 
+var errPublicationOwnership=errors.New("recording publication requires a held shared media lease")
+
+// Acquisition layer for existing callers; do not call this while borrowing a lease.
+func publishRecordingDurably(ctx context.Context,temporary,final string,validate func(context.Context,string) error,ops publicationDurabilityOps) error {
+ if validate==nil || ops.rename==nil || ops.syncFile==nil || ops.syncDirectory==nil {return errors.New("recording publication operations missing")}
+ lease,err:=recordingMediaOwnership.acquire(ctx);if err!=nil {return err}
+ defer lease.release()
+ return publishRecordingDurablyLeased(ctx,lease,temporary,final,validate,ops)
+}
+
+// Borrowed entry point for later caller-owned checkpoint/release integration.
+// This function neither reacquires ownership nor releases the caller's lease.
+func publishRecordingLeased(ctx context.Context,lease *mediaMutationLease,temporary,final string) error {
+ return publishRecordingDurablyLeased(ctx,lease,temporary,final,validateRecording,publicationDurabilityOps{renameRecordingNoReplace,func(f *os.File) error{return f.Sync()},func(f *os.File) error{return f.Sync()}})
+}
+
 // Sync the validated inode before no-replace rename, then sync BOTH directory
 // entries when publishing across directories. Post-rename errors are ambiguous
 // publication outcomes: never unlink the final or imply rollback occurred.
-func publishRecordingDurably(ctx context.Context,temporary,final string,validate func(context.Context,string) error,ops publicationDurabilityOps) (result error) {
+func publishRecordingDurablyLeased(ctx context.Context,lease *mediaMutationLease,temporary,final string,validate func(context.Context,string) error,ops publicationDurabilityOps) (result error) {
+ if !lease.held() || lease.gate!=recordingMediaOwnership {return errPublicationOwnership}
  if validate==nil || ops.rename==nil || ops.syncFile==nil || ops.syncDirectory==nil {return errors.New("recording publication operations missing")}
  if err:=ctx.Err();err!=nil {return err}
  if _,err:=os.Lstat(final);err==nil {return os.ErrExist} else if !os.IsNotExist(err) {return err}

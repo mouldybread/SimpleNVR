@@ -7,8 +7,8 @@ import (
 )
 
 // Global admission for application media mutations. Adoption is incremental:
-// managed retention and managed camera deletion enter this gate. Publication
-// and remaining deletion paths MUST adopt it before it protects staging release.
+// managed retention, camera/explicit deletion and normal publication enter.
+// Checkpoint/staging-release ownership and remaining deletion paths stay open.
 var recordingMediaOwnership = newMediaMutationGate()
 
 type mediaMutationGate struct {
