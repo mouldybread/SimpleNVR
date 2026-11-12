@@ -6,8 +6,9 @@ import (
  "time"
 )
 
-// Always acquire this lock before NVR.mu when both are needed. A cleanup
-// pass holds a read lock while API retention mutations take the write lock.
+// Lock order: media ownership -> retentionPolicyMu -> NVR.mu. Policy
+// writers do not acquire media ownership. Cleanup holds a policy read lock
+// across deletion, but never holds NVR.mu across admission or filesystem I/O.
 var retentionPolicyMu sync.RWMutex
 
 func setCameraRetention(n *NVR,id string,days int) error {
@@ -54,17 +55,32 @@ func cleanupRetentionSnapshot(ctx context.Context,n *NVR,target retentionCleanup
 // filesystem operations. true means the validated pass was invoked, not that
 // any file was removed or every filesystem operation succeeded.
 func cleanupRetentionSnapshotWith(ctx context.Context,n *NVR,target retentionCleanupSnapshot,remove func(context.Context,string,time.Duration)) bool {
- if ctx.Err()!=nil || remove==nil {return false}
+ return cleanupRetentionSnapshotUsingGate(ctx,n,target,recordingMediaOwnership,remove)
+}
+
+// This is the sole admission layer for managed retention. The callback borrows
+// ownership and must not acquire the gate again. Injection uses the same path.
+func cleanupRetentionSnapshotUsingGate(ctx context.Context,n *NVR,target retentionCleanupSnapshot,gate *mediaMutationGate,remove func(context.Context,string,time.Duration)) bool {
+ if ctx.Err()!=nil || remove==nil || gate==nil || n.shuttingDown.Load() {return false}
+ lease,err:=gate.acquire(ctx);if err!=nil {return false}
+ defer lease.release()
+ return cleanupRetentionSnapshotLeased(ctx,n,target,lease,remove)
+}
+
+// Receiving a lease avoids hidden reentrant acquisition. Registry identity,
+// path, policy, shutdown and cancellation are revalidated AFTER admission.
+func cleanupRetentionSnapshotLeased(ctx context.Context,n *NVR,target retentionCleanupSnapshot,lease *mediaMutationLease,remove func(context.Context,string,time.Duration)) bool {
+ if !lease.held() || remove==nil || ctx.Err()!=nil || n.shuttingDown.Load() {return false}
  retentionPolicyMu.RLock();defer retentionPolicyMu.RUnlock()
- if ctx.Err()!=nil {return false}
+ if ctx.Err()!=nil || n.shuttingDown.Load() {return false}
  n.mu.RLock()
  cam:=n.cameras[target.id]
  valid:=cam!=nil && cam==target.camera && cam.ID==target.id && cam.RecordDir==target.dir && cam.RetentionDays==target.days
  if valid {duration,err:=cameraRetentionDuration(cam.RetentionDays);valid=err==nil && duration==target.duration}
  n.mu.RUnlock()
- if !valid || ctx.Err()!=nil {return false}
- // The registry lock is released before I/O; retention writers stay excluded
-// until this pass returns. Camera deletion is still an explicit destructive action.
+ if !valid || ctx.Err()!=nil || n.shuttingDown.Load() {return false}
+ // Registry access remains available during I/O. Policy writers stay excluded
+ // until this pass returns; the acquisition layer retains media ownership.
  remove(ctx,target.dir,target.duration)
  if ctx.Err()==nil {cleanupTempFiles(target.dir)}
  return true
