@@ -5,7 +5,6 @@ import (
  "errors"
  "log"
  "net/http"
- "os"
  "path/filepath"
  "strings"
  "sync"
@@ -94,8 +93,7 @@ func recoverBeforeStartup(ctx context.Context,n *NVR) {
  n.mu.RLock();cameras:=make([]*Camera,0,len(n.cameras));for _,cam:=range n.cameras {cameras=append(cameras,cam)};n.mu.RUnlock()
  for _,cam:=range cameras {
   if ctx.Err()!=nil {return}
-  if err:=os.RemoveAll(filepath.Join(cam.RecordDir,"buffer"));err!=nil {log.Printf("Unable to clear transient buffer for camera %s",cam.ID)}
-  if entries,err:=os.ReadDir(filepath.Join(cam.RecordDir,"temp"));err==nil && len(entries)>0 {log.Printf("Preserved unassembled event staging for camera %s; manual recovery/cleanup required",cam.ID)}
+  logPreservedEventStorage(cam)
   files,_:=filepath.Glob(filepath.Join(cam.RecordDir,"*.tmp"))
   for _,file:=range files {
    if ctx.Err()!=nil {return}

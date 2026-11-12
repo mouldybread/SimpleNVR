@@ -57,7 +57,7 @@ func recordCameraEventBased(ctx context.Context,cam *Camera) {
  bm:=newBufferManager(ctx,cam)
  defer bm.cancel()
  for _,dir:=range []string{filepath.Join(cam.RecordDir,"buffer"),filepath.Join(cam.RecordDir,"temp")} {
-  if err:=os.MkdirAll(dir,0700);err!=nil {
+  if err:=ensureEventStorageDirectory(dir);err!=nil {
    log.Printf("Unable to initialize event storage for camera %s",cam.ID)
    nvr.mu.Lock();cam.IsRecording=false;nvr.mu.Unlock();return
   }
@@ -184,8 +184,20 @@ func (bm *BufferManager) discardUnclosed(pattern string) {
  bm.bufferMutex.Lock();defer bm.bufferMutex.Unlock()
  closed:=make(map[string]bool)
  for _,seg:=range bm.buffer {closed[seg.FilePath]=true}
- files,_:=filepath.Glob(pattern)
- for _,file:=range files {if !closed[file] {os.Remove(file)}}
+ files,err:=filepath.Glob(pattern)
+ if err!=nil {log.Printf("Unable to enumerate unclosed prebuffer for camera %s; staging retained",bm.camera.ID);return}
+ for _,file:=range files {
+  if closed[file] {continue}
+  info,err:=os.Lstat(file)
+  if os.IsNotExist(err) {continue}
+  if err!=nil || !info.Mode().IsRegular() || info.Size()!=0 {
+   log.Printf("Preserved unclosed prebuffer for camera %s; inspection/recovery required",bm.camera.ID)
+   continue
+  }
+  // The segmenter has joined. Only its nonce-scoped empty regular outputs
+  // are disposable; missing completion metadata does not condemn real bytes.
+  if err:=os.Remove(file);err!=nil && !os.IsNotExist(err) {log.Printf("Unable to remove empty prebuffer output for camera %s",bm.camera.ID)}
+ }
 }
 
 func (bm *BufferManager) pruneLoop() {
@@ -205,7 +217,9 @@ func (bm *BufferManager) pruneBefore(cutoff time.Time) {
 func (bm *BufferManager) cleanupBuffer() {
  bm.bufferMutex.Lock();defer bm.bufferMutex.Unlock()
  bm.buffer=nil
- if err:=os.RemoveAll(filepath.Join(bm.camera.RecordDir,"buffer"));err!=nil {log.Printf("Unable to remove stopped buffer for camera %s",bm.camera.ID)}
+ // Stop releases the in-memory index, not capture evidence. A new manager
+ // must not adopt or prune files left by this or an earlier process.
+ logPreservedEventStorage(bm.camera)
 }
 
 func (bm *BufferManager) handleEvent(job *bufferEvent) {
@@ -308,8 +322,7 @@ func recoverPartialRecordings() {
  cameras:=make([]*Camera,0,len(nvr.cameras));for _,cam:=range nvr.cameras {cameras=append(cameras,cam)}
  nvr.mu.RUnlock()
  for _,cam:=range cameras {
-  os.RemoveAll(filepath.Join(cam.RecordDir,"buffer"))
-  if entries,err:=os.ReadDir(filepath.Join(cam.RecordDir,"temp"));err==nil && len(entries)>0 {log.Printf("Preserved unassembled event staging for camera %s; manual recovery/cleanup required",cam.ID)}
+  logPreservedEventStorage(cam)
   files,_:=filepath.Glob(filepath.Join(cam.RecordDir,"*.tmp"))
   for _,file:=range files {
    final:=partialRecordingName(strings.TrimSuffix(file,".tmp"))

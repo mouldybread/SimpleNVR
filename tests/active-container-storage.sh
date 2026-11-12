@@ -12,10 +12,11 @@ cleanup() {
   sudo rm -rf -- "$work"
 }
 trap cleanup EXIT
-mkdir -p "$state/id_continuous" "$state/id_event/temp/retained-evidence" "$fixture" "$bin"
+mkdir -p "$state/id_continuous" "$state/id_event/temp/retained-evidence" "$state/id_event/buffer" "$fixture" "$bin"
 chmod 755 "$work" "$fixture" "$bin"
 printf 'synthetic retained event input\n' > "$state/id_event/temp/retained-evidence/event.mp4"
 printf 'synthetic checkpoint evidence, not a valid recovery authorization\n' > "$state/id_event/temp/retained-evidence/recovery.json"
+printf 'synthetic unreported prebuffer evidence\n' > "$state/id_event/buffer/retained-unreported.mp4"
 python3 - "$state/cameras.json" <<'PY'
 import json,sys
 cameras={}
@@ -48,7 +49,7 @@ SH
 chmod 755 "$bin/ffmpeg"
 python3 -c 'import secrets; print(secrets.token_urlsafe(32))' | docker run --rm -i \
   --mount "type=bind,src=$state,dst=/recordings" "$image" auth set-password ci-admin
-sudo sha256sum "$state/id_event/temp/retained-evidence/event.mp4" "$state/id_event/temp/retained-evidence/recovery.json" > "$work/evidence.before"
+sudo sha256sum "$state/id_event/temp/retained-evidence/event.mp4" "$state/id_event/temp/retained-evidence/recovery.json" "$state/id_event/buffer/retained-unreported.mp4" > "$work/evidence.before"
 docker create --name "$name" --network none --read-only --cap-drop ALL --cap-add NET_BIND_SERVICE \
   --security-opt no-new-privileges --tmpfs /certs:rw,nosuid,nodev,noexec \
   --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
@@ -58,27 +59,29 @@ docker create --name "$name" --network none --read-only --cap-drop ALL --cap-add
   --mount "type=bind,src=$fixture,dst=/fixture,readonly" \
   --mount "type=bind,src=$bin,dst=/fixture-bin,readonly" "$image" >/dev/null
 for cycle in 1 2; do
+  baseline=$(sudo find "$state/id_event/buffer" -maxdepth 1 -type f -name 'buffer_*.mp4' | wc -l)
   docker start "$name" >/dev/null
   active=0
   for attempt in $(seq 1 90); do
     if docker exec "$name" sh -c '
+      baseline=$1
       wget --no-check-certificate -q -O /dev/null https://127.0.0.1/auth/login || exit 1
       pids=$(pidof ffmpeg) || exit 1
       set -- $pids
       test "$#" -ge 2 || exit 1
       count=$(find /recordings/id_event/buffer -type f -name "buffer_*.mp4" | wc -l)
-      test "$count" -ge 2 || exit 1
+      test "$count" -ge "$((baseline + 2))" || exit 1
       for f in /recordings/id_continuous/*.mp4.tmp; do test ! -s "$f" || exit 0; done
       exit 1
-    '; then active=1; break; fi
+    ' sh "$baseline"; then active=1; break; fi
     sleep 0.5
   done
   test "$active" -eq 1
   docker stop --timeout 75 "$name" >/dev/null
   test "$(docker inspect -f '{{.State.ExitCode}}' "$name")" -eq 0
   docker logs "$name" 2>&1 | grep -F 'Shutdown complete; recording intent persisted'
-  sudo python3 - "$state" "$cycle" <<'PY'
-import glob,json,os,stat,sys
+  sudo python3 - "$state" "$cycle" "$work/prebuffer-snapshot.json" <<'PY'
+import glob,hashlib,json,os,stat,sys
 root=sys.argv[1]
 p=os.path.join(root,'cameras.json')
 assert stat.S_IMODE(os.stat(p).st_mode)==0o600
@@ -87,9 +90,23 @@ assert set(state['cameras'])=={'id_continuous','id_event'}
 assert all(cam['is_recording'] for cam in state['cameras'].values())
 outputs=glob.glob(os.path.join(root,'id_continuous','*_partial.mp4'))
 assert len(outputs)>=int(sys.argv[2]) and any(os.path.getsize(p)>0 for p in outputs), 'no new retained partial output'
-assert not os.path.exists(os.path.join(root,'id_event','buffer')), 'buffer worker not cleaned up'
+buffer=os.path.join(root,'id_event','buffer')
+assert os.path.isdir(buffer), 'stopped buffer evidence directory lost'
+previous={}
+if os.path.exists(sys.argv[3]):
+    with open(sys.argv[3]) as f: previous=json.load(f)
+for name,digest in previous.items():
+    with open(os.path.join(buffer,name),'rb') as f:
+        assert hashlib.sha256(f.read()).hexdigest()==digest, 'prior-cycle prebuffer evidence changed'
+paths=glob.glob(os.path.join(buffer,'buffer_*.mp4'))
+fresh=[p for p in paths if os.path.basename(p) not in previous]
+assert fresh and any(os.path.getsize(p)>0 for p in fresh), 'no new retained prebuffer capture'
+snapshot={}
+for p in paths:
+    with open(p,'rb') as f: snapshot[os.path.basename(p)]=hashlib.sha256(f.read()).hexdigest()
+with open(sys.argv[3],'w') as f: json.dump(snapshot,f,sort_keys=True)
 PY
-  sudo sha256sum "$state/id_event/temp/retained-evidence/event.mp4" "$state/id_event/temp/retained-evidence/recovery.json" > "$work/evidence.after"
+  sudo sha256sum "$state/id_event/temp/retained-evidence/event.mp4" "$state/id_event/temp/retained-evidence/recovery.json" "$state/id_event/buffer/retained-unreported.mp4" > "$work/evidence.after"
   cmp "$work/evidence.before" "$work/evidence.after"
 done
 printf 'ACTIVE_CONTAINER_STORAGE_VERIFIED image_id=%s cycles=2 continuous=active event_buffer=active input=file_fixture live_rtsp=not_tested\n' "$(docker image inspect -f '{{.Id}}' "$image")"
