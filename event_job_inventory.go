@@ -102,14 +102,25 @@ func (job *bufferEvent) closeOwnedInventory() error {
 }
 
 func (bm *BufferManager) releaseOwnedJob(job *bufferEvent) {
- // Retention is the only terminal action until positive cleanup authorization
- // and publication-through-release ownership are integrated. A false legacy
- // keepStaging flag, even after publication, is never permission to unlink.
- // Successful jobs intentionally retain their inputs/checkpoint in this slice.
+ borrowed:=job.recoveryBorrow
  defer func(){
+  // Close pins and return capacity before releasing transferred acquisition
+  // ownership. Checkpoint helpers never release the borrowed lease themselves.
+  if borrowed!=nil && borrowed.terminal {
+   defer borrowed.lease.release()
+   defer func(){borrowed.terminal=false}()
+  }
+  defer func(){job.recoveryBorrow=nil;<-bm.slots}()
   if err:=job.closeOwnedInventory();err!=nil {log.Printf("Unable to close event inventory for camera %s",bm.camera.ID)}
-  <-bm.slots
  }()
+ if borrowed!=nil && borrowed.terminal {
+  // concatenateEventRecording cancels its finalization context on return.
+  // Terminal metadata keeps its established independent grace budget while
+  // borrowing the SAME held lease; there is no release/reacquisition window.
+  ctx,cancel:=context.WithTimeout(context.Background(),recordingFinalizeGrace);defer cancel()
+  borrowed.ctx=ctx
+ }
+ // Retention is still unconditional, never inferred from a legacy false flag.
  job.keepStaging=true
  _=job.recoveryCheckpoint("retained","")
  log.Printf("Retained event staging for camera %s event %s; inspection/recovery required",bm.camera.ID,job.event.ID)

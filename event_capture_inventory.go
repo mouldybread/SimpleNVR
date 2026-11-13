@@ -17,6 +17,7 @@ import (
 // At most one creator and one transient Remember duplicate are added to the
 // inventory's bounded persistent descriptors. No failure removes disk evidence.
 func (job *bufferEvent) withOwnedStagingCreator(ctx context.Context,name string,write func(*os.File) error) (result error) {
+ if job.recoveryBorrow!=nil {return errPublicationOwnership}
  if write==nil || (name!="event.mp4" && name!="concat.txt") {return errStagingInventory}
  inventory:=job.inventory
  if inventory==nil || inventory.path!=job.dir {return errStagingInventory}
@@ -57,6 +58,7 @@ func createOwnedStagingFile(ctx context.Context,lease *mediaMutationLease,invent
 }
 
 func (bm *BufferManager) captureEventFile(ctx context.Context,job *bufferEvent,path string) error {
+ if job.recoveryBorrow!=nil {return errPublicationOwnership}
  args:=[]string{"-hide_banner","-loglevel","error","-nostats","-rtsp_transport","tcp","-i",bm.camera.RTSPUrl,"-t",strconv.Itoa(job.event.Duration),"-c","copy","-f","mp4","-movflags","faststart","-y"}
  if job.inventory==nil {
   // Compatibility for manually constructed legacy jobs. Production jobs own
@@ -75,6 +77,7 @@ func (bm *BufferManager) captureEventFile(ctx context.Context,job *bufferEvent,p
 }
 
 func (job *bufferEvent) writeEventConcat(ctx context.Context,eventFile string) (result error) {
+ if job.recoveryBorrow!=nil {return errPublicationOwnership}
  write:=func(list *os.File)error{
   files:=append(append([]string(nil),job.preFiles...),eventFile)
   for _,file:=range files {

@@ -13,7 +13,7 @@ func publicationCheckpointJob(t *testing.T) (*BufferManager,*bufferEvent) {
  t.Helper();bm:=bufferFixture(t)
  if err:=bm.TriggerEvent(bufferTestEvent("finalization"));err!=nil {t.Fatal(err)}
  job:=<-bm.eventChan
- t.Cleanup(func(){bm.releaseJob(job)})
+ t.Cleanup(func(){if len(bm.slots)!=0 {bm.releaseJob(job)}})
  return bm,job
 }
 func TestEventPublicationCheckpointBorrowsSameLease(t *testing.T) {
@@ -36,12 +36,14 @@ func TestEventPublicationCheckpointBorrowsSameLease(t *testing.T) {
  }
  ctx,cancel:=context.WithTimeout(context.Background(),5*time.Second);defer cancel()
  if err:=bm.publishEventRecordingWith(ctx,bm.ctx,job,"temporary","final",false,publish);err!=nil {t.Fatal(err)}
- if job.recoveryFailed || job.recoveryBorrow!=nil || publicationLease.held() {t.Fatal("checkpoint failed or scoped ownership leaked")}
+ if job.recoveryFailed || job.recoveryBorrow==nil || !job.recoveryBorrow.terminal || !publicationLease.held() {t.Fatal("checkpoint failed or lease handoff missing")}
  if m:=readRecoveryTest(t,job.dir);m.State!="published" {t.Fatal(m)}
- // Checkpoint failure injection remains separate from the real owned writer;
- // restore it so terminal retention also exercises fresh lease acquisition.
+ // Restore the writer before terminal retention; it must borrow the handed-off
+ // lease, then close inventory and release ownership exactly once.
  job.recoveryWriter=original
- if err:=job.recoveryCheckpoint("retained","");err!=nil {t.Fatal("borrow escaped finalization",err)}
+ bm.releaseJob(job)
+ if job.recoveryBorrow!=nil || publicationLease.held() || job.inventory!=nil || len(bm.slots)!=0 {t.Fatal("terminal handoff leaked")}
+ if m:=readRecoveryTest(t,job.dir);m.State!="published" || m.Revision!=4 {t.Fatal(m)}
 }
 
 func TestEventPublicationCheckpointProductionDurablePath(t *testing.T) {
@@ -53,7 +55,7 @@ func TestEventPublicationCheckpointProductionDurablePath(t *testing.T) {
  assertPublicationBytes(t,final,"synthetic published bytes")
  if _,err:=os.Stat(temporary);!os.IsNotExist(err) {t.Fatal("no-replace publication did not move candidate",err)}
  if m:=readRecoveryTest(t,job.dir);m.State!="published" {t.Fatal(m)}
- if job.recoveryFailed || job.recoveryBorrow!=nil {t.Fatal("published checkpoint failed")}
+ if job.recoveryFailed || job.recoveryBorrow==nil || !job.recoveryBorrow.terminal || !job.recoveryBorrow.lease.held() {t.Fatal("published checkpoint/handoff failed")}
 }
 
 func TestEventPublicationCheckpointFailureRetainsPublishedOutcome(t *testing.T) {
@@ -63,7 +65,7 @@ func TestEventPublicationCheckpointFailureRetainsPublishedOutcome(t *testing.T) 
  job.recoveryWriter=func(string,[]byte)error{return injected}
  ctx,cancel:=context.WithTimeout(context.Background(),5*time.Second);defer cancel()
  if err:=bm.publishEventRecordingWith(ctx,bm.ctx,job,"temporary","final",false,func(context.Context,*mediaMutationLease,string,string)error{return nil});err!=nil {t.Fatal("successful publication was erased",err)}
- if !job.keepStaging || !job.recoveryFailed || job.recoveryBorrow!=nil {t.Fatal("checkpoint failure did not retain/clear borrow")}
+ if !job.keepStaging || !job.recoveryFailed || job.recoveryBorrow==nil || !job.recoveryBorrow.terminal {t.Fatal("checkpoint failure did not retain/transfer ownership")}
  assertPublicationBytes(t,filepath.Join(job.dir,"recovery.json"),string(before))
 }
 
@@ -84,7 +86,7 @@ func TestEventPublicationPartialAndLateCancellationRetain(t *testing.T) {
   job.recoveryWriter=func(dir string,data []byte)error{if !partial {bm.cancel()};return original(dir,data)}
   ctx,cancel:=context.WithTimeout(context.Background(),5*time.Second);defer cancel()
   if err:=bm.publishEventRecordingWith(ctx,bm.ctx,job,"temporary","final",partial,func(context.Context,*mediaMutationLease,string,string)error{return nil});err!=nil {t.Fatal(err)}
-  if !job.keepStaging || job.recoveryFailed || job.recoveryBorrow!=nil {t.Fatal("cancellation/partial checkpoint semantics changed")}
+  if !job.keepStaging || job.recoveryFailed || job.recoveryBorrow==nil || !job.recoveryBorrow.terminal {t.Fatal("cancellation/partial checkpoint semantics changed")}
   if m:=readRecoveryTest(t,job.dir);m.State!="published" {t.Fatal("independent metadata budget lost",m)}
   job.recoveryWriter=original
  })}
@@ -108,6 +110,6 @@ func TestEventPublicationExpiredBorrowRefusesCheckpoint(t *testing.T) {
  bm,job:=publicationCheckpointJob(t)
  ctx,cancel:=context.WithCancel(context.Background());defer cancel()
  if err:=bm.publishEventRecordingWith(ctx,bm.ctx,job,"temporary","final",false,func(context.Context,*mediaMutationLease,string,string)error{cancel();return nil});err!=nil {t.Fatal(err)}
- if !job.recoveryFailed || !job.keepStaging || job.recoveryBorrow!=nil {t.Fatal("expired metadata budget ignored")}
+ if !job.recoveryFailed || !job.keepStaging || job.recoveryBorrow==nil || !job.recoveryBorrow.terminal {t.Fatal("expired metadata budget ignored")}
  if m:=readRecoveryTest(t,job.dir);m.State!="pinned" {t.Fatal("expired budget wrote checkpoint",m)}
 }
