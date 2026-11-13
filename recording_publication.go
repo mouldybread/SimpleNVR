@@ -51,7 +51,18 @@ func publishRecordingLeased(ctx context.Context,lease *mediaMutationLease,tempor
 // Sync the validated inode before no-replace rename, then sync BOTH directory
 // entries when publishing across directories. Post-rename errors are ambiguous
 // publication outcomes: never unlink the final or imply rollback occurred.
+// The observer borrows the checked output and destination-directory descriptors
+// only after durability/identity checks. It must duplicate anything it retains.
+func publishRecordingObservedLeased(ctx context.Context,lease *mediaMutationLease,temporary,final string,observe func(*os.File,*os.File)error) error {
+ if observe==nil {return errors.New("recording publication observer missing")}
+ return publishRecordingDurablyObservedLeased(ctx,lease,temporary,final,validateRecording,publicationDurabilityOps{renameRecordingNoReplace,func(f *os.File)error{return f.Sync()},func(f *os.File)error{return f.Sync()}},observe)
+}
+
 func publishRecordingDurablyLeased(ctx context.Context,lease *mediaMutationLease,temporary,final string,validate func(context.Context,string) error,ops publicationDurabilityOps) (result error) {
+ return publishRecordingDurablyObservedLeased(ctx,lease,temporary,final,validate,ops,nil)
+}
+
+func publishRecordingDurablyObservedLeased(ctx context.Context,lease *mediaMutationLease,temporary,final string,validate func(context.Context,string) error,ops publicationDurabilityOps,observe func(*os.File,*os.File)error) (result error) {
  if !lease.held() || lease.gate!=recordingMediaOwnership {return errPublicationOwnership}
  if validate==nil || ops.rename==nil || ops.syncFile==nil || ops.syncDirectory==nil {return errors.New("recording publication operations missing")}
  if err:=ctx.Err();err!=nil {return err}
@@ -92,5 +103,6 @@ func publishRecordingDurablyLeased(ctx context.Context,lease *mediaMutationLease
  for _,directory:=range directories {if err:=ops.syncDirectory(directory);err!=nil {result=errors.Join(result,fmt.Errorf("sync recording publication directory: %w",err))}}
  published,err:=os.Lstat(final)
  if err!=nil {result=errors.Join(result,err)} else if !samePublicationFile(before,published) {result=errors.Join(result,errors.New("published recording identity changed"))}
+ if observe!=nil && result==nil && ctx.Err()==nil {result=observe(pinned,directories[len(directories)-1])}
  return errors.Join(result,ctx.Err())
 }

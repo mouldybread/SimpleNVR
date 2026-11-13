@@ -1,25 +1,37 @@
 package main
 
-import "context"
+import (
+ "context"
+ "errors"
+ "os"
+)
 
 // Acquisition ownership may transfer to terminal release, never to a child or
 // goroutine. Checkpoint writers only borrow. The job owner must call releaseJob
 // after finalization returns, including on a published-checkpoint failure.
-type eventRecoveryBorrow struct {ctx context.Context;lease *mediaMutationLease;terminal bool}
+type eventRecoveryBorrow struct {ctx context.Context;lease *mediaMutationLease;terminal bool;output *eventPublishedOutput}
 
 func (bm *BufferManager) publishEventRecording(ctx,captureCtx context.Context,job *bufferEvent,temporary,final string,incomplete bool) error {
- return bm.publishEventRecordingWith(ctx,captureCtx,job,temporary,final,incomplete,publishRecordingLeased)
+ return bm.publishEventRecordingWith(ctx,captureCtx,job,temporary,final,incomplete,func(ctx context.Context,lease *mediaMutationLease,from,to string)error{
+  return publishRecordingObservedLeased(ctx,lease,from,to,func(file,directory *os.File)error{
+   borrowed:=job.recoveryBorrow
+   if borrowed==nil || borrowed.lease!=lease || borrowed.output!=nil {return errPublicationOwnership}
+   output,err:=retainEventPublishedOutput(ctx,lease,to,file,directory);if err!=nil {return err}
+   borrowed.output=output
+   return nil
+  })
+ })
 }
 
 // This joins publication, checkpoint and terminal retention, NOT cleanup authority.
 // Terminal release still retains every job. Registry/complete-capture eligibility
 // and checkpoint-last/input/root release remain separate integration work.
-func (bm *BufferManager) publishEventRecordingWith(ctx,captureCtx context.Context,job *bufferEvent,temporary,final string,incomplete bool,publish func(context.Context,*mediaMutationLease,string,string)error) error {
+func (bm *BufferManager) publishEventRecordingWith(ctx,captureCtx context.Context,job *bufferEvent,temporary,final string,incomplete bool,publish func(context.Context,*mediaMutationLease,string,string)error) (resultErr error) {
  if job==nil || publish==nil || job.recoveryBorrow!=nil {return errPublicationOwnership}
  job.keepStaging=true
  lease,err:=recordingMediaOwnership.acquire(ctx);if err!=nil {return err}
  transferred:=false
- defer func(){if !transferred {job.recoveryBorrow=nil;lease.release()}}()
+ defer func(){if !transferred {resultErr=errors.Join(resultErr,job.closePublishedOutput());job.recoveryBorrow=nil;lease.release()}}()
  if job.inventory!=nil {
   if job.inventory.path!=job.dir {return errStagingInventory}
   if err:=job.inventory.check(ctx,lease);err!=nil {return err}

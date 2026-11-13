@@ -111,6 +111,7 @@ func (bm *BufferManager) releaseOwnedJob(job *bufferEvent) {
    defer func(){borrowed.terminal=false}()
   }
   defer func(){job.recoveryBorrow=nil;<-bm.slots}()
+  defer func(){if err:=job.closePublishedOutput();err!=nil {log.Printf("Unable to close event publication evidence for camera %s",bm.camera.ID)}}()
   if err:=job.closeOwnedInventory();err!=nil {log.Printf("Unable to close event inventory for camera %s",bm.camera.ID)}
  }()
  if borrowed!=nil && borrowed.terminal {
