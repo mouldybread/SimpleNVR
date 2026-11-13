@@ -22,7 +22,7 @@ const (bufferDuration=30*time.Second; segmentSize=5*time.Second; eventWorkers=2;
 var (errEventStopped=errors.New("event recorder stopping or unavailable");errEventBusy=errors.New("event recorder at capacity");errEventInvalid=errors.New("invalid event capture request"))
 
 type BufferSegment struct {StartTime time.Time; EndTime time.Time; FilePath string}
-type bufferEvent struct {event Event;preFiles []string;preStart time.Time;dir string;keepStaging bool;recovery *eventRecoveryManifest;recoveryFailed bool;recoveryWriter func(string,[]byte) error}
+type bufferEvent struct {event Event;preFiles []string;preStart time.Time;dir string;keepStaging bool;recovery *eventRecoveryManifest;recoveryFailed bool;recoveryWriter func(string,[]byte) error;inventory *ownedStagingInventory}
 type BufferManager struct {
  camera *Camera
  buffer []BufferSegment
@@ -102,44 +102,9 @@ func (bm *BufferManager) TriggerEvent(event Event) error {
  }
 }
 
-func (bm *BufferManager) pinBuffer(event Event) (*bufferEvent,error) {
- parent:=filepath.Join(bm.camera.RecordDir,"temp")
- if err:=os.MkdirAll(parent,0700);err!=nil {return nil,err}
- dir,err:=os.MkdirTemp(parent,"event-");if err!=nil {return nil,err}
- job:=&bufferEvent{event:event,preStart:event.CreatedAt.UTC(),dir:dir}
- bm.bufferMutex.RLock();defer bm.bufferMutex.RUnlock()
- cutoff:=time.Now().UTC().Add(-bufferDuration)
- selected:=make([]BufferSegment,0)
- for _,seg:=range bm.buffer {
-  if seg.EndTime.After(cutoff) {
-   if len(selected)>=maxRecoveryInputs {return nil,errors.New("too many recovery inputs")}
-   selected=append(selected,seg)
-  }
- }
- if err:=bm.beginEventRecovery(job,selected);err!=nil {return nil,err}
- for _,seg:=range selected {
-  if !seg.EndTime.After(cutoff) {continue}
-  pinned:=filepath.Join(dir,fmt.Sprintf("pre_%03d.mp4",len(job.preFiles)))
-  if err:=os.Link(seg.FilePath,pinned);err!=nil {
-   _=job.recoveryCheckpoint("pin_failed","link_failed")
-   log.Printf("Retained incomplete prebuffer staging for camera %s event %s; inspection/recovery required",bm.camera.ID,event.ID)
-   return nil,err
-  }
-  if len(job.preFiles)==0 {job.preStart=seg.StartTime}
-  job.preFiles=append(job.preFiles,pinned)
- }
- if err:=job.recoveryCheckpoint("pinned","");err!=nil {return nil,err}
- return job,nil
-}
+func (bm *BufferManager) pinBuffer(event Event) (*bufferEvent,error) {return bm.pinOwnedBuffer(event)}
 
-func (bm *BufferManager) releaseJob(job *bufferEvent) {
- if job.recoveryFailed {job.keepStaging=true}
- if job.keepStaging {
-  _=job.recoveryCheckpoint("retained","")
-  log.Printf("Retained event staging for camera %s event %s; inspection/recovery required",bm.camera.ID,job.event.ID)
- } else if err:=os.RemoveAll(job.dir);err!=nil {log.Printf("Unable to remove event staging for camera %s",bm.camera.ID)}
- <-bm.slots
-}
+func (bm *BufferManager) releaseJob(job *bufferEvent) {bm.releaseOwnedJob(job)}
 
 func (bm *BufferManager) segmentBuffer() {
  dir:=filepath.Join(bm.camera.RecordDir,"buffer")
