@@ -121,8 +121,10 @@ func (bm *BufferManager) releaseOwnedJob(job *bufferEvent) {
   ctx,cancel:=context.WithTimeout(context.Background(),recordingFinalizeGrace);defer cancel()
   borrowed.ctx=ctx
  }
+ if borrowed!=nil && borrowed.revalidation!=nil {borrowed.revalidationErr=borrowed.revalidation.check(borrowed.ctx,borrowed.lease)}
  // Retention is still unconditional, never inferred from a legacy false flag.
  job.keepStaging=true
  _=job.recoveryCheckpoint("retained","")
+ if borrowed!=nil && borrowed.revalidation!=nil {borrowed.revalidationErr=borrowed.revalidation.check(borrowed.ctx,borrowed.lease)}
  log.Printf("Retained event staging for camera %s event %s; inspection/recovery required",bm.camera.ID,job.event.ID)
 }
