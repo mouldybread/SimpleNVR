@@ -25,7 +25,7 @@ func (bm *BufferManager) pinOwnedBufferWithOpen(event Event,open func(context.Co
  parent:=filepath.Join(bm.camera.RecordDir,"temp")
  if err:=os.MkdirAll(parent,0700);err!=nil {return nil,err}
  dir,err:=os.MkdirTemp(parent,"event-");if err!=nil {return nil,err}
- job:=&bufferEvent{event:event,preStart:event.CreatedAt.UTC(),dir:dir}
+ job:=&bufferEvent{event:event,preStart:event.CreatedAt.UTC(),dir:dir,keepStaging:true}
  bm.bufferMutex.RLock();defer bm.bufferMutex.RUnlock()
  cutoff:=time.Now().UTC().Add(-bufferDuration)
  selected:=make([]BufferSegment,0)
@@ -97,17 +97,15 @@ func (job *bufferEvent) closeOwnedInventory() error {
 }
 
 func (bm *BufferManager) releaseOwnedJob(job *bufferEvent) {
- // Return capacity independently of checkpoint/cleanup outcomes, and close the
- // inventory even on the legacy normal-release path. No lease spans capture.
+ // Retention is the only terminal action until positive cleanup authorization
+ // and publication-through-release ownership are integrated. A false legacy
+ // keepStaging flag, even after publication, is never permission to unlink.
+ // Successful jobs intentionally retain their inputs/checkpoint in this slice.
  defer func(){
   if err:=job.closeOwnedInventory();err!=nil {log.Printf("Unable to close event inventory for camera %s",bm.camera.ID)}
   <-bm.slots
  }()
- if job.recoveryFailed {job.keepStaging=true}
- if job.keepStaging {
-  _=job.recoveryCheckpoint("retained","")
-  log.Printf("Retained event staging for camera %s event %s; inspection/recovery required",bm.camera.ID,job.event.ID)
- } else if err:=os.RemoveAll(job.dir);err!=nil {log.Printf("Unable to remove event staging for camera %s",bm.camera.ID)}
- // Recursive cleanup is deliberately unchanged here, NOT newly authorized by
- // inventory membership. Positive eligibility/nonrecursive release remain open.
+ job.keepStaging=true
+ _=job.recoveryCheckpoint("retained","")
+ log.Printf("Retained event staging for camera %s event %s; inspection/recovery required",bm.camera.ID,job.event.ID)
 }

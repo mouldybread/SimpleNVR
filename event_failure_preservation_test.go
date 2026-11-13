@@ -91,10 +91,12 @@ func TestAssemblyFailurePublicationPreservesStaging(t *testing.T) {
    if job.keepStaging!=tc.wantKeep {t.Fatalf("keepStaging=%v",job.keepStaging)}
    bm.releaseJob(job)
    if len(bm.slots)!=0 {t.Fatal("slot leaked")}
-   if tc.wantKeep {
-    got,err:=os.ReadFile(input);if err!=nil || string(got)!="original capture evidence" {t.Fatalf("input lost: %q %v",got,err)}
-    if _,err:=os.Stat(filepath.Join(job.dir,"concat.txt"));err!=nil {t.Fatal("concat list lost",err)}
-   } else if _,err:=os.Stat(job.dir);!os.IsNotExist(err) {t.Fatalf("successful staging not cleaned: %v",err)}
+   // Until positive cleanup authorization is integrated, successful assembly
+   // retains staging too; publication and failure assertions remain unchanged.
+   if !job.keepStaging || job.inventory!=nil {t.Fatal("terminal release did not retain/close")}
+   got,err:=os.ReadFile(input);if err!=nil || string(got)!="original capture evidence" {t.Fatalf("input lost: %q %v",got,err)}
+   if _,err:=os.Stat(filepath.Join(job.dir,"concat.txt"));err!=nil {t.Fatal("concat list lost",err)}
+   if m:=readRecoveryTest(t,job.dir);tc.wantPublished && m.State!="published" {t.Fatal("publication checkpoint changed",m)}
    if tc.wantPublished {if got,err:=os.ReadFile(expected);err!=nil || string(got)!="synthetic output" {t.Fatalf("output lost: %q %v",got,err)}}
    if tc.collision {if got,err:=os.ReadFile(expected);err!=nil || string(got)!="existing evidence" {t.Fatalf("existing output changed: %q %v",got,err)}}
    if tc.probeFails || tc.collision {if got,err:=os.ReadFile(filepath.Join(bm.camera.RecordDir,name)+".tmp");err!=nil || string(got)!="synthetic output" {t.Fatalf("unpublished output lost: %q %v",got,err)}}

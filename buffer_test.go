@@ -35,7 +35,9 @@ func TestPinnedPrebufferSurvivesPruning(t *testing.T) {
  if _,err:=os.Stat(path);!os.IsNotExist(err) {t.Fatalf("source not pruned: %v",err)}
  got,err:=os.ReadFile(job.preFiles[0]);if err!=nil || string(got)!=content {t.Fatal("pinned prebuffer was lost",err)}
  bm.releaseJob(job)
- if _,err:=os.Stat(job.dir);!os.IsNotExist(err) {t.Fatal("staging leaked")}
+ if !job.keepStaging || job.inventory!=nil || len(bm.slots)!=0 {t.Fatal("unprocessed release did not retain/close/return capacity")}
+ assertPublicationBytes(t,job.preFiles[0],content)
+ if m:=readRecoveryTest(t,job.dir);m.State!="pinned" || m.PinnedCount!=1 {t.Fatal(m)}
 }
 
 func TestUnreportedActiveSegmentIsNotPinned(t *testing.T) {
@@ -146,4 +148,31 @@ func TestEventQueueRefusalAndCancellationRetainCheckpoints(t *testing.T) {
    })
   }
  }
+}
+
+func TestTerminalReleaseRetainsRegardlessOfLegacyFlag(t *testing.T) {
+ for _,kind:=range []string{"fresh","manual","checkpoint failure"} {t.Run(kind,func(t *testing.T){
+  bm:=bufferFixture(t)
+  var job *bufferEvent
+  if kind=="manual" {job=&bufferEvent{dir:t.TempDir(),event:bufferTestEvent("manual")};bm.slots<-struct{}{}} else {
+   if err:=bm.TriggerEvent(bufferTestEvent(kind));err!=nil {t.Fatal(err)}
+   job=<-bm.eventChan
+   if !job.keepStaging {t.Fatal("new job did not default to retention")}
+  }
+  inventory:=job.inventory
+  input:=filepath.Join(job.dir,"foreign");if err:=os.WriteFile(input,[]byte("retain bytes"),0600);err!=nil {t.Fatal(err)}
+  nested:=filepath.Join(job.dir,"nested");if err:=os.Mkdir(nested,0700);err!=nil {t.Fatal(err)}
+  child:=filepath.Join(nested,"evidence");if err:=os.WriteFile(child,[]byte("nested bytes"),0600);err!=nil {t.Fatal(err)}
+  var before []byte
+  if kind=="checkpoint failure" {
+   var err error;before,err=os.ReadFile(filepath.Join(job.dir,"recovery.json"));if err!=nil {t.Fatal(err)}
+   job.recoveryWriter=func(string,[]byte)error{return os.ErrPermission}
+  }
+  job.keepStaging=false
+  bm.releaseJob(job)
+  if !job.keepStaging || job.inventory!=nil || len(bm.slots)!=0 {t.Fatal("terminal ownership/capacity leaked")}
+  if inventory!=nil {assertJobInventoryClosed(t,inventory)}
+  assertPublicationBytes(t,input,"retain bytes");assertPublicationBytes(t,child,"nested bytes")
+  if kind=="checkpoint failure" {assertPublicationBytes(t,filepath.Join(job.dir,"recovery.json"),string(before));if !job.recoveryFailed {t.Fatal("failure not latched")}}
+ })}
 }

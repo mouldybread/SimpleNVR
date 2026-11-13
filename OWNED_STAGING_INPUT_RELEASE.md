@@ -1,56 +1,48 @@
-# Opt-in nonrecursive staging-input release
+# Owned staging input release and production retention
 
-Base: 1b54ec6eaa5df8cf2c79530fb3e32e355689cb98 (user-reported green).
+Current preparation base: c24bbe9196fa05500c4afbb76ef51744341adce5.
 
-This batch adds an input-only destructive primitive with no production caller.
-It does not change recorder.go, releaseOwnedJob, cleanup eligibility, publication
-ordering, checkpoint schema or workflows. Existing recursive production success
-cleanup is STILL PRESENT and is not made safe by this standalone prerequisite.
+## Production default-retention follow-up
 
-## Contract
+New jobs default to keepStaging=true. Terminal release always retains staging,
+attempts the existing retained checkpoint, closes inventory descriptors and returns
+capacity. A false legacy flag is never deletion authority, even after successful
+publication or for manually constructed jobs. The event-release RemoveAll path
+is removed. Capture/assembly, publication ordering and checkpoint schema are not
+changed. Missing/failed checkpoints still retain bytes and return capacity.
 
-releaseOwnedStagingInputsLeased borrows a held shared media lease and a serialized
-creator-proven inventory. The caller must supply an independent authorization and
-registry/context/shutdown guard; inventory membership is never eligibility. The
-helper neither acquires/releases the lease nor locks NVR.mu. Guard callbacks must
-not reacquire ownership, wait for workers or retain registry locks across I/O.
+Successful jobs intentionally retain their inputs and checkpoint until positive
+cleanup authorization and a shared finalization lease are integrated. Staging
+space therefore grows even for successful events and is not expired by published
+retention. Monitor capacity and use existing admission limits; this change adds
+no automatic staging deletion, expiry or emergency reclamation.
 
-An explicitly recorded recovery.json is mandatory. Full bounded inventory
-preflight precedes the first unlink. Only recorded event.mp4, concat.txt and
-pre_000.mp4 through pre_127.mp4 are accepted as inputs; recorded unrelated names
-also refuse. Every candidate rechecks root/parent, checkpoint, creator descriptor
-and nonfollowing named identity before descriptor-relative unlink. Successful
-unlinks are reported in deterministic order; removed input pins close immediately.
-There is no pathname re-adoption, recursive traversal, RemoveAll or rmdir.
+## Opt-in input-release primitive (c24bbe9)
 
-The checkpoint, its pin and root always remain, including after all inputs are
-released. This deliberately postpones checkpoint-last removal/late-rmdir recovery
-to a later slice. Directory Sync is attempted after any successful unlink even
-when a later phase fails or the operation is canceled. Final guard/preflight runs
-after Sync before InputsReleased can be true. Failure returns the actual Removed
-subset and never claims rollback. Late unknown entries are retained, not swept.
-InputsReleased means only this input phase finished, not complete job cleanup,
-durable publication, successful capture or permission for any later deletion.
+The primitive remains without a production caller. It borrows one shared media
+lease and a serialized creator-proven inventory, with an independent caller guard.
+Inventory membership is not authorization. Full preflight precedes all unlinks;
+only recorded event.mp4, concat.txt and pre_000.mp4 through pre_127.mp4 are accepted.
+Each input rechecks directory/checkpoint/descriptor/name identity before relative
+unlink. Unknown, changed or special entries refuse. The result reports actual
+successful unlinks, not rollback. Removed pins close; directory sync is attempted
+after any unlink despite later failure/cancellation. Final checks follow sync.
+The checkpoint and root always survive. No recursive fallback or rmdir exists.
 
-Stat then unlink is not atomic against hostile external writers. Trusted owned
-directories remain required. Hard-link ctime changes conservatively refuse later
-identity checks; no identities are refreshed by filename. Kernel I/O is not made
-interruptible by the operation context. Inventory access/teardown is serialized.
+Trusted directories remain required: stat/unlink is not atomic against hostile
+writers. Hard-link ctime changes conservatively refuse; no filename refresh is
+allowed. Context does not make kernel I/O interruptible. Guard callbacks must not
+reacquire the borrowed lease or wait for workers. Inventory teardown is serialized.
 
-## Regression coverage and next boundary
+## Remaining integration and verification
 
-Seven table-driven tests cover successful input release and repeat invocation;
-foreign file/directory/symlink/FIFO refusal before unlink; partial unlink failure;
-input/root/parent replacement, modification and missing input between unlinks;
-late entries during unlink and Sync; cancellation before/mid-operation and during
-Sync; Sync/close failure; required checkpoint, guard revocation and invalid lease.
-Checkpoint bytes/pin/root, retained bytes, removed-pin closure and borrowed-lease
-ownership are asserted. File-system seams make interleavings synchronous, not
-sleep-based. Existing Safety verification already includes go build ./...,
-go test -race -count=1 -timeout=120s ./... and go vet ./...; new tests are picked up
-without changing the core, both browser acceptance runs or aggregate verify job.
+Positive cleanup eligibility, publication -> published checkpoint -> release
+ownership, production engine activation, checkpoint-last/final empty-directory
+handling and integrated successful-cleanup acceptance remain open. Default
+retention alone does not close the ownership subsection.
 
-Next integration still requires positive cleanup eligibility/default retention,
-a shared publication -> published-checkpoint -> release boundary, and checkpoint-
-last/final empty-directory removal with explicit partial-outcome evidence. No
-whole acceptance point or overall audit workstream is declared complete here.
+Existing failure/publication assertions are preserved; tests now expect retained
+unprocessed and successfully published staging. A false-flag terminal-release
+table covers fresh/manual jobs, unknown/nested evidence, failed checkpoints,
+inventory closure and slot return. Existing Safety verification discovers these
+regressions through its full-package race tests; workflows are unchanged.
