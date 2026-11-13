@@ -89,11 +89,35 @@ func TestEventStagingHTTPAdmissionBatch(t *testing.T) {
   bm:=newBufferManager(context.Background(),cam);defer bm.cancel();cam.bufferManager=bm
   n:=&NVR{cameras:map[string]*Camera{cam.ID:cam}};saved:=0;before:=eventStorageTree(t,root)
   w:=httptest.NewRecorder();triggerEventHandlerWithState(w,httptest.NewRequest("POST","/api/events/trigger",strings.NewReader(eventStorageRequest())),n,func() error {saved++;return nil})
-  if len(bm.eventChan)>0 {job:=<-bm.eventChan;bm.releaseJob(job)}
+  var job *bufferEvent
+  released:=false
+  if len(bm.eventChan)>0 {job=<-bm.eventChan}
+  defer func(){if job!=nil && !released {bm.releaseJob(job)}}()
   if w.Code!=item.status {t.Fatalf("status %d: %s",w.Code,w.Body.String())}
-  if item.status==200 {if saved!=1 || len(n.events)!=1 {t.Fatal("admitted capture metadata missing")}} else if saved!=0 || len(n.events)!=0 {t.Fatal("rejected capture changed metadata")}
+  want:=make(map[string]string,len(before)+2)
+  for path,data:=range before {want[path]=data}
+  if item.status==200 {
+   if saved!=1 || len(n.events)!=1 || job==nil || len(bm.slots)!=1 {t.Fatal("admitted capture metadata/job/capacity missing")}
+   if job.inventory==nil || !job.keepStaging {t.Fatal("admitted job lacks retained ownership")}
+   if filepath.Dir(job.dir)!=filepath.Join(root,"temp") || !strings.HasPrefix(filepath.Base(job.dir),"event-") {t.Fatal("unexpected job directory")}
+   pinned:=readRecoveryTest(t,job.dir)
+   if pinned.State!="pinned" || pinned.Revision!=2 || pinned.CameraID!=cam.ID || pinned.EventID!=n.events[0].ID || pinned.PinnedCount!=0 || len(pinned.Inputs)!=0 {t.Fatal("bad admitted checkpoint",pinned)}
+   inventory:=job.inventory
+   bm.releaseJob(job);released=true
+   if !job.keepStaging || job.inventory!=nil {t.Fatal("unprocessed job not retained or inventory leaked")}
+   assertJobInventoryClosed(t,inventory)
+   retained:=readRecoveryTest(t,job.dir)
+   wantRetained:=pinned;wantRetained.Revision++;wantRetained.ObservedAt=retained.ObservedAt
+   if !reflect.DeepEqual(wantRetained,retained) {t.Fatal("retention changed processing evidence",retained)}
+   raw,err:=os.ReadFile(filepath.Join(job.dir,"recovery.json"));if err!=nil {t.Fatal(err)}
+   relative,err:=filepath.Rel(root,job.dir);if err!=nil {t.Fatal(err)}
+   want[relative+"/"]=""
+   want[filepath.Join(relative,"recovery.json")]=string(raw)
+  } else if saved!=0 || len(n.events)!=0 || job!=nil {t.Fatal("rejected capture changed metadata or queued work")}
   if len(bm.slots)!=0 || len(bm.eventChan)!=0 {t.Fatal("admission test leaked capacity")}
-  if !reflect.DeepEqual(before,eventStorageTree(t,root)) {t.Fatal("existing staging changed or rejected/finished test staging leaked")}
+  // Rejection permits no changes. Admission permits exactly the retained job
+  // directory/checkpoint, with every earlier artifact still byte-identical.
+  if !reflect.DeepEqual(want,eventStorageTree(t,root)) {t.Fatal("staging evidence changed or unexpected admission artifacts")}
  })}
 }
 
