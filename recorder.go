@@ -199,8 +199,7 @@ func (bm *BufferManager) recordEventDuration(job *bufferEvent) string {
  job.keepStaging=true
  if err:=job.recoveryCheckpoint("capturing","");err!=nil {return ""}
  ctx,cancel:=context.WithTimeout(bm.ctx,time.Duration(job.event.Duration)*time.Second+15*time.Second);defer cancel()
- cmd:=ffmpegCommand(ctx,"-hide_banner","-loglevel","error","-nostats","-rtsp_transport","tcp","-i",bm.camera.RTSPUrl,"-t",strconv.Itoa(job.event.Duration),"-c","copy","-f","mp4","-movflags","faststart","-y",file)
- err:=cmd.Run()
+ err:=bm.captureEventFile(ctx,job,file)
  if err!=nil || ctx.Err()!=nil {
   // Failure, including inability to inspect output, never authorizes deletion.
   job.keepStaging=true
@@ -215,15 +214,7 @@ func (bm *BufferManager) recordEventDuration(job *bufferEvent) string {
 func (bm *BufferManager) concatenateEventRecording(job *bufferEvent,eventFile string) string {
  job.keepStaging=true
  if err:=job.recoveryCheckpoint("assembling","");err!=nil {return ""}
- list,err:=os.Create(filepath.Join(job.dir,"concat.txt"));if err!=nil {return ""}
- files:=append(append([]string(nil),job.preFiles...),eventFile)
- for _,file:=range files {
-  if filepath.Dir(file)!=job.dir {list.Close();return ""}
-  base:=filepath.Base(file)
-  if strings.ContainsAny(base,"'\r\n\\") {list.Close();return ""}
-  if _,err:=fmt.Fprintf(list,"file '%s'\n",base);err!=nil {list.Close();return ""}
- }
- if err:=list.Close();err!=nil {return ""}
+ if err:=job.writeEventConcat(bm.ctx,eventFile);err!=nil {return ""}
  name:=fmt.Sprintf("%s_%s_%s.mp4",job.preStart.UTC().Format("20060102_150405"),sanitizeFilename(job.event.Label),sanitizeFilename(job.event.ID))
  final:=filepath.Join(bm.camera.RecordDir,name);temp:=final+".tmp"
  ctx,cancel:=context.WithTimeout(bm.ctx,2*time.Minute);defer cancel()
