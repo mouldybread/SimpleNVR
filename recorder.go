@@ -22,7 +22,7 @@ const (bufferDuration=30*time.Second; segmentSize=5*time.Second; eventWorkers=2;
 var (errEventStopped=errors.New("event recorder stopping or unavailable");errEventBusy=errors.New("event recorder at capacity");errEventInvalid=errors.New("invalid event capture request"))
 
 type BufferSegment struct {StartTime time.Time; EndTime time.Time; FilePath string}
-type bufferEvent struct {event Event;preFiles []string;preStart time.Time;dir string;keepStaging bool;recovery *eventRecoveryManifest;recoveryFailed bool;recoveryWriter func(string,[]byte) error;inventory *ownedStagingInventory}
+type bufferEvent struct {event Event;preFiles []string;preStart time.Time;dir string;keepStaging bool;recovery *eventRecoveryManifest;recoveryFailed bool;recoveryWriter func(string,[]byte) error;inventory *ownedStagingInventory;recoveryBorrow *eventRecoveryBorrow}
 type BufferManager struct {
  camera *Camera
  buffer []BufferSegment
@@ -228,11 +228,7 @@ func (bm *BufferManager) concatenateEventRecording(job *bufferEvent,eventFile st
  job.recovery.Partial=incomplete
  if err:=job.recoveryCheckpoint("publishing","");err!=nil {return ""}
  finalizeCtx,finalizeCancel:=context.WithTimeout(context.WithoutCancel(bm.ctx),recordingFinalizeGrace);defer finalizeCancel()
- if err:=publishRecording(finalizeCtx,temp,final);err!=nil {_=job.recoveryCheckpoint("publication_failed","validation_or_publication_failed");removeEmptyRecording(temp);log.Printf("Event assembly for camera %s event %s retained for inspection",bm.camera.ID,job.event.ID);return ""}
- // A readable partial output is not a replacement for its recovery inputs.
- // Cancellation during publication also conservatively retains staging.
- checkpointErr:=job.recoveryCheckpoint("published","")
- job.keepStaging=incomplete || ctx.Err()!=nil || bm.ctx.Err()!=nil || checkpointErr!=nil || job.recoveryFailed
+ if err:=bm.publishEventRecording(finalizeCtx,ctx,job,temp,final,incomplete);err!=nil {_=job.recoveryCheckpoint("publication_failed","validation_or_publication_failed");removeEmptyRecording(temp);log.Printf("Event assembly for camera %s event %s retained for inspection",bm.camera.ID,job.event.ID);return ""}
  return final
 }
 

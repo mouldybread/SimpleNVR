@@ -81,11 +81,16 @@ func pinOwnedJobInput(ctx context.Context,lease *mediaMutationLease,inventory *o
 }
 
 func (job *bufferEvent) writeOwnedJobRecovery(path string,data []byte) error {
+ if borrowed:=job.recoveryBorrow;borrowed!=nil {return job.writeOwnedJobRecoveryContext(borrowed.ctx,path,data)}
  ctx,cancel:=context.WithTimeout(context.Background(),recordingFinalizeGrace);defer cancel()
  return job.writeOwnedJobRecoveryContext(ctx,path,data)
 }
 func (job *bufferEvent) writeOwnedJobRecoveryContext(ctx context.Context,path string,data []byte) error {
  if job.inventory==nil || path!=job.dir || job.inventory.path!=job.dir {return errStagingInventory}
+ if borrowed:=job.recoveryBorrow;borrowed!=nil {
+  if err:=borrowed.ctx.Err();err!=nil {return err}
+  return writeOwnedEventRecovery(ctx,borrowed.lease,job.inventory,data)
+ }
  lease,err:=recordingMediaOwnership.acquire(ctx);if err!=nil {return err}
  defer lease.release()
  return writeOwnedEventRecovery(ctx,lease,job.inventory,data)
