@@ -14,6 +14,8 @@ import (
 // camera capture. No release-engine invocation or deletion permission is tested.
 func releaseRevalidationFixture(t *testing.T) (*NVR,*BufferManager,*bufferEvent,*eventReleaseRevalidation,*mediaMutationLease) {
  t.Helper();installEventFailureTools(t,0,false);bm,job:=publicationCheckpointJob(t)
+ // Explicit synthetic stream-duration witness; not actual footage/coverage.
+ installEventSpanProbe(t,"printf '%s' '{\"streams\":[{\"codec_type\":\"video\",\"duration_ts\":30000,\"time_base\":\"1/1000\"}]}'\n")
  // Exercise the production entry points using synthetic executables, rather
  // than assigning witnesses to the old creator-only/direct-publication fixture.
  input:=bm.recordEventDuration(job);if input=="" {t.Fatal("synthetic production capture failed")}

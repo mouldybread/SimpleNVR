@@ -59,7 +59,8 @@ func probeEventVideoSpan(ctx context.Context,file *os.File) (eventVideoSpan,erro
  return decodeEventVideoSpan(output.Bytes())
 }
 
-// An opt-in read-only component; NO production caller or cleanup authority.
+// Read-only duration evidence collected once by production finalization.
+// Still NOT full coverage, a cleanup capability, or permission to delete.
 // The existing job owner serializes inspection, checks, and terminal teardown.
 // No extra persistent pin, lease, mutable global map or local context is retained.
 type eventDurationEvidence struct {

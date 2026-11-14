@@ -9,7 +9,7 @@ import (
 // Acquisition ownership may transfer to terminal release, never to a child or
 // goroutine. Checkpoint writers only borrow. The job owner must call releaseJob
 // after finalization returns, including on a published-checkpoint failure.
-type eventRecoveryBorrow struct {ctx context.Context;lease *mediaMutationLease;terminal bool;output *eventPublishedOutput;revalidation *eventReleaseRevalidation;revalidationErr error}
+type eventRecoveryBorrow struct {ctx context.Context;lease *mediaMutationLease;terminal bool;output *eventPublishedOutput;revalidation *eventReleaseRevalidation;revalidationErr error;duration *eventDurationEvidence;durationErr error}
 
 func (bm *BufferManager) publishEventRecording(ctx,captureCtx context.Context,job *bufferEvent,temporary,final string,incomplete bool) error {
  return bm.publishEventRecordingWith(ctx,captureCtx,job,temporary,final,incomplete,func(ctx context.Context,lease *mediaMutationLease,from,to string)error{
@@ -50,11 +50,17 @@ func (bm *BufferManager) publishEventRecordingWith(ctx,captureCtx context.Contex
  // still absent, so a successful revalidation never enables deletion.
  borrowed:=job.recoveryBorrow
  job.execution.finishAssembly(bm,job,ctx,captureCtx,incomplete,checkpointErr)
+ // Transfer the SAME acquisition lease before read-only duration inspection.
+ // Even a failed published checkpoint still hands ownership to terminal release.
+ borrowed.terminal=true
+ transferred=true
+ borrowed.durationErr=errEventDurationEvidence
+ if job.execution.qualifies(bm,job) {
+  // The collector's existing aggregate budget is rooted in the live manager,
+  // NOT the publication/terminal metadata budget. No checkpoint is written here.
+  borrowed.duration,borrowed.durationErr=inspectEventDurationEvidence(bm.ctx,lease,bm,job)
+ }
  borrowed.revalidation=newEventReleaseRevalidation(nvr,bm,job,incomplete || captureCtx.Err()!=nil || checkpointErr!=nil || job.recoveryFailed)
  borrowed.revalidationErr=borrowed.revalidation.check(ctx,lease)
- // Worker terminal release owns this same lease from here, even if the
- // published checkpoint failed. No further capture/concat precedes that release.
- job.recoveryBorrow.terminal=true
- transferred=true
  return nil
 }

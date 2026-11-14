@@ -5,11 +5,11 @@ NEW IMPLEMENTATION, base 165986e687ddb3966a2922904c22d9b21fedd006.
 
 ## Bounded scope
 
-This adds an opt-in read-only inspection component and regressions, with no
-production caller. It is the strict media-duration evidence prerequisite for the
-separate requested-duration/full-coverage requirement, NOT that requirement's
-completion and NOT a cleanup permit. Existing production revalidation/execution
-qualification, publication and unconditional staging retention are unchanged.
+The reader introduced in 597f587 is now wired into production finalization and
+read-only release revalidation. It remains only the strict media-duration lower
+bound prerequisite for requested-duration/full-coverage validation, NOT that
+requirement's completion and NOT a cleanup permit. Publication return behavior,
+execution qualification and unconditional staging retention are unchanged.
 
 The collector requires a production execution-qualified finalizing job and its
 already transferred terminal media lease, inventoried capture descriptor and
@@ -26,8 +26,12 @@ input and file/pipe protocol whitelist, v:0 selection, and bounded JSON output.
 One aggregate five-second inspection context covers both probes and checks;
 WaitDelay bounds child pipe teardown separately. The caller owns the held shared
 lease and serializes this component with job teardown. Kernel I/O is not made
-interruptible. There are no new production probe executions until a separate
-reviewed production integration. No registry mutex is used across inspection.
+interruptible. For an execution-qualified successful publication/checkpoint,
+production now runs up to TWO additional read-only FFprobe processes under that
+SAME held finalization lease. Capture/concat processes remain outside ownership.
+This extends the existing publication-probe exception; inspection can delay other
+media mutations up to its bounded deadline/child pipe teardown, plus uninterruptible
+kernel I/O if storage blocks. No registry mutex is used across inspection.
 
 ## Exact lower bounds, not invented coverage policy
 
@@ -62,11 +66,27 @@ storage/lifecycle, both isolated Chrome runs and aggregate required checks stay
 unchanged. No workflow changes are needed or included. Exact new-head Actions
 validation remains required after approved push.
 
-## Finite remaining integration
+## Production observation and remaining integration
+
+After successful durable publication and the published checkpoint, execution is
+snapshotted and acquisition ownership transfers to the job. Duration collection
+then runs once with its existing aggregate deadline rooted in the live manager,
+not the publication/retained-checkpoint metadata context. The SAME lease and pins
+survive to terminal release. Duration failures yield no receipt, do not roll back
+publication, do not set/clear recoveryFailed, and do not prevent independent
+retained persistence or descriptor/slot/lease teardown. Ineligible execution skips
+probes entirely. A failed duration observation is not automatically retried.
+
+Revalidation binds the exact duration receipt, request, capture/output descriptors
+and execution/job/inventory/manager/borrow identities before and after its existing
+filesystem checks. Missing/failed/substituted evidence refuses. Terminal checks
+reuse the receipt and revalidate identities; they do not run more media processes.
+The earlier synthetic revalidation fixture now explicitly emits stream-duration
+JSON through an actual probe executable; no duration/execution bits are assigned.
 
 Next compose strict per-input/video timestamp and requested/prebuffer interval
-coverage evidence with this component, under an explicit conservative policy;
-then bind the complete evidence into production release eligibility/revalidation.
+coverage evidence, under an explicit conservative policy, and bind that complete
+evidence into positive eligibility. Duration integration alone does not do so.
 Do not infer full coverage from this duration-only receipt or enable an engine yet.
 Positive authorization, same-lease guarded nonrecursive release, explicit partial
 receipts/restoration handling, final A01-A12 integration and whole-branch audit/
