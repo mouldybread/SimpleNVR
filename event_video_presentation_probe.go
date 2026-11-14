@@ -12,8 +12,8 @@ import (
  "golang.org/x/sys/unix"
 )
 
-// Opt-in component only: no production call site is added. A future caller MUST
-// supply the existing held lease, owned descriptor and shared aggregate context.
+// The combined production collector supplies the existing held lease, owned
+// descriptor and ONE shared aggregate context; the standalone wrapper stays opt-in.
 // This function never acquires/releases ownership or opens media by its name.
 const eventPresentationProbeDiagnosticBytes = 16 << 10
 
@@ -34,30 +34,34 @@ func (b *eventPresentationProbeBuffer) Write(p []byte) (int,error) {
 // FFprobe can emit empty program/stream-group envelopes alongside show_entries.
 // Accept ONLY these two known empty arrays. The canonical decoder remains strict;
 // unknown/nonempty/null/duplicate envelopes do not get silently discarded.
-func decodeEventPresentationProbeJSON(ctx context.Context,raw []byte) (eventVideoPresentation,error) {
- var zero eventVideoPresentation
- if err:=ctx.Err();err!=nil {return zero,err}
- if len(raw)==0 || len(raw)>maxEventVideoPresentationBytes {return zero,errEventVideoPresentation}
+func eventPresentationProbeFields(ctx context.Context,raw []byte) (map[string]json.RawMessage,error) {
+ if err:=ctx.Err();err!=nil {return nil,err}
+ if len(raw)==0 || len(raw)>maxEventVideoPresentationBytes {return nil,errEventVideoPresentation}
  d:=json.NewDecoder(bytes.NewReader(raw))
- token,err:=d.Token();if err!=nil || token!=json.Delim('{') {return zero,errEventVideoPresentation}
+ token,err:=d.Token();if err!=nil || token!=json.Delim('{') {return nil,errEventVideoPresentation}
  fields:=make(map[string]json.RawMessage,4)
  for d.More() {
-  if err:=ctx.Err();err!=nil {return zero,err}
-  token,err:=d.Token();if err!=nil {return zero,errEventVideoPresentation}
-  key,ok:=token.(string);if !ok {return zero,errEventVideoPresentation}
-  if key!="streams" && key!="frames" && key!="programs" && key!="stream_groups" {return zero,errEventVideoPresentation}
-  if _,exists:=fields[key];exists {return zero,errEventVideoPresentation}
+  if err:=ctx.Err();err!=nil {return nil,err}
+  token,err:=d.Token();if err!=nil {return nil,errEventVideoPresentation}
+  key,ok:=token.(string);if !ok {return nil,errEventVideoPresentation}
+  if key!="streams" && key!="frames" && key!="programs" && key!="stream_groups" {return nil,errEventVideoPresentation}
+  if _,exists:=fields[key];exists {return nil,errEventVideoPresentation}
   var value json.RawMessage
-  if err:=d.Decode(&value);err!=nil {return zero,errEventVideoPresentation}
+  if err:=d.Decode(&value);err!=nil {return nil,errEventVideoPresentation}
   if key=="programs" || key=="stream_groups" {
    trimmed:=bytes.TrimSpace(value)
    var entries []json.RawMessage
-   if len(trimmed)==0 || trimmed[0]!='[' || json.Unmarshal(value,&entries)!=nil || len(entries)!=0 {return zero,errEventVideoPresentation}
+   if len(trimmed)==0 || trimmed[0]!='[' || json.Unmarshal(value,&entries)!=nil || len(entries)!=0 {return nil,errEventVideoPresentation}
   }
   fields[key]=value
  }
  token,err=d.Token()
- if err!=nil || token!=json.Delim('}') || !eventPresentationEOF(d) || fields["streams"]==nil || fields["frames"]==nil {return zero,errEventVideoPresentation}
+ if err!=nil || token!=json.Delim('}') || !eventPresentationEOF(d) || fields["streams"]==nil || fields["frames"]==nil {return nil,errEventVideoPresentation}
+ return fields,nil
+}
+func decodeEventPresentationProbeJSON(ctx context.Context,raw []byte) (eventVideoPresentation,error) {
+ var zero eventVideoPresentation
+ fields,err:=eventPresentationProbeFields(ctx,raw);if err!=nil {return zero,err}
  canonical,err:=json.Marshal(struct {
   Streams json.RawMessage `json:"streams"`
   Frames json.RawMessage `json:"frames"`
@@ -81,12 +85,13 @@ func eventPresentationDescriptorUnchanged(before,after unix.Stat_t) bool {
 // A successful result binds this individual inspection to the borrowed file for
 // the duration of the call, NOT to a job, inventory, requested interval or future
 // release. It is not a reusable receipt or positive cleanup authorization.
-func probeEventVideoPresentation(parent context.Context,lease *mediaMutationLease,file *os.File) (eventVideoPresentation,error) {
- var zero eventVideoPresentation
+func runEventVideoPresentationProbe(parent context.Context,lease *mediaMutationLease,file *os.File,entries string,decode func(context.Context,[]byte)(eventVideoProbeObservation,error)) (eventVideoProbeObservation,error) {
+ var zero eventVideoProbeObservation
+ if decode==nil {return zero,errEventVideoPresentation}
  // This can only shorten a caller's shared aggregate deadline, never extend it.
  ctx,cancel:=context.WithTimeout(parent,eventDurationInspectionBudget);defer cancel()
  before,err:=eventPresentationDescriptorStat(ctx,lease,file);if err!=nil {return zero,err}
- cmd:=exec.CommandContext(ctx,"ffprobe","-v","error","-err_detect","explode","-protocol_whitelist","file,pipe","-f","mov","-i","/proc/self/fd/3","-select_streams","v:0","-show_frames","-show_entries","stream=index,codec_type,time_base:frame=media_type,stream_index,pts,duration:frame_side_data=","-of","json")
+ cmd:=exec.CommandContext(ctx,"ffprobe","-v","error","-err_detect","explode","-protocol_whitelist","file,pipe","-f","mov","-i","/proc/self/fd/3","-select_streams","v:0","-show_frames","-show_entries",entries,"-of","json")
  cmd.ExtraFiles=[]*os.File{file};cmd.WaitDelay=2*time.Second
  stdout:=&eventPresentationProbeBuffer{limit:maxEventVideoPresentationBytes}
  stderr:=&eventPresentationProbeBuffer{limit:eventPresentationProbeDiagnosticBytes}
@@ -98,9 +103,21 @@ func probeEventVideoPresentation(parent context.Context,lease *mediaMutationLeas
  if stdout.refused || stderr.refused || stderr.Len()!=0 {return zero,errEventVideoPresentation}
  after,err:=eventPresentationDescriptorStat(ctx,lease,file);if err!=nil {return zero,err}
  if !eventPresentationDescriptorUnchanged(before,after) {return zero,errEventVideoPresentation}
- observation,err:=decodeEventPresentationProbeJSON(ctx,stdout.Bytes());if err!=nil {return zero,err}
+ observation,err:=decode(ctx,stdout.Bytes());if err!=nil {return zero,err}
  after,err=eventPresentationDescriptorStat(ctx,lease,file);if err!=nil {return zero,err}
  if !eventPresentationDescriptorUnchanged(before,after) {return zero,errEventVideoPresentation}
  if err:=ctx.Err();err!=nil {return zero,err}
+ observation.stat=after
  return observation,nil
+}
+
+// Preserve the standalone API and query for component tests and explicit callers.
+func probeEventVideoPresentation(parent context.Context,lease *mediaMutationLease,file *os.File) (eventVideoPresentation,error) {
+ result,err:=runEventVideoPresentationProbe(parent,lease,file,"stream=index,codec_type,time_base:frame=media_type,stream_index,pts,duration:frame_side_data=",func(ctx context.Context,raw []byte)(eventVideoProbeObservation,error){
+  observation,err:=decodeEventPresentationProbeJSON(ctx,raw)
+  if err!=nil {return eventVideoProbeObservation{},err}
+  return eventVideoProbeObservation{presentation:observation},nil
+ })
+ if err!=nil {return eventVideoPresentation{},err}
+ return result.presentation,nil
 }

@@ -75,6 +75,7 @@ type eventDurationEvidence struct {
  requestedSeconds int
  requestedStart time.Time
  captureSpan,publishedSpan eventVideoSpan
+ presentation *eventPresentationEvidence
 }
 func (e *eventDurationEvidence) bound(ctx context.Context,lease *mediaMutationLease) error {
  if err:=ctx.Err();err!=nil {return err}
