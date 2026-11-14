@@ -17,14 +17,18 @@ import (
 // This function never acquires/releases ownership or opens media by its name.
 const eventPresentationProbeDiagnosticBytes = 16 << 10
 
+// Named storage prevents promoted ReadFrom/WriteString from bypassing Write.
 type eventPresentationProbeBuffer struct {
- bytes.Buffer
+ data bytes.Buffer
  limit int
  refused bool
 }
+func (b *eventPresentationProbeBuffer) Len() int {return b.data.Len()}
+func (b *eventPresentationProbeBuffer) Bytes() []byte {return b.data.Bytes()}
+func (b *eventPresentationProbeBuffer) String() string {return b.data.String()}
 func (b *eventPresentationProbeBuffer) Write(p []byte) (int,error) {
  if b.refused || len(p)>b.limit-b.Len() { b.refused=true;return 0,errEventVideoPresentation }
- return b.Buffer.Write(p)
+ return b.data.Write(p)
 }
 
 // FFprobe can emit empty program/stream-group envelopes alongside show_entries.
