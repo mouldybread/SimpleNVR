@@ -36,7 +36,11 @@ func (job *bufferEvent) withOwnedStagingCreator(ctx context.Context,name string,
  finalLease,err:=recordingMediaOwnership.acquire(finalizeCtx)
  if err!=nil {return errors.Join(result,err)}
  defer finalLease.release()
- return errors.Join(result,inventory.Remember(finalizeCtx,finalLease,name,file))
+ rememberErr:=inventory.Remember(finalizeCtx,finalLease,name,file)
+ if name=="concat.txt" {
+  if result==nil && rememberErr==nil {job.execution.observeConcatRegistered(finalizeCtx,finalLease,job,inventory)} else {job.execution.invalidate()}
+ }
+ return errors.Join(result,rememberErr)
 }
 
 // A borrowed-lease helper: exclusive, owner-only, descriptor-relative creation
@@ -93,7 +97,11 @@ func (job *bufferEvent) writeEventConcat(ctx context.Context,eventFile string) (
   }
   return nil
  }
- if job.inventory!=nil {return job.withOwnedStagingCreator(ctx,"concat.txt",write)}
+ if job.inventory!=nil {
+  err:=job.withOwnedStagingCreator(ctx,"concat.txt",write)
+  job.execution.finishConcatWrite(job,err)
+  return err
+ }
  list,err:=os.Create(filepath.Join(job.dir,"concat.txt"));if err!=nil {return err}
  defer func(){result=errors.Join(result,list.Close())}()
  return write(list)

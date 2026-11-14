@@ -34,6 +34,7 @@ type eventExecutionProvenance struct {
  checkpointSeen bool
  publication bool
  selection *eventSelectionTiming
+ concat *eventConcatPlanEvidence
 }
 
 func newEventExecutionProvenance(bm *BufferManager,job *bufferEvent) *eventExecutionProvenance {
@@ -79,7 +80,7 @@ func (p *eventExecutionProvenance) beginAssembly(bm *BufferManager,job *bufferEv
 }
 func (p *eventExecutionProvenance) joinAssembly(bm *BufferManager,job *bufferEvent,ctx context.Context,err error) {
  if p==nil {return}
- if err!=nil || ctx.Err()!=nil {p.invalidate();return}
+ if err!=nil || ctx.Err()!=nil || !p.concat.ready(p,bm,job) {p.invalidate();return}
  if !p.advance(bm,job,eventExecutionAssembling,eventExecutionJoined) {return}
  if _,ok:=p.inventory.entries["concat.txt"];!ok {p.invalidate()}
 }
@@ -97,7 +98,7 @@ func (p *eventExecutionProvenance) endAssemblyAttempt() {
  if p!=nil && p.stage!=eventExecutionAssembled {p.invalidate()}
 }
 func (p *eventExecutionProvenance) qualifies(bm *BufferManager,job *bufferEvent) bool {
- return p.bound(bm,job) && p.stage==eventExecutionAssembled && p.publication && p.selection.captureComplete()
+ return p.bound(bm,job) && p.stage==eventExecutionAssembled && p.publication && p.selection.captureComplete() && p.concat.ready(p,bm,job)
 }
 
 func (p *eventExecutionProvenance) requireCheckpoint(job *bufferEvent,state string) {

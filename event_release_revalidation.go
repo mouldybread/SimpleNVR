@@ -26,6 +26,7 @@ type eventReleaseRevalidation struct {
  execution *eventExecutionProvenance
  duration *eventDurationEvidence
  presentation *eventPresentationEvidence
+ concat *eventConcatPlanEvidence
  id,dir,jobDir string
  blocked bool
 }
@@ -34,6 +35,7 @@ func newEventReleaseRevalidation(n *NVR,bm *BufferManager,job *bufferEvent,block
  if bm!=nil {check.camera=bm.camera}
  if job!=nil {
   check.execution=job.execution
+  if check.execution!=nil {check.concat=check.execution.concat}
   check.inventory=job.inventory;check.borrowed=job.recoveryBorrow;check.jobDir=job.dir
   check.dir=filepath.Dir(filepath.Dir(job.dir))
   if job.recovery!=nil {check.id=job.recovery.CameraID}
@@ -50,7 +52,8 @@ func (check *eventReleaseRevalidation) durationCurrent(ctx context.Context,lease
  if check.presentation==nil || e.presentation!=check.presentation {return errEventReleaseRevalidation}
  if err:=check.presentation.check(ctx,lease,e);err!=nil {return err}
  if !e.captureSpan.atLeast(e.requestedSeconds) || !e.publishedSpan.atLeast(e.requestedSeconds) {return errEventDurationEvidence}
- return nil
+ if check.concat==nil || check.execution.concat!=check.concat {return errEventConcatPlan}
+ return check.concat.check(ctx,lease,check.execution,check.bm,check.job)
 }
 func (check *eventReleaseRevalidation) registryCurrent() error {
  if check.n==nil || check.camera==nil {return errEventReleaseRevalidation}
