@@ -87,7 +87,9 @@ func (job *bufferEvent) recoveryCheckpoint(state,code string) error {
  if state!="retained" {job.recovery.State=state}
  if code!="" {job.recovery.FailureCode=code}
  job.recovery.PinnedCount=len(job.preFiles)
- job.recovery.Coverage=snapshotEventCoverage(job)
+ // Retention preserves processing evidence, including absent/older assessment.
+ // A stopped manager must not downgrade the last stored processing snapshot.
+ if state!="retained" {job.recovery.Coverage=snapshotEventCoverage(job)}
  data,err:=json.Marshal(job.recovery)
  if err==nil {
   writer:=job.recoveryWriter;if writer==nil {writer=writeEventRecovery}
