@@ -37,6 +37,7 @@ type eventRecoveryManifest struct {
  OutputTemporary string `json:"output_temporary,omitempty"`
  OutputPublished string `json:"output_published,omitempty"`
  Partial bool `json:"partial"`
+ Coverage *eventCoverageAssessment `json:"coverage_assessment,omitempty"`
 }
 
 func syncRecoveryDirectory(path string) error {
@@ -86,6 +87,7 @@ func (job *bufferEvent) recoveryCheckpoint(state,code string) error {
  if state!="retained" {job.recovery.State=state}
  if code!="" {job.recovery.FailureCode=code}
  job.recovery.PinnedCount=len(job.preFiles)
+ job.recovery.Coverage=snapshotEventCoverage(job)
  data,err:=json.Marshal(job.recovery)
  if err==nil {
   writer:=job.recoveryWriter;if writer==nil {writer=writeEventRecovery}

@@ -61,8 +61,8 @@ func parseRecoveryManifest(data []byte,cameraID string) (*eventRecoveryManifest,
  if err:=recoveryJSONValue(dec,0,&budget);err!=nil {return nil,errRecoveryInspection}
  if _,err:=dec.Token();err!=io.EOF {return nil,errRecoveryInspection}
  required:=[]string{"version","revision","camera_id","event_id","requested_start","requested_end","duration_seconds","created_at","observed_at","state","prebuffer_inputs","pinned_count","capture_name","partial"}
- if err:=exactRecoveryKeys(data,required,[]string{"failure_code","output_temporary","output_published"});err!=nil {return nil,err}
- var raw struct {Inputs []json.RawMessage `json:"prebuffer_inputs"`}
+ if err:=exactRecoveryKeys(data,required,[]string{"failure_code","output_temporary","output_published","coverage_assessment"});err!=nil {return nil,err}
+ var raw struct {Inputs []json.RawMessage `json:"prebuffer_inputs"`; Coverage json.RawMessage `json:"coverage_assessment"`}
  if err:=json.Unmarshal(data,&raw);err!=nil || len(raw.Inputs)>maxRecoveryInputs {return nil,errRecoveryInspection}
  for _,input:=range raw.Inputs {if err:=exactRecoveryKeys(input,[]string{"name","metadata_start","metadata_end"},nil);err!=nil {return nil,err}}
  var m eventRecoveryManifest
@@ -90,6 +90,7 @@ func parseRecoveryManifest(data []byte,cameraID string) (*eventRecoveryManifest,
   expected:=normal;if m.Partial {expected=partialRecordingName(normal)}
   if m.OutputPublished!=expected {return nil,errRecoveryInspection}
  } else if m.OutputTemporary!="" || m.OutputPublished!="" || m.Partial {return nil,errRecoveryInspection}
+ if len(raw.Coverage)!=0 {if err:=validateEventCoverageJSON(raw.Coverage,&m);err!=nil {return nil,err}}
  return &m,nil
 }
 
@@ -151,6 +152,7 @@ type eventRecoveryInspection struct {
  RequestedEnd *time.Time `json:"requested_end,omitempty"`
  DurationSeconds *int `json:"duration_seconds,omitempty"`
  Artifacts []recoveryArtifactObservation `json:"artifacts,omitempty"`
+ Coverage *eventCoverageAssessment `json:"stored_coverage_assessment,omitempty"`
  Errors []string `json:"inspection_errors"`
 }
 
@@ -181,6 +183,7 @@ func inspectEventRecovery(ctx context.Context,rootPath,cameraID,stagingID string
   report.EventID=m.EventID;report.State=m.State;report.Revision=m.Revision
   report.RequestedStart=&m.RequestedStart;report.RequestedEnd=&m.RequestedEnd;report.DurationSeconds=&m.DurationSeconds
   partial:=m.Partial;report.Partial=&partial
+  report.Coverage=m.Coverage // stored diagnostic, not independently verified media coverage
   switch m.State {
   case "pin_failed","capture_failed","publication_failed":report.Classification="observed_processing_failure"
   case "publishing":report.Classification="publication_outcome_ambiguous"
