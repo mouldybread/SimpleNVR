@@ -27,7 +27,8 @@ func (bm *BufferManager) pinOwnedBufferWithOpen(event Event,open func(context.Co
  dir,err:=os.MkdirTemp(parent,"event-");if err!=nil {return nil,err}
  job:=&bufferEvent{event:event,preStart:event.CreatedAt.UTC(),dir:dir,keepStaging:true}
  bm.bufferMutex.RLock();defer bm.bufferMutex.RUnlock()
- cutoff:=time.Now().UTC().Add(-bufferDuration)
+ selectedAt:=time.Now()
+ cutoff:=selectedAt.UTC().Add(-bufferDuration)
  selected:=make([]BufferSegment,0)
  for _,seg:=range bm.buffer {
   if seg.EndTime.After(cutoff) {
@@ -64,6 +65,7 @@ func (bm *BufferManager) pinOwnedBufferWithOpen(event Event,open func(context.Co
  // this job nor its descriptors retain setup ownership across capture/FFmpeg.
  job.recoveryWriter=job.writeOwnedJobRecovery
  job.execution=newEventExecutionProvenance(bm,job)
+ job.execution.selection=newEventSelectionTiming(bm,job,selected,selectedAt,time.Now())
  return job,nil
 }
 

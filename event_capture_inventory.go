@@ -8,6 +8,7 @@ import (
  "path/filepath"
  "strconv"
  "strings"
+ "time"
 
  "golang.org/x/sys/unix"
 )
@@ -72,7 +73,11 @@ func (bm *BufferManager) captureEventFile(ctx context.Context,job *bufferEvent,p
   // There is deliberately no pathname-output fallback if procfs is unavailable.
   cmd:=ffmpegCommand(ctx,append(args,"/proc/self/fd/3")...)
   cmd.ExtraFiles=[]*os.File{file}
-  return cmd.Run() // includes existing interrupt/grace/kill/join behavior
+  // Host Run-call bookends, NOT first/last-frame wall-clock timestamps.
+  job.execution.observeCaptureRunStarted(bm,job,time.Now())
+  runErr:=cmd.Run() // existing interrupt/grace/kill/join behavior is unchanged
+  job.execution.observeCaptureRunReturned(bm,job,time.Now(),runErr,ctx.Err())
+  return runErr
  })
 }
 
