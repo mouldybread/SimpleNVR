@@ -26,6 +26,7 @@ type bufferEvent struct {event Event;preFiles []string;preStart time.Time;dir st
 type BufferManager struct {
  camera *Camera
  buffer []BufferSegment
+ segmentClocks map[string]segmentClockEntry // guarded by bufferMutex; same lifetime as buffer index
  bufferMutex sync.RWMutex
  ctx context.Context
  cancel context.CancelFunc
@@ -116,19 +117,23 @@ func (bm *BufferManager) segmentBuffer() {
   stdout,err:=cmd.StdoutPipe()
   if err!=nil {if !waitRecordingRetry(bm.ctx) {return};continue}
   if err=cmd.Start();err!=nil {stdout.Close();if !waitRecordingRetry(bm.ctx) {return};continue}
+  clock:=segmentClockSession{id:nonce,startReturned:time.Now()}
   reader:=csv.NewReader(stdout);reader.FieldsPerRecord=-1
   for {
    row,readErr:=reader.Read()
+   received:=time.Now() // completed CSV notification, NOT packet arrival
    if readErr==io.EOF {break}
-   if readErr!=nil {if bm.ctx.Err()!=nil {break};continue}
-   if len(row)<3 {continue}
+   observation:=clock.notice(received)
+   if readErr!=nil {clock.uncertain=true;if bm.ctx.Err()!=nil {break};continue}
+   if len(row)<3 {clock.uncertain=true;continue}
    base:=filepath.Base(row[0])
-   if !strings.HasPrefix(base,"buffer_") || !strings.HasSuffix(base,"_"+nonce+".mp4") || len(base)<22 {continue}
-   start,parseErr:=time.Parse("20060102_150405",base[7:22]);if parseErr!=nil {continue}
+   if !strings.HasPrefix(base,"buffer_") || !strings.HasSuffix(base,"_"+nonce+".mp4") || len(base)<22 {clock.uncertain=true;continue}
+   start,parseErr:=time.Parse("20060102_150405",base[7:22]);if parseErr!=nil {clock.uncertain=true;continue}
    begin,e1:=strconv.ParseFloat(row[1],64);end,e2:=strconv.ParseFloat(row[2],64)
    duration:=end-begin
-   if e1!=nil || e2!=nil || math.IsNaN(duration) || math.IsInf(duration,0) || duration<=0 || duration>maxEventSeconds {continue}
-   bm.registerCompleted(filepath.Join(dir,base),start,start.Add(time.Duration(duration*float64(time.Second))))
+   if e1!=nil || e2!=nil || math.IsNaN(duration) || math.IsInf(duration,0) || duration<=0 || duration>maxEventSeconds {clock.uncertain=true;continue}
+   observation.mediaBegin=begin;observation.mediaEnd=end
+   if !bm.registerCompletedObserved(filepath.Join(dir,base),start,start.Add(time.Duration(duration*float64(time.Second))),observation) {clock.uncertain=true}
   }
   err=cmd.Wait();stdout.Close()
   bm.discardUnclosed(filepath.Join(dir,"*_"+nonce+".mp4"))
@@ -139,10 +144,21 @@ func (bm *BufferManager) segmentBuffer() {
 }
 
 func (bm *BufferManager) registerCompleted(path string,start,end time.Time) {
- info,err:=os.Lstat(path);if err!=nil || !info.Mode().IsRegular() || info.Size()<1000 {return}
+ bm.registerCompletedObserved(path,start,end,segmentClockObservation{})
+}
+
+func (bm *BufferManager) registerCompletedObserved(path string,start,end time.Time,observation segmentClockObservation) bool {
+ info,err:=os.Lstat(path);if err!=nil || !info.Mode().IsRegular() || info.Size()<1000 {return false}
  bm.bufferMutex.Lock();defer bm.bufferMutex.Unlock()
+ duplicate:=false
+ for _,segment:=range bm.buffer {if segment.FilePath==path {duplicate=true;break}}
+ if duplicate {delete(bm.segmentClocks,path)} else if observation.observed {
+  if bm.segmentClocks==nil {bm.segmentClocks=make(map[string]segmentClockEntry)}
+  bm.segmentClocks[path]=newSegmentClockEntry(path,start,end,info,observation)
+ }
  bm.buffer=append(bm.buffer,BufferSegment{StartTime:start,EndTime:end,FilePath:path})
  sort.Slice(bm.buffer,func(i,j int) bool {return bm.buffer[i].StartTime.Before(bm.buffer[j].StartTime)})
+ return true
 }
 
 func (bm *BufferManager) discardUnclosed(pattern string) {
@@ -174,7 +190,7 @@ func (bm *BufferManager) pruneBefore(cutoff time.Time) {
  bm.bufferMutex.Lock();defer bm.bufferMutex.Unlock()
  kept:=make([]BufferSegment,0,len(bm.buffer))
  for _,seg:=range bm.buffer {
-  if seg.EndTime.Before(cutoff) {if err:=os.Remove(seg.FilePath);err!=nil && !os.IsNotExist(err) {kept=append(kept,seg)}} else {kept=append(kept,seg)}
+  if seg.EndTime.Before(cutoff) {if err:=os.Remove(seg.FilePath);err!=nil && !os.IsNotExist(err) {kept=append(kept,seg)} else {delete(bm.segmentClocks,seg.FilePath)}} else {kept=append(kept,seg)}
  }
  bm.buffer=kept
 }
@@ -182,6 +198,7 @@ func (bm *BufferManager) pruneBefore(cutoff time.Time) {
 func (bm *BufferManager) cleanupBuffer() {
  bm.bufferMutex.Lock();defer bm.bufferMutex.Unlock()
  bm.buffer=nil
+ bm.segmentClocks=nil
  // Stop releases the in-memory index, not capture evidence. A new manager
  // must not adopt or prune files left by this or an earlier process.
  logPreservedEventStorage(bm.camera)
@@ -197,6 +214,7 @@ func (bm *BufferManager) handleEvent(job *bufferEvent) {
 func (bm *BufferManager) recordEventDuration(job *bufferEvent) string {
  execution:=job.execution
  execution.beginCapture(bm,job)
+ logEventSegmentClock(execution)
  defer execution.endCaptureAttempt()
  file:=filepath.Join(job.dir,"event.mp4")
  job.keepStaging=true

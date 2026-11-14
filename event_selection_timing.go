@@ -24,6 +24,7 @@ type eventSelectedInputTiming struct {
  declaredStart,declaredEnd time.Time
  file *os.File
  identity unix.Stat_t
+ segmentClock segmentClockObservation // immutable completion-notification snapshot, not arrival timing
 }
 
 // Owner-serialized, bounded in-memory provenance. No new descriptor, lease,
@@ -56,7 +57,7 @@ func newEventSelectionTiming(bm *BufferManager,job *bufferEvent,selected []Buffe
   name:=fmt.Sprintf("pre_%03d.mp4",i)
   entry,ok:=job.inventory.entries[name]
   if !ok || entry.file==nil || job.preFiles[i]!=filepath.Join(job.dir,name) {return nil}
-  t.inputs[i]=eventSelectedInputTiming{source:segment.FilePath,staged:job.preFiles[i],declaredStart:segment.StartTime,declaredEnd:segment.EndTime,file:entry.file,identity:entry.identity}
+  t.inputs[i]=eventSelectedInputTiming{source:segment.FilePath,staged:job.preFiles[i],declaredStart:segment.StartTime,declaredEnd:segment.EndTime,file:entry.file,identity:entry.identity,segmentClock:bm.segmentClocks[segment.FilePath].freeze(segment,entry.identity)}
  }
  return t
 }
