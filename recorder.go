@@ -22,7 +22,7 @@ const (bufferDuration=30*time.Second; segmentSize=5*time.Second; eventWorkers=2;
 var (errEventStopped=errors.New("event recorder stopping or unavailable");errEventBusy=errors.New("event recorder at capacity");errEventInvalid=errors.New("invalid event capture request"))
 
 type BufferSegment struct {StartTime time.Time; EndTime time.Time; FilePath string}
-type bufferEvent struct {event Event;preFiles []string;preStart time.Time;dir string;keepStaging bool;recovery *eventRecoveryManifest;recoveryFailed bool;recoveryWriter func(string,[]byte) error;inventory *ownedStagingInventory;recoveryBorrow *eventRecoveryBorrow}
+type bufferEvent struct {event Event;preFiles []string;preStart time.Time;dir string;keepStaging bool;recovery *eventRecoveryManifest;recoveryFailed bool;recoveryWriter func(string,[]byte) error;inventory *ownedStagingInventory;recoveryBorrow *eventRecoveryBorrow;execution *eventExecutionProvenance}
 type BufferManager struct {
  camera *Camera
  buffer []BufferSegment
@@ -195,9 +195,13 @@ func (bm *BufferManager) handleEvent(job *bufferEvent) {
 }
 
 func (bm *BufferManager) recordEventDuration(job *bufferEvent) string {
+ execution:=job.execution
+ execution.beginCapture(bm,job)
+ defer execution.endCaptureAttempt()
  file:=filepath.Join(job.dir,"event.mp4")
  job.keepStaging=true
  if err:=job.recoveryCheckpoint("capturing","");err!=nil {return ""}
+ execution.requireCheckpoint(job,"capturing")
  ctx,cancel:=context.WithTimeout(bm.ctx,time.Duration(job.event.Duration)*time.Second+15*time.Second);defer cancel()
  err:=bm.captureEventFile(ctx,job,file)
  if err!=nil || ctx.Err()!=nil {
@@ -208,12 +212,19 @@ func (bm *BufferManager) recordEventDuration(job *bufferEvent) string {
   return ""
  }
  if err:=job.recoveryCheckpoint("captured","");err!=nil {return ""}
+ // captureEventFile has joined and closed/registered its creator. Observe the
+ // outcome before normal deferred cancellation of this function-local context.
+ execution.finishCapture(bm,job,ctx)
  return file
 }
 
 func (bm *BufferManager) concatenateEventRecording(job *bufferEvent,eventFile string) string {
+ execution:=job.execution
+ execution.beginAssembly(bm,job,eventFile)
+ defer execution.endAssemblyAttempt()
  job.keepStaging=true
  if err:=job.recoveryCheckpoint("assembling","");err!=nil {return ""}
+ execution.requireCheckpoint(job,"assembling")
  if err:=job.writeEventConcat(bm.ctx,eventFile);err!=nil {return ""}
  name:=fmt.Sprintf("%s_%s_%s.mp4",job.preStart.UTC().Format("20060102_150405"),sanitizeFilename(job.event.Label),sanitizeFilename(job.event.ID))
  final:=filepath.Join(bm.camera.RecordDir,name);temp:=final+".tmp"
@@ -222,11 +233,13 @@ func (bm *BufferManager) concatenateEventRecording(job *bufferEvent,eventFile st
  cmd.Dir=job.dir
  runErr:=cmd.Run()
  incomplete:=runErr!=nil || ctx.Err()!=nil
+ execution.joinAssembly(bm,job,ctx,runErr)
  if incomplete {final=partialRecordingName(final)}
  job.recovery.OutputTemporary=filepath.Base(temp)
  job.recovery.OutputPublished=filepath.Base(final)
  job.recovery.Partial=incomplete
  if err:=job.recoveryCheckpoint("publishing","");err!=nil {return ""}
+ execution.requireCheckpoint(job,"publishing")
  finalizeCtx,finalizeCancel:=context.WithTimeout(context.WithoutCancel(bm.ctx),recordingFinalizeGrace);defer finalizeCancel()
  if err:=bm.publishEventRecording(finalizeCtx,ctx,job,temp,final,incomplete);err!=nil {_=job.recoveryCheckpoint("publication_failed","validation_or_publication_failed");removeEmptyRecording(temp);log.Printf("Event assembly for camera %s event %s retained for inspection",bm.camera.ID,job.event.ID);return ""}
  return final

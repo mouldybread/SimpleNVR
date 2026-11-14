@@ -14,13 +14,10 @@ import (
 // camera capture. No release-engine invocation or deletion permission is tested.
 func releaseRevalidationFixture(t *testing.T) (*NVR,*BufferManager,*bufferEvent,*eventReleaseRevalidation,*mediaMutationLease) {
  t.Helper();installEventFailureTools(t,0,false);bm,job:=publicationCheckpointJob(t)
- input:=filepath.Join(job.dir,"event.mp4")
- if err:=job.withOwnedStagingCreator(context.Background(),"event.mp4",func(f *os.File)error{_,err:=f.WriteString("capture bytes");return err});err!=nil {t.Fatal(err)}
- if err:=job.writeEventConcat(context.Background(),input);err!=nil {t.Fatal(err)}
- final:=filepath.Join(bm.camera.RecordDir,"output.mp4");temporary:=final+".tmp"
- if err:=os.WriteFile(temporary,[]byte("published bytes"),0600);err!=nil {t.Fatal(err)}
- job.recovery.OutputTemporary=filepath.Base(temporary);job.recovery.OutputPublished=filepath.Base(final)
- if err:=bm.publishEventRecording(context.Background(),bm.ctx,job,temporary,final,false);err!=nil {t.Fatal(err)}
+ // Exercise the production entry points using synthetic executables, rather
+ // than assigning witnesses to the old creator-only/direct-publication fixture.
+ input:=bm.recordEventDuration(job);if input=="" {t.Fatal("synthetic production capture failed")}
+ if final:=bm.concatenateEventRecording(job,input);final=="" {t.Fatal("synthetic production assembly failed")}
  if job.recoveryBorrow.revalidation==nil || job.recoveryBorrow.revalidationErr==nil {t.Fatal("unregistered fixture bypassed production revalidation")}
  n:=&NVR{cameras:map[string]*Camera{bm.camera.ID:bm.camera}}
  bm.camera.IsRecording=true;bm.camera.RecordingMode=ModeEventBased;bm.camera.bufferManager=bm;bm.camera.recordCancel=func(){}
@@ -47,7 +44,7 @@ func TestReleaseRevalidationRefusesChangedRegistryBeforeIO(t *testing.T) {
   n.mu.Unlock()
   calls:=0
   if err:=check.checkWithOutput(context.Background(),lease,func(context.Context,*mediaMutationLease)error{calls++;return nil});err==nil || calls!=0 {t.Fatal("stale registry reached I/O",err,calls)}
-  assertPublicationBytes(t,filepath.Join(job.dir,"event.mp4"),"capture bytes")
+  assertPublicationBytes(t,filepath.Join(job.dir,"event.mp4"),"synthetic output")
  })}
 }
 func TestReleaseRevalidationRefusesChangedEvidenceWithoutMutation(t *testing.T) {

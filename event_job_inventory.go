@@ -63,6 +63,7 @@ func (bm *BufferManager) pinOwnedBufferWithOpen(event Event,open func(context.Co
  // After setup, each serialized checkpoint gets a fresh bounded lease. Neither
  // this job nor its descriptors retain setup ownership across capture/FFmpeg.
  job.recoveryWriter=job.writeOwnedJobRecovery
+ job.execution=newEventExecutionProvenance(bm,job)
  return job,nil
 }
 
@@ -85,18 +86,24 @@ func (job *bufferEvent) writeOwnedJobRecovery(path string,data []byte) error {
  ctx,cancel:=context.WithTimeout(context.Background(),recordingFinalizeGrace);defer cancel()
  return job.writeOwnedJobRecoveryContext(ctx,path,data)
 }
-func (job *bufferEvent) writeOwnedJobRecoveryContext(ctx context.Context,path string,data []byte) error {
+func (job *bufferEvent) writeOwnedJobRecoveryContext(ctx context.Context,path string,data []byte) (result error) {
+ defer func(){if result!=nil {job.execution.invalidate()}}()
  if job.inventory==nil || path!=job.dir || job.inventory.path!=job.dir {return errStagingInventory}
  if borrowed:=job.recoveryBorrow;borrowed!=nil {
   if err:=borrowed.ctx.Err();err!=nil {return err}
-  return writeOwnedEventRecovery(ctx,borrowed.lease,job.inventory,data)
+  err:=writeOwnedEventRecovery(ctx,borrowed.lease,job.inventory,data)
+  job.execution.ownedCheckpoint(data,err)
+  return err
  }
  lease,err:=recordingMediaOwnership.acquire(ctx);if err!=nil {return err}
  defer lease.release()
- return writeOwnedEventRecovery(ctx,lease,job.inventory,data)
+ err=writeOwnedEventRecovery(ctx,lease,job.inventory,data)
+ job.execution.ownedCheckpoint(data,err)
+ return err
 }
 func (job *bufferEvent) closeOwnedInventory() error {
  if job.inventory==nil {return nil}
+ job.execution.invalidate()
  inventory:=job.inventory;job.inventory=nil
  return inventory.Close()
 }

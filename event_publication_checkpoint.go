@@ -13,13 +13,17 @@ type eventRecoveryBorrow struct {ctx context.Context;lease *mediaMutationLease;t
 
 func (bm *BufferManager) publishEventRecording(ctx,captureCtx context.Context,job *bufferEvent,temporary,final string,incomplete bool) error {
  return bm.publishEventRecordingWith(ctx,captureCtx,job,temporary,final,incomplete,func(ctx context.Context,lease *mediaMutationLease,from,to string)error{
-  return publishRecordingObservedLeased(ctx,lease,from,to,func(file,directory *os.File)error{
+  err:=publishRecordingObservedLeased(ctx,lease,from,to,func(file,directory *os.File)error{
    borrowed:=job.recoveryBorrow
    if borrowed==nil || borrowed.lease!=lease || borrowed.output!=nil {return errPublicationOwnership}
    output,err:=retainEventPublishedOutput(ctx,lease,to,file,directory);if err!=nil {return err}
    borrowed.output=output
    return nil
   })
+  // Only the actual durable publisher returning success can supply this witness;
+  // the generic injected publication callback cannot substitute for it.
+  if err==nil {job.execution.published(bm,job,ctx)}
+  return err
  })
 }
 
@@ -45,6 +49,7 @@ func (bm *BufferManager) publishEventRecordingWith(ctx,captureCtx context.Contex
  // Necessary live/evidence checks only: complete-capture authorization is
  // still absent, so a successful revalidation never enables deletion.
  borrowed:=job.recoveryBorrow
+ job.execution.finishAssembly(bm,job,ctx,captureCtx,incomplete,checkpointErr)
  borrowed.revalidation=newEventReleaseRevalidation(nvr,bm,job,incomplete || captureCtx.Err()!=nil || checkpointErr!=nil || job.recoveryFailed)
  borrowed.revalidationErr=borrowed.revalidation.check(ctx,lease)
  // Worker terminal release owns this same lease from here, even if the
