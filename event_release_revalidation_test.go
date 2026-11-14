@@ -29,8 +29,19 @@ func releaseRevalidationFixture(t *testing.T) (*NVR,*BufferManager,*bufferEvent,
 }
 func TestReleaseRevalidationAllowsOwnedCheckpointReplacementButNotCleanup(t *testing.T) {
  _,bm,job,check,lease:=releaseRevalidationFixture(t)
+ borrowed:=job.recoveryBorrow;assemblyMetadata:=borrowed.ctx
+ if !errors.Is(assemblyMetadata.Err(),context.Canceled) {t.Fatal("assembly-local metadata context did not end")}
+ if !job.execution.qualifies(bm,job) {t.Fatal("normal deferred cancellation erased execution")}
+ // A direct terminal-metadata attempt needs its own bounded context, just as
+ // releaseOwnedJob does. Renew the budget, NOT the transferred ownership lease.
+ ctx,cancel:=context.WithTimeout(context.Background(),recordingFinalizeGrace);defer cancel()
+ borrowed.ctx=ctx
+ revision:=job.recovery.Revision
  if err:=job.recoveryCheckpoint("retained","");err!=nil {t.Fatal(err)}
- if err:=check.check(context.Background(),lease);err!=nil {t.Fatal(err)}
+ if job.recoveryBorrow!=borrowed || borrowed.lease!=lease || !lease.held() || job.recoveryFailed {t.Fatal("metadata renewal changed ownership or persistence")}
+ if m:=readRecoveryTest(t,job.dir);m.State!="published" || m.Revision!=revision+1 {t.Fatal("owned replacement did not persist",m)}
+ if !errors.Is(assemblyMetadata.Err(),context.Canceled) {t.Fatal("ended assembly context was revived")}
+ if err:=check.check(ctx,lease);err!=nil {t.Fatal(err)}
  bm.releaseJob(job)
  if !job.keepStaging || job.recoveryBorrow!=nil || lease.held() || len(bm.slots)!=0 {t.Fatal("revalidation changed retention/teardown")}
  if _,err:=os.Stat(job.dir);err!=nil {t.Fatal("necessary checks enabled cleanup",err)}
@@ -97,4 +108,23 @@ func TestReleaseRevalidationRunsAgainAfterTerminalCheckpoint(t *testing.T) {
  if !errors.Is(borrowed.revalidationErr,errEventReleaseRevalidation) || job.recoveryFailed || !job.keepStaging || lease.held() || len(bm.slots)!=0 {t.Fatal("terminal revalidation/metadata/teardown changed")}
  if err:=check.check(context.Background(),lease);err==nil {t.Fatal("terminal job reusable")}
  if m:=readRecoveryTest(t,job.dir);m.State!="published" {t.Fatal(m)}
+}
+
+func TestReleaseRevalidationExpiredAssemblyBorrowRefusesCheckpoint(t *testing.T) {
+ _,bm,job,check,lease:=releaseRevalidationFixture(t)
+ borrowed:=job.recoveryBorrow
+ if !errors.Is(borrowed.ctx.Err(),context.Canceled) || !lease.held() {t.Fatal("expected ended assembly budget with transferred live lease")}
+ checkpoint:=filepath.Join(job.dir,"recovery.json")
+ before,err:=os.ReadFile(checkpoint);if err!=nil {t.Fatal(err)}
+ // Intentionally omit metadata renewal: live ownership alone must not bypass
+ // the canceled borrowed context or clear the sticky failure after refusal.
+ if err:=job.recoveryCheckpoint("retained","");!errors.Is(err,context.Canceled) {t.Fatal("expired borrow wrote checkpoint",err)}
+ if !job.recoveryFailed || !job.keepStaging || job.execution.qualifies(bm,job) || job.recoveryBorrow!=borrowed || borrowed.lease!=lease || !lease.held() {t.Fatal("refusal lost failure/ownership semantics")}
+ assertPublicationBytes(t,checkpoint,string(before))
+ if err:=check.check(context.Background(),lease);err==nil {t.Fatal("failed persistence still qualified")}
+ bm.releaseJob(job)
+ if !job.recoveryFailed || !job.keepStaging || job.inventory!=nil || job.recoveryBorrow!=nil || lease.held() || len(bm.slots)!=0 {t.Fatal("failed metadata teardown leaked or cleared refusal")}
+ assertPublicationBytes(t,checkpoint,string(before))
+ assertPublicationBytes(t,filepath.Join(job.dir,"event.mp4"),"synthetic output")
+ if _,err:=os.Stat(check.output.path);err!=nil {t.Fatal("published output lost",err)}
 }
