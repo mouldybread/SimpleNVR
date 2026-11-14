@@ -58,6 +58,8 @@ func (p *eventPresentationEvidence) check(ctx context.Context,lease *mediaMutati
   c:=pair.presentation.continuity
   if pair.presentation.streamIndex<0 || c.numerator!=pair.span.numerator || c.denominator!=pair.span.denominator || !c.atLeastSeconds(int64(e.requestedSeconds)) {return errEventVideoPresentation}
  }
+ // Reuse the two bound observations; never probe selected inputs here.
+ if !eventAssemblyPresentationCompatible(p.capture.continuity,p.published.continuity,len(e.execution.selection.inputs)!=0) {return errEventAssemblyPresentation}
  capture,err:=eventPresentationDescriptorStat(ctx,lease,e.capture);if err!=nil {return err}
  output,err:=eventPresentationDescriptorStat(ctx,lease,e.output.file);if err!=nil {return err}
  if !eventPresentationDescriptorUnchanged(p.captureStat,capture) || !eventPresentationDescriptorUnchanged(p.publishedStat,output) {return errEventVideoPresentation}
