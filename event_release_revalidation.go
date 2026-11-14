@@ -25,6 +25,7 @@ type eventReleaseRevalidation struct {
  borrowed *eventRecoveryBorrow
  execution *eventExecutionProvenance
  duration *eventDurationEvidence
+ presentation *eventPresentationEvidence
  id,dir,jobDir string
  blocked bool
 }
@@ -36,17 +37,18 @@ func newEventReleaseRevalidation(n *NVR,bm *BufferManager,job *bufferEvent,block
   check.inventory=job.inventory;check.borrowed=job.recoveryBorrow;check.jobDir=job.dir
   check.dir=filepath.Dir(filepath.Dir(job.dir))
   if job.recovery!=nil {check.id=job.recovery.CameraID}
-  if check.borrowed!=nil {check.output=check.borrowed.output;check.duration=check.borrowed.duration}
+  if check.borrowed!=nil {check.output=check.borrowed.output;check.duration=check.borrowed.duration;if check.duration!=nil {check.presentation=check.duration.presentation}}
  }
  return check
 }
-// Pure receipt/binding checks. Existing output/inventory/checkpoint inspection
-// below still performs the filesystem checks; terminal rechecks never re-probe.
+// Receipt/binding and held-descriptor snapshot checks, with no registry lock.
+// Terminal rechecks never run another media process.
 func (check *eventReleaseRevalidation) durationCurrent(ctx context.Context,lease *mediaMutationLease) error {
  if check==nil || check.borrowed==nil {return errEventReleaseRevalidation}
  e:=check.duration
  if e==nil || check.borrowed.duration!=e || check.borrowed.durationErr!=nil || e.bm!=check.bm || e.job!=check.job || e.inventory!=check.inventory || e.borrowed!=check.borrowed || e.output!=check.output || e.execution!=check.execution {return errEventReleaseRevalidation}
- if err:=e.bound(ctx,lease);err!=nil {return err}
+ if check.presentation==nil || e.presentation!=check.presentation {return errEventReleaseRevalidation}
+ if err:=check.presentation.check(ctx,lease,e);err!=nil {return err}
  if !e.captureSpan.atLeast(e.requestedSeconds) || !e.publishedSpan.atLeast(e.requestedSeconds) {return errEventDurationEvidence}
  return nil
 }

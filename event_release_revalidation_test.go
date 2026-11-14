@@ -15,7 +15,7 @@ import (
 func releaseRevalidationFixture(t *testing.T) (*NVR,*BufferManager,*bufferEvent,*eventReleaseRevalidation,*mediaMutationLease) {
  t.Helper();installEventFailureTools(t,0,false);bm,job:=publicationCheckpointJob(t)
  // Explicit synthetic stream-duration witness; not actual footage/coverage.
- installEventSpanProbe(t,"printf '%s' '{\"streams\":[{\"codec_type\":\"video\",\"duration_ts\":30000,\"time_base\":\"1/1000\"}]}'\n")
+ installEventSpanProbe(t,"printf '%s' '{\"streams\":[{\"index\":0,\"codec_type\":\"video\",\"duration_ts\":30000,\"time_base\":\"1/1000\"}],\"frames\":[{\"media_type\":\"video\",\"stream_index\":0,\"pts\":0,\"duration\":30000}]}'\n")
  // Exercise the production entry points using synthetic executables, rather
  // than assigning witnesses to the old creator-only/direct-publication fixture.
  input:=bm.recordEventDuration(job);if input=="" {t.Fatal("synthetic production capture failed")}

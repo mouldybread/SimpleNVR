@@ -41,7 +41,14 @@ fi
 ticks=30000
 if [ "$DURATION_CASE" = 'short capture' ] && [ "$count" = 1 ]; then ticks=29999; fi
 if [ "$DURATION_CASE" = 'short output' ] && [ "$count" = 2 ]; then ticks=29999; fi
-printf '{"streams":[{"codec_type":"video","duration_ts":%s,"time_base":"1/1000"}]}' "$ticks"
+frames='[{"media_type":"video","stream_index":0,"pts":0,"duration":'"$ticks"'}]'
+if [ "$DURATION_CASE" = 'missing frames' ]; then frames='[]'; fi
+if [ "$DURATION_CASE" = 'short presentation' ]; then frames='[{"media_type":"video","stream_index":0,"pts":0,"duration":29999}]'; fi
+if { [ "$DURATION_CASE" = 'capture gap' ] && [ "$count" = 1 ]; } || { [ "$DURATION_CASE" = 'output gap' ] && [ "$count" = 2 ]; }; then
+ frames='[{"media_type":"video","stream_index":0,"pts":0,"duration":15000},{"media_type":"video","stream_index":0,"pts":15001,"duration":15000}]'
+fi
+if [ "$DURATION_CASE" = 'diagnostic' ]; then printf 'decode error' >&2; fi
+printf '{"streams":[{"index":0,"codec_type":"video","duration_ts":%s,"time_base":"1/1000"}],"frames":%s}' "$ticks" "$frames"
 `)
  return bm,job,counter
 }
@@ -84,6 +91,7 @@ func TestProductionDurationObservedAfterPublishedCheckpointAndReusedThroughRelea
   job.recoveryWriter=original
   borrowed:=job.recoveryBorrow
   if !published || borrowed==nil || !borrowed.terminal || borrowed.lease!=publicationLease || !publicationLease.held() || borrowed.duration==nil || borrowed.durationErr!=nil || durationIntegrationCount(t,counter)!=2 {t.Fatal("duration observation/order/lease incorrect")}
+  if borrowed.duration.presentation==nil {t.Fatal("production did not bind presentation observations")}
   if !errors.Is(borrowed.ctx.Err(),context.Canceled) {t.Fatal("function-local metadata lifetime changed")}
   check:=durationIntegrationCheck(bm,job)
   for i:=0;i<2;i++ {if err:=check.check(context.Background(),publicationLease);err!=nil {t.Fatal(err)}}
@@ -95,7 +103,7 @@ func TestProductionDurationObservedAfterPublishedCheckpointAndReusedThroughRelea
  })}
 }
 func TestProductionDurationRefusalPreservesPublicationMetadataAndTeardown(t *testing.T) {
- for _,kind:=range []string{"short capture","short output","probe failure","missing stream","published checkpoint failure","stop before probe","direct assembly","late foreign"} {t.Run(kind,func(t *testing.T){
+ for _,kind:=range []string{"short capture","short output","missing frames","short presentation","capture gap","output gap","diagnostic","probe failure","missing stream","published checkpoint failure","stop before probe","direct assembly","late foreign"} {t.Run(kind,func(t *testing.T){
   bm,job,counter:=durationIntegrationFixture(t,kind)
   input:=filepath.Join(job.dir,"event.mp4")
   if kind=="direct assembly" {
@@ -117,7 +125,7 @@ func TestProductionDurationRefusalPreservesPublicationMetadataAndTeardown(t *tes
   job.recoveryWriter=original
   borrowed:=job.recoveryBorrow;lease:=borrowed.lease
   if borrowed.duration!=nil || borrowed.durationErr==nil || borrowed.revalidationErr==nil || !borrowed.terminal || !lease.held() {t.Fatal("failed observation accepted or ownership lost",kind)}
-  wantProbes:=1;if kind=="short output" {wantProbes=2}
+  wantProbes:=1;if kind=="short output" || kind=="output gap" {wantProbes=2}
   if kind=="published checkpoint failure" || kind=="stop before probe" || kind=="direct assembly" || kind=="late foreign" {wantProbes=0}
   if got:=durationIntegrationCount(t,counter);got!=wantProbes {t.Fatal("unexpected probe count",got,wantProbes)}
   if job.recoveryFailed!=(kind=="published checkpoint failure") {t.Fatal("duration refusal changed persistence latch")}

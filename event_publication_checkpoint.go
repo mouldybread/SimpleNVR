@@ -50,7 +50,7 @@ func (bm *BufferManager) publishEventRecordingWith(ctx,captureCtx context.Contex
  // still absent, so a successful revalidation never enables deletion.
  borrowed:=job.recoveryBorrow
  job.execution.finishAssembly(bm,job,ctx,captureCtx,incomplete,checkpointErr)
- // Transfer the SAME acquisition lease before read-only duration inspection.
+ // Transfer the SAME acquisition lease before combined duration/presentation inspection.
  // Even a failed published checkpoint still hands ownership to terminal release.
  borrowed.terminal=true
  transferred=true
@@ -58,7 +58,7 @@ func (bm *BufferManager) publishEventRecordingWith(ctx,captureCtx context.Contex
  if job.execution.qualifies(bm,job) {
   // The collector's existing aggregate budget is rooted in the live manager,
   // NOT the publication/terminal metadata budget. No checkpoint is written here.
-  borrowed.duration,borrowed.durationErr=inspectEventDurationEvidence(bm.ctx,lease,bm,job)
+  borrowed.duration,borrowed.durationErr=inspectEventDurationPresentationEvidence(bm.ctx,lease,bm,job)
  }
  borrowed.revalidation=newEventReleaseRevalidation(nvr,bm,job,incomplete || captureCtx.Err()!=nil || checkpointErr!=nil || job.recoveryFailed)
  borrowed.revalidationErr=borrowed.revalidation.check(ctx,lease)
