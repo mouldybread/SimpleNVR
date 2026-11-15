@@ -60,6 +60,8 @@ func (p *eventPresentationEvidence) check(ctx context.Context,lease *mediaMutati
  }
  // Reuse the two bound observations; never probe selected inputs here.
  if !eventAssemblyPresentationCompatible(p.capture.continuity,p.published.continuity,len(e.execution.selection.inputs)!=0) {return errEventAssemblyPresentation}
+ // Reject incoherent frozen coarse observations; never promote them to coverage.
+ if !e.execution.selection.coarseTimelineCoherent() {return errEventCoarseTimeline}
  capture,err:=eventPresentationDescriptorStat(ctx,lease,e.capture);if err!=nil {return err}
  output,err:=eventPresentationDescriptorStat(ctx,lease,e.output.file);if err!=nil {return err}
  if !eventPresentationDescriptorUnchanged(p.captureStat,capture) || !eventPresentationDescriptorUnchanged(p.publishedStat,output) {return errEventVideoPresentation}
