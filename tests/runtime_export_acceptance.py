@@ -12,6 +12,7 @@ import subprocess
 import threading
 import time
 from urllib.parse import urlencode
+from runtime_export_writer_observer import THREAD_PROBE, attach_thread_observations, writer_pressure_key
 
 CAMERA = "id_export"
 SOURCE = "/recordings/id_export/20261110_130000_fixture.mp4"
@@ -37,7 +38,7 @@ def command(args, timeout=10):
 
 # Emit only ownership/queue counters. Never emit cmdlines, environment, auth
 # files, request headers, network addresses or the complete process table.
-PROBE = r"""
+PROBE = THREAD_PROBE + r"""
 set -eu
 test "$(readlink /proc/1/exe)" = /app/simplenvr
 readlink /proc/1/fd/0 >/dev/null
@@ -66,6 +67,7 @@ for p in /proc/[0-9]*; do
   mode=copy
   if tr '\000' '\n' < "$p/cmdline" | grep -qx -- '-filter_complex'; then mode=trim; fi
   printf 'C\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${p##*/}" "$pipe" "$wait" "$counts" "$stats" "$mode" "$src"
+  if test "$mode" = copy; then observe_export_writer "$p"; fi
 done
 for table in /proc/1/net/tcp /proc/1/net/tcp6; do
   test -r "$table" || exit 1
@@ -82,9 +84,12 @@ def parse_probe(text):
     row = {"pins": 0, "anonymous_exports": 0, "anonymous_trims": [],
            "pipes": [], "children": [], "media_children": [], "tx_queues": [], "named_temps": []}
     sockets, tcp = set(), []
+    thread_records = []
     for line in text.splitlines():
         parts = line.split("\t")
-        if parts[0] == "F" and len(parts) == 4:
+        if parts[0] in ("D", "W", "B"):
+            thread_records.append(parts)
+        elif parts[0] == "F" and len(parts) == 4:
             _, fd, target, size = parts
             require(fd.isdigit() and size.isdigit(), "invalid descriptor observation")
             if target == SOURCE:
@@ -122,20 +127,11 @@ def parse_probe(text):
         else:
             raise AssertionError("malformed proc observation")
     row["tx_queues"] = sorted(queue for inode, queue in tcp if inode in sockets)
-    return row
+    return attach_thread_observations(row, thread_records)
 
 
 def pressure_key(row, count):
-    children = row["children"]
-    if (row["pins"] != count or row["anonymous_exports"] != count or
-            len(children) != count or len(row["media_children"]) != count or len(row["tx_queues"]) != count or
-            not all(queue > 0 for queue in row["tx_queues"]) or row["named_temps"]):
-        return None
-    if any(child["mode"] != "copy" or child["wait"] not in ("pipe_write", "anon_pipe_write") or
-           child["pipe"] not in row["pipes"] for child in children):
-        return None
-    return (tuple(sorted((c["pid"], c["start"], c["written"]) for c in children)),
-            tuple(row["tx_queues"]))
+    return writer_pressure_key(row, count)
 
 
 class StablePressure:

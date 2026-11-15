@@ -11,6 +11,9 @@ chmod 755 "$work" "$bin"
 cleanup() {
   status=$?
   cleanup_failed=0
+  # Keep safe failure facts visible before disposable fixture teardown.
+  timeout --kill-after=2 5 python3 tests/runtime_export_diagnostics.py \
+    "$evidence/runtime-export-report.json" | tee "$evidence/runtime-export-console-summary.json" || cleanup_failed=1
   # No raw auth/proc/network captures. Keep a bounded completion-marker count
   # even when the campaign fails before it can finish its JSON report.
   docker logs --tail 400 "$name" 2>&1 | python3 -c '
@@ -34,7 +37,7 @@ PY
   exit "$status"
 }
 trap cleanup EXIT
-timeout --kill-after=2 20 python3 -m unittest discover -s tests -p 'test_runtime_export_acceptance.py' -v \
+timeout --kill-after=2 20 python3 -m unittest discover -s tests -p 'test_runtime_export*.py' -v \
   2>&1 | tee "$evidence/runtime-export-tooling-tests.log"
 # Deliberately complex, bounded, video-only input. Generate with the exact
 # runtime image, before applying the pacing shim to application exports.
@@ -53,10 +56,11 @@ camera={'id':'id_export','name':'Export fixture','rtsp_url':'rtsp://unused-fixtu
 with open(sys.argv[1],'w') as f:
     json.dump({'cameras':{'id_export':camera},'camera_order':['id_export'],'events':[]},f)
 PY
-# Preserve all application arguments and execute the real runtime binary.
+# Preserve application arguments. This fixture alone makes stderr non-pipe
+# so all writable child pipes can be bound to the owned stdout inode.
 cat > "$bin/ffmpeg" <<'SH'
 #!/bin/sh
-exec /usr/bin/ffmpeg -re "$@"
+exec /usr/bin/ffmpeg -re "$@" 2>/dev/null
 SH
 chmod 755 "$bin/ffmpeg"
 SIMPLENVR_E2E_PASSWORD=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')

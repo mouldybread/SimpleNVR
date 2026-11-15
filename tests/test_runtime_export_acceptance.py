@@ -28,6 +28,9 @@ def observation(count=1, queue="00100000", wait="pipe_write"):
                       f"P\t{pid}\tffmpeg",
                       f"C\t{pid}\tpipe:[{pipe}]\t{wait}\t100000 65536\t10 999\tcopy\t{m.SOURCE}",
                       f"T\t{inode}\t{queue}"])
+        lines.extend([f"D\t{pid}\t1\tpipe:[{pipe}]", f"B\t{pid}\t999\t1"])
+        if wait in ("pipe_write", "anon_pipe_write"):
+            lines.append(f"W\t{pid}\t{pid+100}\t1000\t{wait}\t65536")
     return "\n".join(lines)
 
 
@@ -78,7 +81,10 @@ class WitnessTests(unittest.TestCase):
                 witness.observe(row, 0)
                 witness.observe(row, 0.3)
                 changed = copy.deepcopy(row)
-                changed["children"][0][field] += 1
+                if field == "written":
+                    changed["children"][0]["pipe_writers"][0]["written"] += 1
+                else:
+                    changed["children"][0][field] += 1
                 self.assertFalse(witness.observe(changed, 0.6))
                 self.assertFalse(witness.observe(changed, 0.9))
                 self.assertTrue(witness.observe(changed, 1.2))
