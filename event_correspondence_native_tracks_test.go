@@ -104,7 +104,7 @@ func TestCorrResourceNativeTrackIsolation(t *testing.T) {
    captureHash,err:=corrBoundDigest(e.capture);if err!=nil {t.Fatal(err)}
    gate:=newCorrAdmissionGate()
    for repeat:=1;repeat<=2;repeat++ {
-    started:=time.Now();collection,inspectErr:=gate.inspect(context.Background(),lease,e,nil,nil)
+    started:=time.Now();collection,inspectErr:=gate.inspect(bm.ctx,lease,e,nil,nil)
     r:=row{Name:name,Repeat:repeat,Stage:"matched",Seconds:time.Since(started).Seconds(),Collection:collection}
     if inspectErr!=nil {r.Stage="comparison refusal";r.Error=inspectErr.Error()}
     report.Rows=append(report.Rows,r);corrStreamAssertJoined(t,collection)
@@ -113,8 +113,8 @@ func TestCorrResourceNativeTrackIsolation(t *testing.T) {
      if inspectErr!=nil || !collection.Video.Equal || !collection.Audio.Equal {t.Fatal("native track positive control",collection,inspectErr)}
     } else if i<4 {
      if !errors.Is(inspectErr,errCorrStreamMismatch) {t.Fatal("changed track escaped content comparison",collection,inspectErr)}
-    } else if inspectErr==nil || errors.Is(inspectErr,context.DeadlineExceeded) || errors.Is(inspectErr,context.Canceled) {
-     t.Fatal("missing audio accepted or timed out instead of refusing",collection,inspectErr)
+    } else if !corrTrackMissingAudioRefused(bm.ctx,inspectErr) {
+     t.Fatal("missing audio lacked semantic refusal with a live caller",collection,inspectErr,bm.ctx.Err())
     }
     if len(gate.slot)!=0 || !lease.held() || borrowed.duration!=e || !reflect.DeepEqual(tree,eventStorageTree(t,job.dir)) {t.Fatal("native track owner/staging changed")}
     afterOutput,err:=corrBoundDigest(e.output.file);if err!=nil {t.Fatal(err)}
