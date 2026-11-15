@@ -2,35 +2,66 @@
 
 Keep fix/recording-safety-audit unmerged. Passing CI or successfully pushing a batch does not clear the audit.
 
-## Current status reconciliation — November 15, 2026
+## Current status reconciliation — November 16, 2026
 
-Latest user-reported green: 3f7c2250977518d3f58dc077e5a5bfb75ee81590.
-This records the user's report, not independently reviewed Actions logs or numerical
-resource acceptance. The chronological sections below are historical snapshots;
-their old pending/open wording is not a fresh claim that later work is absent.
-No original acceptance checkbox is automatically cleared by this update.
+Latest user-reported green: 6d64ed803a2a314b1489f3f15bf3c48309bb6c45.
+The user also reported a7f9f6618c992fd201421fc492032fc19d6eb37e green.
+These are user-reported CI results, not independently downloaded Actions results
+or numerical resource acceptance. The chronological sections below remain
+historical snapshots; old pending wording does not prove current absence.
+No original acceptance checkbox is automatically cleared by this reconciliation.
 
-The current workflow requires core/race/vet/storage/lifecycle, both isolated Chrome
-attempts and correspondence resources. Existing runtime-image and browser harnesses
-are scoped synthetic evidence, not live Dahua/network/deployment qualification.
-3f7c225 adds fresh evidence-plus-comparison composition, eight native cost rows and
-the corrected ten-row track matrix. Its pushed comparator remains test-only.
-Actual complete-validation costs still need review. Ingestion-time coverage,
-intended-host fit and positive cleanup eligibility remain unqualified.
+Integration baseline for this final recovery-contract/evidence write:
+623bbe16564aed009735e1a0bd8aa820490eaa61, preceded by the helper commit
+46386d532b82e64aab81ca8451fb663747d9b46d. Their runtime integration and the
+remaining six recovery-contract/evidence files form the prepared 13-file batch.
+No exact-final-head CI result is known at preparation. Main remains
+c5be6bf0cfea03071c7df1c3b0f5064753c881dd and is not changed.
 
-The expanded pending batch groups stage cancellation/deadline teardown and retry,
-writer progress/stop/join evidence, all-four-report assessment and this status
-reconciliation. See EVENT_CORRESPONDENCE_EXPANDED_VALIDATION.md. Its candidate
-must pass the existing exact-head workflow before claiming validation.
+The original preparation base a9adc67f7e09a90ef1e42474b3b25c6403ff86ae failed
+according to the user after all 22 original tooling regressions passed. The
+user-supplied report for that exact head was read: whole-copy slow-reader success/
+decode passed; the next case failed to recognize sustained backpressure.
+Disconnect/reuse and both SIGTERM gates were not cleared. 6d64ed8 predates mandatory
+execution of that campaign, so its green does not supply runtime-container export
+acceptance. The original failure remains historical evidence, not a new result for
+the corrected candidate.
 
-Remaining original-audit gates: live RTSP/reconnect and interrupted media capture;
-deployment filesystem/mount/procfs and blocked-I/O boundaries; outstanding browser
-and export/backpressure/shutdown acceptance; final writer/reader, destructive-path,
-lock/resource/security/publication/persistence review; and final-candidate evidence
-reconciliation. Existing scoped implementations/tests are not counted as absent
-or as complete deployment acceptance. Historical findings need current-source
-review before being called current defects. Automatic recovery, staging expiry,
-cleanup activation, merge and deployment remain unauthorized.
+The combined batch corrects the test observer's leader-thread/process-wide write-
+counter assumptions, adds safe console diagnostics and regressions, and includes
+all five recovery-manifest contract draft files. Its 48 Python tooling methods
+passed in preparation; corrected runtime-container and new Go/race qualification
+remain pending Actions. No production source defect or successful corrected
+runtime campaign is claimed. See RUNTIME_EXPORT_THREAD_OBSERVER_FIX.md and
+RECOVERY_MANIFEST_CONTRACT_ACCEPTANCE.md. The original runtime-export scope is
+recorded in RUNTIME_EXPORT_BACKPRESSURE_ACCEPTANCE.md; the thread/counter correction
+note supersedes its initial observer assumptions, not its acceptance gates.
+
+Already implemented scoped evidence includes authenticated Go HTTPS slow-reader,
+backpressure/disconnect/shutdown and pre-header probe/render cancellation; active
+continuous/event-buffer runtime-container capture, SIGTERM and restart intent;
+native Chrome control, metadata/autoplay/end/failure/explicit-recovery acceptance;
+and correspondence interruption/readiness/teardown/retry plus all-four-report
+assessment. a7f9f66 adds native late-transfer TLS failure/recovery with its explicit
+separate-source injection boundary. These implementations are not recounted as
+absent, independently reviewed artifact results, or deployment qualification.
+
+The required workflow retains core/race/vet/storage/lifecycle, both isolated Chrome
+attempts and correspondence resources. Comparator experiments remain test-only.
+Actual same-head numerical resource review, intended-host fit, positive ingestion-
+time coverage and resource-cost acceptance remain unqualified. Historical reports
+need their own compatible same-commit assessor/schema. The committed coverage-
+retention fix remains intact; no retention/date/environment workaround is proposed.
+
+Remaining original-audit gates: exact-candidate validation and artifact review;
+remaining bounded synthetic/browser/timeline cases after current-test reconciliation;
+whole-branch writer/reader, destructive-path, lock/resource/security/publication/
+persistence review; live Dahua/RTSP/reconnect/interrupted acquisition; deployment
+filesystem/mount/procfs/no-replace/blocked-I/O/quota/durability and intended-host
+pipeline cost/recorder-latency qualification; and final-candidate reconciliation.
+Existing implementations are neither absent nor complete deployment acceptance.
+Automatic recovery, staging expiry, cleanup activation, evidence deletion, merge
+and deployment remain unauthorized.
 
 ## Historical evidence through 19187ae
 
