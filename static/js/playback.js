@@ -44,9 +44,10 @@ function invalidateTimelineLoad() {
   if (timelineAbort) timelineAbort.abort(); timelineAbort = null;
   if (loadDataTimeoutId !== null) clearTimeout(loadDataTimeoutId); loadDataTimeoutId = null;
   pendingEventNavigation = null; cancelPlaybackTasks();
+  isPlaying=false;videoPlayers.forEach(video=>{if(video)video.pause();});setPlaybackButton();
   return timelineRequestVersion;
 }
-function initializeTimelinePlayback() { setupDatePicker(); loadTimelineCameras(); setupKeyboardShortcuts(); setupTimelineControls(); setupTimelineZoom(); }
+function initializeTimelinePlayback() { setPlaybackButton(); setupDatePicker(); loadTimelineCameras(); setupKeyboardShortcuts(); setupTimelineControls(); setupTimelineZoom(); }
 function loadTimelineEvents(date) {
   timelineEvents = typeof allEvents !== 'undefined' && Array.isArray(allEvents) ? allEvents.filter(event => {
     const time = new Date(event.start_time); return Number.isFinite(time.getTime()) && localDateKey(time) === date;
@@ -255,7 +256,10 @@ function scheduleVideoTask(fn,delay,generation) {
 }
 function setPlaybackButton() {
   const button=document.getElementById('play-pause');
-  if (button) button.textContent=isPlaying?'? Pause':'? Play';
+  if (button) {
+    button.textContent=isPlaying?'Pause':'Play';
+    button.setAttribute?.('aria-label',isPlaying?'Pause recordings':'Play recordings');
+  }
 }
 function stopMediaPlayback(message,video) {
   cancelPlaybackTasks();isPlaying=false;
@@ -304,7 +308,7 @@ function attachSingleCameraContinuation(video,index,segment,generation) {
   function stop(time,message) {
     cancelPlaybackTasks();isPlaying=false;videoPlayers.forEach(player=>{if(player)player.pause();});
     currentTimePosition=Math.min(time,dayEnd-1);
-    const button=document.getElementById('play-pause');if(button)button.textContent='? Play';
+    setPlaybackButton();
     renderTimeline();playbackError(message);
   }
   const update=()=>{
@@ -330,12 +334,16 @@ function attachSingleCameraContinuation(video,index,segment,generation) {
 }
 function performSeek(time,generation=seekGeneration) {
   if (generation!==seekGeneration) return;
+  if (!getOrderedSelectedCameras().length) {isPlaying=false;videoPlayers.forEach(video=>{if(video)video.pause();});setPlaybackButton();return;}
   getOrderedSelectedCameras().forEach((id,index) => scheduleVideoTask(() => {
     const video=videoPlayers[index]; if (!video) return;
     const segment=timelineSegments.find(s=>s.camera_id===id && time.getTime()>=new Date(s.start_time).getTime() && time.getTime()<new Date(s.end_time).getTime());
     const message=video.parentElement?.querySelector('.no-video-message');
     video.pause(); video.removeAttribute('src'); video.style.display=segment?'block':'none'; if (message) message.style.display=segment?'none':'block';
-    if (!segment) return;
+    if (!segment) {
+      if (!pendingVideoTimeouts.length && !mediaCleanups.length && !playbackSessions.size) {isPlaying=false;setPlaybackButton();}
+      return;
+    }
     scheduleVideoTask(() => {
       if (videoPlayers[index]!==video) return;
       const offset=(time.getTime()-new Date(segment.start_time).getTime())/1000;
@@ -352,7 +360,8 @@ function performSeek(time,generation=seekGeneration) {
     },10,generation);
   },index*150,generation));
   renderTimeline();
-  if (!isPlaying) { isPlaying=true; const button=document.getElementById('play-pause'); if (button) button.textContent='? Pause'; }
+  if (!isPlaying) isPlaying=true;
+  setPlaybackButton();
 }
 function togglePlayPause() {
   playbackIntentVersion++;
@@ -361,7 +370,7 @@ function togglePlayPause() {
   }
   const sessions=videoPlayers.filter(Boolean).map(video=>playbackSessions.get(video)).filter(session=>session && session.valid());
   if (!sessions.length && !mediaCleanups.length && !pendingVideoTimeouts.length && seekTimeoutId===null) {
-    playbackError('Select a recording time before starting playback');return;
+    setPlaybackButton();playbackError('Select a recording time before starting playback');return;
   }
   isPlaying=true;setPlaybackButton();
   const ended=sessions.filter(session=>session.video.ended);
@@ -382,7 +391,7 @@ function toggleMuteAll() {
 }
 function updateVideoGrid() {
   const container=document.getElementById('video-grid'); if (!container) return;
-  cancelPlaybackTasks(); isUpdatingGrid=true; videoPlayers.forEach(video=>{ if (video) { video.pause(); video.removeAttribute('src'); } });
+  cancelPlaybackTasks(); isPlaying=false;setPlaybackButton();isUpdatingGrid=true; videoPlayers.forEach(video=>{ if (video) { video.pause(); video.removeAttribute('src'); } });
   container.innerHTML=''; videoPlayers=[];
   const ordered=getOrderedSelectedCameras(), count=ordered.length;
   if (!count) { container.innerHTML='<div style="padding:40px;text-align:center;color:#888;font-size:18px;">Select cameras to begin playback</div>'; isUpdatingGrid=false; return; }
@@ -405,7 +414,9 @@ function previousSegment() { const time=new Date(currentTimePosition ?? Date.now
 function nextSegment() { const time=new Date(currentTimePosition ?? Date.now()); time.setMinutes(time.getMinutes()+10); seekToTime(time); }
 function updatePlaybackSpeed() { videoPlayers.forEach(video=>{ if (video) video.playbackRate=playbackSpeed; }); }
 function setupKeyboardShortcuts() {
-  document.addEventListener('keydown',e=>{ if (e.target.tagName==='INPUT' || e.target.tagName==='TEXTAREA') return;
+  document.addEventListener('keydown',e=>{
+    if (e.defaultPrevented || e.repeat || e.altKey || e.ctrlKey || e.metaKey) return;
+    if (['INPUT','TEXTAREA','SELECT','BUTTON','A'].includes(e.target?.tagName) || e.target?.isContentEditable || e.target?.closest?.('input,textarea,select,button,a,[contenteditable]')) return;
     if (e.code==='Space') { e.preventDefault(); togglePlayPause(); } else if (e.code==='ArrowLeft') { e.preventDefault(); previousSegment(); } else if (e.code==='ArrowRight') { e.preventDefault(); nextSegment(); }
   });
 }
