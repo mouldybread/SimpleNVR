@@ -10,13 +10,15 @@ import browser_playback_edges as edge
 
 def playing(path=edge.FIRST):
     return {"path": path, "playingIntent": True, "paused": False, "error": None, "currentTime": 1.5,
+            "observer": {"version": 1, "installed": True, "document": "/", "dropped": 0},
             "events": [{"name": name, "trusted": True, "path": path} for name in ("loadedmetadata", "playing")]}
 
 
 def denied():
     return {"path": edge.AUDIO, "active": False, "muted": False, "volume": 1, "readyState": 1,
             "error": None, "sessions": 1, "paused": True, "playingIntent": False,
-            "text": "Playback could not start; press Play to retry or select another time"}
+            "text": "Playback could not start; press Play to retry or select another time",
+            "observer": {"version": 1, "installed": True, "document": "/", "dropped": 0}, "events": []}
 
 
 class ContractTests(unittest.TestCase):
@@ -32,7 +34,7 @@ class ContractTests(unittest.TestCase):
 
     def test_metadata_hold_contract(self):
         good = {"readyState": 0, "paused": True, "sessions": 0, "pendingMetadata": 1,
-                "playingIntent": False, "events": []}
+                "playingIntent": False, "observer": {"version": 1, "installed": True, "document": "/", "dropped": 0}, "events": []}
         edge.check_held(good, False)
         for key, value in (("readyState", 1), ("paused", False), ("sessions", 1), ("pendingMetadata", 0),
                            ("playingIntent", True), ("events", [{"name": "loadedmetadata", "trusted": True}])):
@@ -141,6 +143,91 @@ class AsyncContractTests(unittest.IsolatedAsyncioTestCase):
         for invalid in ({"timeout": True}, {"frames": True, "width": 256, "height": 144},
                         {"frames": 1, "width": 0, "height": 144}, None):
             with self.assertRaises(AssertionError): await edge.frame(FakeCDP(invalid))
+
+
+class ObserverTests(unittest.TestCase):
+    def test_observer_presence_and_loss_are_explicit(self):
+        edge.require_observer(playing())
+        for kind in ("missing", "null", "not-installed", "wrong-version", "bool-version", "wrong-document",
+                     "lost-events", "bool-dropped", "missing-buffer", "null-buffer", "oversized"):
+            with self.subTest(kind=kind):
+                state=playing()
+                if kind=="missing": del state["observer"]
+                elif kind=="null": state["observer"]=None
+                elif kind=="not-installed": state["observer"]["installed"]=False
+                elif kind=="wrong-version": state["observer"]["version"]=2
+                elif kind=="bool-version": state["observer"]["version"]=True
+                elif kind=="wrong-document": state["observer"]["document"]="/auth/login"
+                elif kind=="lost-events": state["observer"]["dropped"]=1
+                elif kind=="bool-dropped": state["observer"]["dropped"]=False
+                elif kind=="missing-buffer": del state["events"]
+                elif kind=="null-buffer": state["events"]=None
+                elif kind=="oversized": state["events"]=[{}]*129
+                with self.assertRaisesRegex(AssertionError,"observer"):
+                    edge.require_observer(state)
+
+    def test_installed_empty_is_not_successful_playback(self):
+        state=playing();state["events"]=[]
+        edge.require_observer(state)
+        with self.assertRaisesRegex(AssertionError,"native trusted"):
+            edge.check_playing(state,edge.FIRST)
+        state["observer"]=None
+        with self.assertRaisesRegex(AssertionError,"observer"):
+            edge.check_playing(state,edge.FIRST)
+
+
+class ObserverBootstrapTests(unittest.IsolatedAsyncioTestCase):
+    async def bootstrap(self, installed=True, registration_fails=False):
+        from types import SimpleNamespace
+        order=[];state=playing()
+        if not installed: state["observer"]=None
+        cdp=FakeCDP(state)
+        class Page:
+            url="about:blank"
+            closed=False
+            async def add_init_script(self,script):
+                order.append("register")
+                if registration_fails: raise RuntimeError("init registration failed")
+                if script!=edge.EVENT_SCRIPT: raise AssertionError("wrong init script")
+            async def goto(self,url,wait_until):
+                order.append("navigate");self.url=url
+                return SimpleNamespace(status=200)
+            async def close(self): self.closed=True
+        page=Page()
+        class Context:
+            async def new_page(self): return page
+            async def new_cdp_session(self,value):
+                order.append("cdp");return cdp
+        class Diagnostics:
+            async def attach(self,context,value): order.append("diagnostics")
+        async def ready(value,origin): order.append("ready")
+        try:
+            result=await edge.prepare_page(Context(),"https://fixture",SimpleNamespace(application_ready=ready),Diagnostics())
+            return result,page,cdp,order
+        except BaseException as error:
+            return error,page,cdp,order
+
+    async def test_register_before_navigation_and_check_without_activation(self):
+        result,page,cdp,order=await self.bootstrap()
+        self.assertIsInstance(result,tuple)
+        self.assertEqual(order,["register","cdp","diagnostics","navigate","ready"])
+        evaluations=[params for method,params in cdp.calls if method=="Runtime.evaluate"]
+        self.assertEqual(len(evaluations),2)
+        self.assertTrue(all(params["userGesture"] is False for params in evaluations))
+        self.assertFalse(any(method=="Page.addScriptToEvaluateOnNewDocument" for method,_ in cdp.calls))
+
+    async def test_missing_observer_stops_before_acceptance_and_closes_page(self):
+        result,page,_,order=await self.bootstrap(installed=False)
+        self.assertIsInstance(result,AssertionError)
+        self.assertIn("observer",str(result))
+        self.assertNotIn("ready",order)
+        self.assertTrue(page.closed)
+
+    async def test_registration_failure_closes_page_without_navigation(self):
+        result,page,_,order=await self.bootstrap(registration_fails=True)
+        self.assertIsInstance(result,RuntimeError)
+        self.assertEqual(order,["register"])
+        self.assertTrue(page.closed)
 
 
 if __name__ == "__main__":

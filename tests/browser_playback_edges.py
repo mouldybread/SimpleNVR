@@ -8,16 +8,19 @@ SECOND = "/recordings/id_browser/20261110_120008_fixture.mp4"
 AUDIO = "/recordings/id_browser/20261110_123000_audio.mp4"
 CASES = ("metadata-pause-resume", "metadata-retarget", "paused-native-end-resume", "autoplay-denial-retry")
 EVENT_SCRIPT = r"""(() => {
- const events=[];window.__nvrEdgeEvents=events;
+ if (window.__nvrEdgeObserver?.installed===true) return;
+ const observer={version:1,installed:false,document:location.pathname,dropped:0};
+ const events=[];window.__nvrEdgeEvents=events;window.__nvrEdgeObserver=observer;
  for (const name of ['loadedmetadata','playing','pause','ended','error']) {
   document.addEventListener(name,event=>{
    const video=event.target;
    if (!(video instanceof HTMLVideoElement) || !video.closest('#video-grid')) return;
    let path='';try {path=new URL(video.currentSrc,location.href).pathname;}catch(_){}
    events.push({name,trusted:event.isTrusted,path,readyState:video.readyState,time:video.currentTime});
-   if (events.length>128)events.shift();
+   if (events.length>128) {events.shift();observer.dropped++;}
   },true);
  }
+ observer.installed=true;
 })()"""
 STATE = r"""(() => {
  const v=videoPlayers[0];
@@ -26,7 +29,8 @@ STATE = r"""(() => {
   currentTime:Number.isFinite(v?.currentTime)?v.currentTime:null,error:v?.error?.code || null,
   muted:v?.muted,volume:v?.volume,sessions:playbackSessions.size,
   generation:seekGeneration,active:navigator.userActivation.hasBeenActive,
-  pendingMetadata:mediaCleanups.length,events:window.__nvrEdgeEvents || [],
+  pendingMetadata:mediaCleanups.length,observer:window.__nvrEdgeObserver || null,
+  events:Array.isArray(window.__nvrEdgeEvents)?window.__nvrEdgeEvents:null,
   text:document.body.innerText.slice(-3000)};
 })()"""
 
@@ -34,6 +38,18 @@ STATE = r"""(() => {
 def require(condition, message):
     if not condition:
         raise AssertionError(message)
+
+
+def require_observer(state):
+    require(isinstance(state, dict), "native event observer snapshot missing")
+    observer = state.get("observer")
+    require(isinstance(observer, dict) and observer.get("installed") is True
+            and type(observer.get("version")) is int and observer["version"] == 1
+            and observer.get("document") == "/", "native event observer was not installed in the application document")
+    require(type(observer.get("dropped")) is int and observer["dropped"] == 0,
+            "native event observer lost events")
+    require(isinstance(state.get("events"), list) and len(state["events"]) <= 128,
+            "native event observer buffer missing or invalid")
 
 
 def cancelled_interception(error):
@@ -47,6 +63,7 @@ def native_event(state, name, path):
 
 
 def check_playing(state, path, minimum=1.2):
+    require_observer(state)
     require(state.get("path") == path and state.get("playingIntent") is True and state.get("paused") is False
             and state.get("error") is None and type(state.get("currentTime")) in (int, float)
             and state["currentTime"] > minimum, "native playback did not reach expected source/clock")
@@ -55,6 +72,7 @@ def check_playing(state, path, minimum=1.2):
 
 
 def check_held(state, expected_intent):
+    require_observer(state)
     require(state.get("readyState") == 0 and state.get("paused") is True and state.get("sessions") == 0
             and state.get("pendingMetadata") == 1 and state.get("playingIntent") is expected_intent,
             "metadata hold did not preserve pending playback intent")
@@ -63,6 +81,7 @@ def check_held(state, expected_intent):
 
 
 def check_denied(state, rejection):
+    require_observer(state)
     require(state.get("path") == AUDIO and state.get("active") is False and state.get("muted") is False
             and state.get("volume") == 1 and state.get("readyState", 0) >= 1 and state.get("error") is None
             and state.get("sessions") == 1 and state.get("paused") is True and state.get("playingIntent") is False,
@@ -166,13 +185,16 @@ class MediaHold:
 
 async def prepare_page(context, origin, legacy, diagnostics, activated_setup=True):
     page = await context.new_page()
-    cdp = await context.new_cdp_session(page)
-    await cdp.send("Page.addScriptToEvaluateOnNewDocument", {"source": EVENT_SCRIPT})
-    await diagnostics.attach(context, page)
     try:
+        # Use Playwright's main-document initialization before navigation. Do not
+        # evaluate setup with user activation or synthesize any media event.
+        await page.add_init_script(script=EVENT_SCRIPT)
+        cdp = await context.new_cdp_session(page)
+        await diagnostics.attach(context, page)
         response = await page.goto(origin + "/", wait_until="load")
         require(response is not None and response.status == 200 and page.url == origin + "/",
                 "edge page did not load authenticated application")
+        require_observer(await evaluate(cdp, STATE))
         if activated_setup:
             await legacy.application_ready(page, origin)
         else:
@@ -181,6 +203,7 @@ async def prepare_page(context, origin, legacy, diagnostics, activated_setup=Tru
             await wait(cdp, "timelineSegments.some(s=>s.camera_id==='id_browser' && s.start_time==='2026-11-10T12:00:00Z') && !isUpdatingGrid && timelineAbort===null && loadDataTimeoutId===null && videoPlayers.length===1")
             require(await evaluate(cdp, "navigator.userActivation.hasBeenActive") is False,
                     "autoplay page unexpectedly acquired user activation")
+        require_observer(await evaluate(cdp, STATE))
         return page, cdp
     except BaseException:
         await page.close()
