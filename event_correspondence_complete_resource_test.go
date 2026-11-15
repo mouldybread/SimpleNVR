@@ -15,6 +15,33 @@ import (
  "golang.org/x/sys/unix"
 )
 
+type corrCompleteLoadSnapshot struct {Bytes int64;Files int}
+type corrCompleteLoadSummary struct {
+ Profile string
+ Before,AfterValidation,AfterProgress,AfterJoin corrCompleteLoadSnapshot
+ ProgressDuringValidation,StopRequested,Joined bool
+ ProgressWaitSeconds,UserCPUSeconds,SystemCPUSeconds float64
+ ExitError string
+}
+func corrCompleteLoadSnapshotAt(dir string)(corrCompleteLoadSnapshot,error) {
+ bytes,err:=corrBoundLoadBytes(dir);if err!=nil {return corrCompleteLoadSnapshot{},err}
+ entries,err:=os.ReadDir(dir);if err!=nil {return corrCompleteLoadSnapshot{},err}
+ files:=0
+ for _,entry:=range entries {info,err:=entry.Info();if err!=nil {return corrCompleteLoadSnapshot{},err};if info.Size()>0 {files++}}
+ return corrCompleteLoadSnapshot{Bytes:bytes,Files:files},nil
+}
+func corrCompleteLoadProgress(t *testing.T,load *corrBoundLoad,dir string,before corrCompleteLoadSnapshot)corrCompleteLoadSnapshot {
+ t.Helper();deadline:=time.NewTimer(4*time.Second);defer deadline.Stop()
+ tick:=time.NewTicker(20*time.Millisecond);defer tick.Stop()
+ for {select {
+ case <-load.done:t.Fatal("writer ended before forward-progress witness",load.err)
+ case <-deadline.C:t.Fatal("writer made no bounded segment/byte progress",before)
+ case <-tick.C:
+  after,err:=corrCompleteLoadSnapshotAt(dir);if err!=nil {t.Fatal(err)}
+  if after.Bytes>before.Bytes && after.Files>before.Files {return after}
+ }}
+}
+
 func TestCorrResourceCompleteValidationCost(t *testing.T) {
  if os.Getenv("SIMPLENVR_CORRESPONDENCE_RESOURCE")!="1" {t.Skip("separate resource job only")}
  destination:=os.Getenv("SIMPLENVR_CORRESPONDENCE_REPORT");if destination=="" {t.Fatal("explicit report destination required")}
@@ -25,14 +52,16 @@ func TestCorrResourceCompleteValidationCost(t *testing.T) {
   Repeat,GeneratedSeconds,RequestedSeconds int
   ChildUserCPUSeconds,ChildSystemCPUSeconds,GoUserCPUSeconds,GoSystemCPUSeconds float64
   BackgroundRunningBefore,BackgroundRunningAfter bool
+  BackgroundBefore,BackgroundAfter corrCompleteLoadSnapshot
   Validation corrCompleteValidationReport
  }
  report:=struct{
   Base,Head,GoVersion,Scope string
   RuntimeQualified,CleanupAuthorized bool
   Rows []row
+  Background []corrCompleteLoadSummary
   FailedProfiles []string
- }{Base:"4ebb4d6a6e842c901be771fe14a2a7324d44efde",Head:os.Getenv("GITHUB_SHA"),GoVersion:runtime.Version(),Scope:"fresh descriptor-bound duration/presentation collection plus admitted streaming comparison; one 5s aggregate deadline; no prefix; cache-warm native aligned H264/AAC; excludes capture, assembly, publication and real recorder-host acceptance"}
+ }{Base:"3f7c2250977518d3f58dc077e5a5bfb75ee81590",Head:os.Getenv("GITHUB_SHA"),GoVersion:runtime.Version(),Scope:"fresh descriptor-bound duration/presentation collection plus admitted streaming comparison; one 5s aggregate deadline; no prefix; cache-warm native aligned H264/AAC; excludes capture, assembly, publication and real recorder-host acceptance"}
  defer func(){
   data,err:=json.MarshalIndent(report,"","  ");if err!=nil {t.Error(err);return}
   if err:=os.WriteFile(filepath.Join(filepath.Dir(destination),"complete-validation.json"),append(data,'\n'),0600);err!=nil {t.Error(err)}
@@ -62,11 +91,16 @@ func TestCorrResourceCompleteValidationCost(t *testing.T) {
    outputHash,err:=corrBoundDigest(original.output.file);if err!=nil {t.Fatal(err)}
    gate:=newCorrAdmissionGate()
    for _,mode:=range []string{"idle","paced segment writer"} {
-    var load *corrBoundLoad
-    if mode!="idle" {load=corrBoundStartLoad(t,binary,seed,t.TempDir())}
+    var load *corrBoundLoad;var loadDir string
+    summary:=corrCompleteLoadSummary{Profile:profile.Name}
+    if mode!="idle" {
+     loadDir=t.TempDir();load=corrBoundStartLoad(t,binary,seed,loadDir)
+     summary.Before,err=corrCompleteLoadSnapshotAt(loadDir);if err!=nil {t.Fatal(err)}
+    }
     for repeat:=1;repeat<=2;repeat++ {
      r:=row{Profile:profile.Name,Mode:mode,Repeat:repeat,GeneratedSeconds:profile.Seconds,RequestedSeconds:event.Duration}
      if load!=nil {select {case <-load.done:t.Fatal("background ended before chain",load.err);default:r.BackgroundRunningBefore=true}}
+     if load!=nil {r.BackgroundBefore,err=corrCompleteLoadSnapshotAt(loadDir);if err!=nil {t.Fatal(err)}}
      var cb,ca,pb,pa unix.Rusage
      if err:=unix.Getrusage(unix.RUSAGE_CHILDREN,&cb);err!=nil {t.Fatal(err)}
      if err:=unix.Getrusage(unix.RUSAGE_SELF,&pb);err!=nil {t.Fatal(err)}
@@ -78,6 +112,11 @@ func TestCorrResourceCompleteValidationCost(t *testing.T) {
      r.GoUserCPUSeconds=corrResourceCPU(pa.Utime)-corrResourceCPU(pb.Utime);r.GoSystemCPUSeconds=corrResourceCPU(pa.Stime)-corrResourceCPU(pb.Stime)
      if inspectErr!=nil {r.Error=inspectErr.Error()}
      if load!=nil {select {case <-load.done:default:r.BackgroundRunningAfter=true}}
+     if load!=nil {
+      r.BackgroundAfter,err=corrCompleteLoadSnapshotAt(loadDir);if err!=nil {t.Fatal(err)}
+      if r.BackgroundAfter.Bytes<r.BackgroundBefore.Bytes || r.BackgroundAfter.Files<r.BackgroundBefore.Files {t.Fatal("writer observations regressed")}
+      summary.AfterValidation=r.BackgroundAfter
+     }
      report.Rows=append(report.Rows,r);corrStreamAssertJoined(t,validation.Collection)
      t.Logf("complete profile=%s mode=%s repeat=%d evidence_seconds=%.6f comparison_seconds=%.6f total_seconds=%.6f error=%v",profile.Name,mode,repeat,validation.EvidenceSeconds,validation.ComparisonSeconds,validation.TotalSeconds,inspectErr)
      if inspectErr!=nil || !validation.EvidenceCompleted || !validation.Collection.Video.Equal || !validation.Collection.Audio.Equal || validation.Collection.ChildrenStarted!=2 || len(gate.slot)!=0 {t.Fatal("complete native validation refused",validation,inspectErr)}
@@ -87,12 +126,26 @@ func TestCorrResourceCompleteValidationCost(t *testing.T) {
      afterOutput,err:=corrBoundDigest(original.output.file);if err!=nil {t.Fatal(err)}
      if afterCapture!=captureHash || afterOutput!=outputHash {t.Fatal("complete validation changed media")}
     }
-    if load!=nil {load.stop()}
+    if load!=nil {
+     summary.ProgressDuringValidation=summary.AfterValidation.Bytes>summary.Before.Bytes
+     progressStarted:=time.Now()
+     summary.AfterProgress=corrCompleteLoadProgress(t,load,loadDir,summary.AfterValidation)
+     summary.ProgressWaitSeconds=time.Since(progressStarted).Seconds()
+     summary.StopRequested=true;load.stop()
+     usage:=load.cmd.ProcessState
+     if usage==nil {t.Fatal("complete-chain writer not joined")}
+     summary.Joined=true;summary.UserCPUSeconds=usage.UserTime().Seconds();summary.SystemCPUSeconds=usage.SystemTime().Seconds()
+     summary.ExitError=fmt.Sprint(load.err)
+     summary.AfterJoin,err=corrCompleteLoadSnapshotAt(loadDir);if err!=nil {t.Fatal(err)}
+     report.Background=append(report.Background,summary)
+     if summary.AfterJoin.Bytes<summary.AfterProgress.Bytes || summary.AfterJoin.Files<summary.AfterProgress.Files {t.Fatal("writer final observations regressed")}
+    }
    }
    inventory:=job.inventory;bm.releaseJob(job);assertJobInventoryClosed(t,inventory)
    if !job.keepStaging || lease.held() || job.inventory!=nil || job.recoveryBorrow!=nil || len(bm.slots)!=0 {t.Fatal("complete validation terminal invariant")}
   })
   if !ok {report.FailedProfiles=append(report.FailedProfiles,profile.Name)}
  }
+ if len(report.Background)!=2 {t.Errorf("incomplete complete-validation writer matrix: %d of 2 rows",len(report.Background))}
  if len(report.Rows)!=8 {t.Errorf("incomplete full validation matrix: %d of 8 rows",len(report.Rows))}
 }

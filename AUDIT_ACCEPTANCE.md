@@ -2,7 +2,37 @@
 
 Keep fix/recording-safety-audit unmerged. Passing CI or successfully pushing a batch does not clear the audit.
 
-## Current evidence
+## Current status reconciliation — November 15, 2026
+
+Latest user-reported green: 3f7c2250977518d3f58dc077e5a5bfb75ee81590.
+This records the user's report, not independently reviewed Actions logs or numerical
+resource acceptance. The chronological sections below are historical snapshots;
+their old pending/open wording is not a fresh claim that later work is absent.
+No original acceptance checkbox is automatically cleared by this update.
+
+The current workflow requires core/race/vet/storage/lifecycle, both isolated Chrome
+attempts and correspondence resources. Existing runtime-image and browser harnesses
+are scoped synthetic evidence, not live Dahua/network/deployment qualification.
+3f7c225 adds fresh evidence-plus-comparison composition, eight native cost rows and
+the corrected ten-row track matrix. Its pushed comparator remains test-only.
+Actual complete-validation costs still need review. Ingestion-time coverage,
+intended-host fit and positive cleanup eligibility remain unqualified.
+
+The expanded pending batch groups stage cancellation/deadline teardown and retry,
+writer progress/stop/join evidence, all-four-report assessment and this status
+reconciliation. See EVENT_CORRESPONDENCE_EXPANDED_VALIDATION.md. Its candidate
+must pass the existing exact-head workflow before claiming validation.
+
+Remaining original-audit gates: live RTSP/reconnect and interrupted media capture;
+deployment filesystem/mount/procfs and blocked-I/O boundaries; outstanding browser
+and export/backpressure/shutdown acceptance; final writer/reader, destructive-path,
+lock/resource/security/publication/persistence review; and final-candidate evidence
+reconciliation. Existing scoped implementations/tests are not counted as absent
+or as complete deployment acceptance. Historical findings need current-source
+review before being called current defects. Automatic recovery, staging expiry,
+cleanup activation, merge and deployment remain unauthorized.
+
+## Historical evidence through 19187ae
 
 User-reported Safety verification is green through 19187ae12e7b8aebdb3a58481684bc4867ec1388 (19187ae), including the private-tmpfs step. Actions logs were not independently inspected. Earlier reported-green milestones include recovery inspection (1cff006), publication (607bf98), HTTPS exports (117ac28), forced render cancellation (f0c2cb7), initial storage failures (2074785), queued checkpoint preservation (45a6083), active-recorder/full-server shutdown (9137668), runtime storage/non-root failures (bdc1ef5), export-phase cancellation (4339ff3) and private-media descriptor/shutdown handling (c9358ba).
 
