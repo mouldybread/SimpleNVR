@@ -11,6 +11,7 @@ import re
 
 from playwright.async_api import async_playwright
 from browser_ci_diagnostics import BrowserNetworkEvidence
+from browser_playback_control import native_control_contract, mark_failed_stages
 from browser_playback_edges import CASES, metadata_case, paused_end_case, autoplay_case, require
 
 spec = importlib.util.spec_from_file_location("runtime_browser_baseline", Path(__file__).with_name("runtime-browser-acceptance.py"))
@@ -30,6 +31,7 @@ async def run_edges(args):
               "response_bodies_replaced": False, "play_overridden": False, "media_events_dispatched": False,
               "strict_autoplay_policy": "document-user-activation-required",
               "request_holds": "one real media request before server delivery in each metadata case",
+              "control_contract": {"status": "not-started"},
               "cases": {name: {"status": "not-started"} for name in CASES}, "page_errors": []}
     browser = context = None
     async with BrowserNetworkEvidence(directory, args.origin) as diagnostics, async_playwright() as p:
@@ -58,6 +60,8 @@ async def run_edges(args):
             await login.locator('[name="password"]').fill(os.environ["SIMPLENVR_E2E_PASSWORD"])
             await legacy.submit_login_once(login, args.origin, report, network)
             await login.close()
+            report["control_contract"]["status"] = "running"
+            await native_control_contract(context, args.origin, legacy, diagnostics, report["control_contract"])
             for name in CASES:
                 row = report["cases"][name]
                 row["status"] = "running"
@@ -76,6 +80,9 @@ async def run_edges(args):
             require(not report["page_errors"], "native edge page errors")
             report["status"] = "passed-with-navigation-recovery" if report.get("login_navigation_recovery") else "passed"
         except BaseException as error:
+            report["status"] = "failed"
+            if report["control_contract"]["status"] == "running":
+                report["control_contract"]["status"] = "failed"
             report["failure"] = type(error).__name__ + ": " + str(error)[:1500]
             raise
         finally:
@@ -86,6 +93,10 @@ async def run_edges(args):
                 finally:
                     if browser is not None:
                         await browser.close()
+            except BaseException as error:
+                report["status"] = "failed"
+                report["cleanup_failure"] = type(error).__name__ + ": " + str(error)[:1500]
+                raise
             finally:
                 write(directory / "playback-edge-report.json", report)
 
@@ -105,6 +116,7 @@ async def run(args):
         aggregate["playback_edges"] = "passed"
         aggregate["status"] = "passed"
     except BaseException as error:
+        mark_failed_stages(aggregate)
         aggregate["failure"] = type(error).__name__ + ": " + str(error)[:1500]
         raise
     finally:

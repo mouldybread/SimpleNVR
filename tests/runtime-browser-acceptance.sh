@@ -14,7 +14,7 @@ cleanup() {
   sudo rm -rf -- "$work"
 }
 trap cleanup EXIT
-timeout --kill-after=2 20 python3 -m unittest discover -s tests -p 'test_browser_playback_edges.py' -v \
+timeout --kill-after=2 20 python3 -m unittest discover -s tests -p 'test_browser_playback*.py' -v \
   2>&1 | tee "$evidence/playback-edge-unit-tests.log"
 # Generate fixtures using the actual runtime image codecs, not host FFmpeg.
 for stamp in 120000 120008; do
