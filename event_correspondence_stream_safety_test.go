@@ -24,6 +24,19 @@ func TestCorrStreamChild(t *testing.T) {
  fd,err:=strconv.Atoi(os.Getenv("CORR_STREAM_AUDIO_FD"));if err!=nil {os.Exit(91)}
  audio:=os.NewFile(uintptr(fd),"audio")
  mode:=os.Getenv("CORR_STREAM_MODE")
+ // Opposed writes must exceed pipe capacity plus a comparator's 64 KiB
+ // read chunk. The original 128 KiB payload can otherwise complete on
+ // larger pipes. Constrain only these controlled child outputs, before
+ // writing anything; never change the collector or borrowed media FDs.
+ if mode=="cross video" || mode=="cross audio" {
+  for _,pipe:=range []*os.File{os.Stdout,audio} {
+   capacity,err:=unix.FcntlInt(pipe.Fd(),unix.F_SETPIPE_SZ,4096)
+   if err!=nil || capacity<=0 || capacity>=64<<10 {
+    _,_=fmt.Fprintf(os.Stderr,"opposed-order pipe setup failed: capacity=%d err=%v\n",capacity,err)
+    os.Exit(97)
+   }
+  }
+ }
  v,a:=[]byte("ABCD-video"),[]byte("ABCD-audio")
  switch mode {
  case "video mismatch":v=[]byte("CDAB-video")
