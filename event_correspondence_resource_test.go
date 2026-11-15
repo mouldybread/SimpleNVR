@@ -29,7 +29,15 @@ func corrResourceProfiles()[]corrResourceProfile {
  }
 }
 
+type corrResourceStreaming struct {
+ Outcome,Error string
+ Seconds,ChildUserCPUSeconds,ChildSystemCPUSeconds,CollectorUserCPUSeconds,CollectorSystemCPUSeconds float64
+ ChildInputBlockOps,ChildOutputBlockOps,CollectorInputBlockOps,CollectorOutputBlockOps int64
+ Collection corrStreamReport
+}
+
 type corrResourceRow struct {
+ Streaming *corrResourceStreaming
  Profile corrResourceProfile
  Repeat int
  Outcome,Error string
@@ -93,7 +101,7 @@ func TestCorrResourceProfiles(t *testing.T) {
   Base,Head,GoVersion,FFmpegVersion,Scope string
   RuntimeQualified,CleanupAuthorized bool
   Rows []corrResourceRow
- }{Base:"48d4250d574cb4cecc6444192fe60c0b57245e53",Head:os.Getenv("GITHUB_SHA"),GoVersion:runtime.Version(),Scope:"synthetic resource measurements; generated/cache-warm inputs; no live-job or recorder-host acceptance"}
+ }{Base:"3ad0281b2c54cbb5bd77cbd1819c88c619433f59",Head:os.Getenv("GITHUB_SHA"),GoVersion:runtime.Version(),Scope:"paired scratch versus streaming measurements; scratch first; cache-warm generated inputs; no runtime acceptance"}
  // Persist completed rows even after t.Fatal in a subtest. Job logs remain
  // available if a hard process/runner timeout prevents this deferred write.
  defer func(){
@@ -147,9 +155,26 @@ func TestCorrResourceProfiles(t *testing.T) {
    if err:=unix.Getrusage(unix.RUSAGE_SELF,&selfAfter);err!=nil {t.Fatal(err)}
    row:=corrResourceRow{Profile:profile,Repeat:repeat,Outcome:"matched",FixtureGenerationSeconds:generation,CollectionSeconds:measured.Elapsed.Seconds(),SourceBytes:sourceBytes,LogicalInputPassBytes:measured.InputSizePassBudget,ChildUserCPUSeconds:corrResourceCPU(after.Utime)-corrResourceCPU(before.Utime),ChildSystemCPUSeconds:corrResourceCPU(after.Stime)-corrResourceCPU(before.Stime),ChildInputBlockOps:after.Inblock-before.Inblock,ChildOutputBlockOps:after.Oublock-before.Oublock,ChildrenMaxRSSSinceProcessStartLinuxKiB:after.Maxrss,CollectorUserCPUSeconds:corrResourceCPU(selfAfter.Utime)-corrResourceCPU(selfBefore.Utime),CollectorSystemCPUSeconds:corrResourceCPU(selfAfter.Stime)-corrResourceCPU(selfBefore.Stime),CollectorInputBlockOps:selfAfter.Inblock-selfBefore.Inblock,CollectorOutputBlockOps:selfAfter.Oublock-selfBefore.Oublock,Collection:measured}
    if collectErr!=nil {row.Outcome="refused";row.Error=collectErr.Error()}
+   var sb,sa,pb,pa unix.Rusage
+   if err:=unix.Getrusage(unix.RUSAGE_CHILDREN,&sb);err!=nil {t.Fatal(err)}
+   if err:=unix.Getrusage(unix.RUSAGE_SELF,&pb);err!=nil {t.Fatal(err)}
+   streamCtx,streamCancel:=context.WithTimeout(context.Background(),corrPrototypeBudget)
+   streamed,streamErr:=corrStreamRun(streamCtx,refs,actual,nil,nil,nil)
+   streamCancel()
+   if err:=unix.Getrusage(unix.RUSAGE_CHILDREN,&sa);err!=nil {t.Fatal(err)}
+   if err:=unix.Getrusage(unix.RUSAGE_SELF,&pa);err!=nil {t.Fatal(err)}
+   row.Streaming=&corrResourceStreaming{Outcome:"matched",Seconds:streamed.Elapsed.Seconds(),ChildUserCPUSeconds:corrResourceCPU(sa.Utime)-corrResourceCPU(sb.Utime),ChildSystemCPUSeconds:corrResourceCPU(sa.Stime)-corrResourceCPU(sb.Stime),CollectorUserCPUSeconds:corrResourceCPU(pa.Utime)-corrResourceCPU(pb.Utime),CollectorSystemCPUSeconds:corrResourceCPU(pa.Stime)-corrResourceCPU(pb.Stime),ChildInputBlockOps:sa.Inblock-sb.Inblock,ChildOutputBlockOps:sa.Oublock-sb.Oublock,CollectorInputBlockOps:pa.Inblock-pb.Inblock,CollectorOutputBlockOps:pa.Oublock-pb.Oublock,Collection:streamed}
+   if streamErr!=nil {row.Streaming.Outcome="refused";row.Streaming.Error=streamErr.Error()}
    report.Rows=append(report.Rows,row)
    t.Logf("profile=%s repeat=%d outcome=%s seconds=%.3f children=%d normalized=%d compared=%d child_inblock=%d child_oublock=%d",profile.Name,repeat,row.Outcome,row.CollectionSeconds,measured.ProcessesStarted,measured.NormalizedBytes,measured.ComparedBytes,row.ChildInputBlockOps,row.ChildOutputBlockOps)
    entries,err:=os.ReadDir(scratch);if err!=nil || len(entries)!=0 {t.Fatal("scratch leak",entries,err)}
+   corrStreamAssertJoined(t,streamed)
+   if streamed.ChildrenStarted!=2 || streamed.PipeDescriptorsCreated!=8 {t.Fatal("streaming resource contract",streamed)}
+   if profile.ExpectStreamCeiling {
+    if !errors.Is(streamErr,errCorrStreamLimit) || errors.Is(streamErr,context.DeadlineExceeded) || (streamed.Video.ReferenceBytes<=corrPrototypeStreamLimit && streamed.Video.ActualBytes<=corrPrototypeStreamLimit) {t.Fatal("streaming must refuse actual byte ceiling",streamed,streamErr)}
+   } else if streamErr!=nil || !streamed.Video.Equal || !streamed.Audio.Equal {t.Fatal("streaming content did not match",streamed,streamErr)}
+   if streamed.LogicalInputPassBytes*2!=measured.InputSizePassBudget {t.Fatal("logical-pass accounting drift",streamed,measured)}
+   t.Logf("streaming profile=%s repeat=%d outcome=%s seconds=%.3f children=%d scratch_bytes=%d",profile.Name,repeat,row.Streaming.Outcome,row.Streaming.Seconds,streamed.ChildrenStarted,streamed.NormalizedScratchBytes)
    if measured.ProcessesStarted>4 || measured.PeakScratchDescriptors!=2 {t.Fatal("resource contract",measured)}
    if profile.ExpectStreamCeiling {
     // Require refusal at the first video stream writer's boundary, not an

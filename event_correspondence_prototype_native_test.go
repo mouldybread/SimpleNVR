@@ -2,6 +2,7 @@ package main
 
 import (
  "context"
+ "errors"
  "fmt"
  "os"
  "os/exec"
@@ -71,6 +72,13 @@ func TestCorrPrototypeNativeOrderedContent(t *testing.T) {
    if err!=nil || equal!=want {t.Fatal("content",audio,equal,want,err)}
   }
   if report.ProcessesStarted!=4 {t.Fatal(report)}
-  t.Logf("%s: processes=%d normalized_bytes=%d compared_bytes=%d",name,report.ProcessesStarted,report.NormalizedBytes,report.ComparedBytes)
+  streamed,streamErr:=corrStreamRun(ctx,refs,actual,nil,nil,nil)
+  corrStreamAssertJoined(t,streamed)
+  if streamed.ChildrenStarted!=2 || streamed.PipeDescriptorsCreated!=8 {t.Fatal("streaming resource contract",streamed)}
+  wantMatch:=name=="normal" || name=="timestamp shift"
+  if wantMatch {
+   if streamErr!=nil || !streamed.Video.Equal || !streamed.Audio.Equal {t.Fatal("streaming match",streamed,streamErr)}
+  } else if !errors.Is(streamErr,errCorrStreamMismatch) {t.Fatal("streaming fault not detected",name,streamed,streamErr)}
+  t.Logf("%s: processes=%d normalized_bytes=%d compared_bytes=%d streaming_children=%d streaming_seconds=%.3f",name,report.ProcessesStarted,report.NormalizedBytes,report.ComparedBytes,streamed.ChildrenStarted,streamed.Elapsed.Seconds())
  })}
 }
