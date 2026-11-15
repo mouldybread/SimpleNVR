@@ -59,7 +59,7 @@ func (p *eventPresentationEvidence) check(ctx context.Context,lease *mediaMutati
   if pair.presentation.streamIndex<0 || c.numerator!=pair.span.numerator || c.denominator!=pair.span.denominator || !c.atLeastSeconds(int64(e.requestedSeconds)) {return errEventVideoPresentation}
  }
  // Reuse the two bound observations; never probe selected inputs here.
- if !eventAssemblyPresentationCompatible(p.capture.continuity,p.published.continuity,len(e.execution.selection.inputs)!=0) {return errEventAssemblyPresentation}
+ if !eventAssemblySelectedPrefixCompatible(p.capture.continuity,p.published.continuity,len(e.execution.selection.inputs)) {return errEventAssemblyPresentation}
  // Reject incoherent frozen coarse observations; never promote them to coverage.
  if !e.execution.selection.coarseTimelineCoherent() {return errEventCoarseTimeline}
  capture,err:=eventPresentationDescriptorStat(ctx,lease,e.capture);if err!=nil {return err}

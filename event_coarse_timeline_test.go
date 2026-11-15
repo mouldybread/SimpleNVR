@@ -75,13 +75,14 @@ func TestCoarseTimelineRefusesMissingAndBrokenChains(t *testing.T) {
 }
 
 func TestCoarseTimelineProductionRefusalPreservesPublicationAndProbeBudget(t *testing.T) {
- for _,kind:=range []string{"coherent","missing","CSV gap"} {t.Run(kind,func(t *testing.T){
+ for _,kind:=range []string{"coherent","missing","CSV gap","capture-only output","duration-only extension","frames-only extension","too few extra frames"} {t.Run(kind,func(t *testing.T){
   installEventFailureTools(t,0,false)
   bm,job:=selectionTimingJob(t)
   if kind!="missing" {installSyntheticCoarseTimeline(job.execution.selection)}
   if kind=="CSV gap" {job.execution.selection.inputs[1].segmentClock.mediaBegin++}
   counter:=filepath.Join(t.TempDir(),"coarse-probe-count")
   t.Setenv("COARSE_COUNTER",counter)
+  t.Setenv("COARSE_CASE",kind)
   installEventSpanProbe(t,`case "$*" in
  *duration_ts,time_base*) ;;
  *) printf 'synthetic-codec\n'; exit 0;;
@@ -90,7 +91,19 @@ count=0
 [ ! -f "$COARSE_COUNTER" ] || count=$(cat "$COARSE_COUNTER")
 count=$((count+1))
 printf '%s' "$count" > "$COARSE_COUNTER" || exit 9
-printf '%s' '{"streams":[{"index":0,"codec_type":"video","duration_ts":30000,"time_base":"1/1000"}],"frames":[{"media_type":"video","stream_index":0,"pts":0,"duration":30000}]}'
+ticks=30000
+frames='[{"media_type":"video","stream_index":0,"pts":0,"duration":30000}]'
+if [ "$count" = 2 ]; then
+ ticks=40000
+ frames='[{"media_type":"video","stream_index":0,"pts":0,"duration":5000},{"media_type":"video","stream_index":0,"pts":5000,"duration":5000},{"media_type":"video","stream_index":0,"pts":10000,"duration":30000}]'
+ case "$COARSE_CASE" in
+  'capture-only output') ticks=30000;frames='[{"media_type":"video","stream_index":0,"pts":0,"duration":30000}]';;
+  'duration-only extension') frames='[{"media_type":"video","stream_index":0,"pts":0,"duration":40000}]';;
+  'frames-only extension') ticks=30000;frames='[{"media_type":"video","stream_index":0,"pts":0,"duration":15000},{"media_type":"video","stream_index":0,"pts":15000,"duration":15000}]';;
+  'too few extra frames') frames='[{"media_type":"video","stream_index":0,"pts":0,"duration":20000},{"media_type":"video","stream_index":0,"pts":20000,"duration":20000}]';;
+ esac
+fi
+printf '{"streams":[{"index":0,"codec_type":"video","duration_ts":%s,"time_base":"1/1000"}],"frames":%s}' "$ticks" "$frames"
 `)
   input:=bm.recordEventDuration(job);if input=="" {t.Fatal("clock qualification changed capture")}
   // Qualification must consume frozen pins/observations, not mutable ring state.
@@ -114,7 +127,24 @@ printf '%s' '{"streams":[{"index":0,"codec_type":"video","duration_ts":30000,"ti
     s.inputs[1].segmentClock=saved
    }
    if err:=check.check(context.Background(),borrowed.lease);err!=nil {t.Fatal("restored chain refused",err)}
-  } else if borrowed.duration!=nil || !errors.Is(borrowed.durationErr,errEventCoarseTimeline) {t.Fatal("missing/broken chain qualified",borrowed.durationErr)}
+   presentation:=borrowed.duration.presentation;original:=presentation.published.continuity
+   for _,afterIO:=range []bool{false,true} {
+    shorten:=func(){presentation.published.continuity.frames=presentation.capture.continuity.frames+len(s.inputs)-1}
+    if !afterIO {shorten()}
+    calls:=0
+    err:=check.checkWithOutput(context.Background(),borrowed.lease,func(ctx context.Context,lease *mediaMutationLease)error{
+     calls++;if afterIO {shorten()};return check.output.check(ctx,lease)
+    })
+    want:=0;if afterIO {want=1}
+    if !errors.Is(err,errEventAssemblyPresentation) || calls!=want {t.Fatal("insufficient prefix budget survived revalidation",err,calls)}
+    presentation.published.continuity=original
+   }
+   if err:=check.check(context.Background(),borrowed.lease);err!=nil {t.Fatal("restored prefix observations refused",err)}
+  } else {
+   wantErr:=errEventAssemblyPresentation
+   if kind=="missing" || kind=="CSV gap" {wantErr=errEventCoarseTimeline}
+   if borrowed.duration!=nil || !errors.Is(borrowed.durationErr,wantErr) {t.Fatal("missing/broken chain or prefix qualified",borrowed.durationErr,wantErr)}
+  }
   before:=readRecoveryTest(t,job.dir)
   if before.State!="published" || before.Coverage==nil || before.Coverage.Complete || before.Coverage.Status!="unknown" || durationIntegrationCount(t,counter)!=2 {t.Fatal("publication, coverage uncertainty or two-probe budget changed")}
   lease:=borrowed.lease;inventory:=job.inventory

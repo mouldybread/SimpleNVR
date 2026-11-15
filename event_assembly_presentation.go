@@ -14,8 +14,8 @@ var errEventAssemblyPresentation=errors.New("assembled video presentation incons
 //
 // No prebuffer: assembly only remuxes event.mp4, so video frame count and exact
 // continuous presentation length must agree. Origin/timebase rebasing is allowed.
-// With prebuffer: output must at least contain the captured component's count
-// and length. These lower bounds do NOT prove that every selected prefix was
+// With prebuffer: output must have MORE frames and a LONGER presentation span.
+// These necessary bounds do NOT prove that every selected prefix was
 // included, that content matches, or that the requested NVR interval is covered.
 func eventAssemblyPresentationCompatible(capture, published eventVideoContinuity, hasPrebuffer bool) bool {
  for _,s:=range []eventVideoContinuity{capture,published} {
@@ -31,5 +31,16 @@ func eventAssemblyPresentationCompatible(capture, published eventVideoContinuity
  right.Mul(right,big.NewInt(published.denominator))
  order:=left.Cmp(right)
  if !hasPrebuffer {return published.frames==capture.frames && order==0}
- return published.frames>=capture.frames && order>=0
+ return published.frames>capture.frames && order>0
+}
+
+// Production additionally binds the minimum extra-frame budget to the number of
+// frozen selected inputs. Each usable selected video clip must contribute at
+// least one frame; aggregate counts cannot identify WHICH clip supplied a frame.
+// This is a necessary refusal bound, not per-input correspondence or coverage.
+func eventAssemblySelectedPrefixCompatible(capture,published eventVideoContinuity,selectedInputs int) bool {
+ if selectedInputs<0 || selectedInputs>maxRecoveryInputs || !eventAssemblyPresentationCompatible(capture,published,selectedInputs!=0) {return false}
+ // Both observed counts have already passed their existing positive bounded
+ // validation; subtraction cannot overflow and cannot invent a contribution.
+ return selectedInputs==0 || published.frames-capture.frames>=selectedInputs
 }

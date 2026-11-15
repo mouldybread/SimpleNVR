@@ -20,8 +20,8 @@ func TestAssemblyPresentationComparesCaptureNotOnlyRequestedDuration(t *testing.
  longer:=capture;longer.end+=1000;longer.frames++
  if eventAssemblyPresentationCompatible(capture,longer,false) {t.Fatal("unexplained no-prefix extension accepted")}
  if !eventAssemblyPresentationCompatible(capture,longer,true) {t.Fatal("prefix extension refused")}
- // Equality with a prefix is only a lower-bound result, never prefix proof.
- if !eventAssemblyPresentationCompatible(capture,capture,true) {t.Fatal("necessary lower bound changed meaning")}
+ // A selected prefix must not qualify a capture-only final recording.
+ if eventAssemblyPresentationCompatible(capture,capture,true) {t.Fatal("capture-only final accepted with selected prefix")}
 }
 
 func TestAssemblyPresentationAllowsExactRebaseAndDifferentTimebases(t *testing.T) {
@@ -111,4 +111,41 @@ printf '{"streams":[{"index":0,"codec_type":"video","duration_ts":%s,"time_base"
  bm.releaseJob(job)
  if !job.keepStaging || job.inventory!=nil || job.recoveryBorrow!=nil || len(bm.slots)!=0 || lease.held() || durationIntegrationCount(t,counter)!=2 {t.Fatal("terminal teardown retried probes or leaked ownership")}
  assertPublicationBytes(t,input,"synthetic output");assertPublicationBytes(t,final,"synthetic output")
+}
+
+func TestAssemblySelectedPrefixRequiresMinimumExtraFrameBudget(t *testing.T) {
+ capture:=eventVideoContinuity{first:0,end:30000,numerator:1,denominator:1000,frames:300}
+ for _,tc:=range []struct{name string;inputs,extra int;longer,want bool}{
+  {"no prefix exact remux",0,0,false,true},
+  {"no prefix extension",0,1,true,false},
+  {"capture only with prefix",2,0,false,false},
+  {"duration extension only",2,0,true,false},
+  {"frames extension only",2,2,false,false},
+  {"one extra frame for two inputs",2,1,true,false},
+  {"two extra frames for two inputs",2,2,true,true},
+  {"single input",1,1,true,true},
+  {"negative input budget",-1,2,true,false},
+  {"input budget limit",maxRecoveryInputs,maxRecoveryInputs,true,true},
+  {"over input budget limit",maxRecoveryInputs+1,maxRecoveryInputs+1,true,false},
+ } {t.Run(tc.name,func(t *testing.T){
+  output:=capture;output.frames+=tc.extra;if tc.longer {output.end++}
+  if got:=eventAssemblySelectedPrefixCompatible(capture,output,tc.inputs);got!=tc.want {t.Fatal(got,tc.want)}
+  if tc.name=="one extra frame for two inputs" && !eventAssemblyPresentationCompatible(capture,output,true) {t.Fatal("fixture must pass count-agnostic prefix check")}
+ })}
+}
+
+func TestAssemblySelectedPrefixPreservesExactRebasingAndBounds(t *testing.T) {
+ capture:=eventVideoContinuity{first:-1000,end:29000,numerator:1,denominator:1000,frames:300}
+ output:=eventVideoContinuity{first:900000,end:4500000,numerator:1,denominator:90000,frames:302}
+ if !eventAssemblySelectedPrefixCompatible(capture,output,2) {t.Fatal("longer rebased/timebase-converted prefix refused")}
+ capture=eventVideoContinuity{first:0,end:1,numerator:1,denominator:math.MaxInt64,frames:1}
+ output=eventVideoContinuity{first:0,end:1,numerator:1,denominator:math.MaxInt64-1,frames:3}
+ if !eventAssemblySelectedPrefixCompatible(capture,output,2) {t.Fatal("positive fractional extension rounded away")}
+ output.denominator=capture.denominator
+ if eventAssemblySelectedPrefixCompatible(capture,output,2) {t.Fatal("equal fractional span accepted")}
+ capture=eventVideoContinuity{first:0,end:30,numerator:1,denominator:1,frames:maxEventVideoContinuityFrames}
+ output=capture;output.end++
+ if eventAssemblySelectedPrefixCompatible(capture,output,1) {t.Fatal("frame ceiling invented spare prefix capacity")}
+ output.frames++
+ if eventAssemblySelectedPrefixCompatible(capture,output,1) {t.Fatal("over-ceiling output accepted")}
 }
