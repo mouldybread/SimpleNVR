@@ -190,6 +190,21 @@ jobs:
           "$RUNNER_TEMP/correspondence-resource.test" -test.v -test.run '^TestCorrResource' -test.timeout=420s 2>&1 | tee "$RUNNER_TEMP/correspondence-resources/tests.log"
           test -s "$SIMPLENVR_CORRESPONDENCE_REPORT"
           git diff --exit-code -- go.mod go.sum
+      - name: Evidence assessment regression tests
+        if: always()
+        run: python3 -m unittest discover -s tests -p 'test_correspondence_assessment.py' -v
+      - name: Assess full adapter and native prebuffer evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/correspondence_assessment.py "$RUNNER_TEMP/correspondence-resources" \
+            --expected-head "$GITHUB_SHA" \
+            --output "$RUNNER_TEMP/correspondence-resources/assessment.json" \
+            --summary "$RUNNER_TEMP/correspondence-resources/assessment.md"
+      - name: Publish evidence assessment summary
+        if: always()
+        run: cat "$RUNNER_TEMP/correspondence-resources/assessment.md" >> "$GITHUB_STEP_SUMMARY"
       - name: Retain resource evidence even on failure
         if: always()
         uses: actions/upload-artifact@v4
