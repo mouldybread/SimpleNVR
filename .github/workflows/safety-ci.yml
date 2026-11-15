@@ -140,19 +140,80 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  correspondence_resources:
+    name: Ordered content — bounded synthetic resource measurements
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      GOFLAGS: -mod=readonly
+      SIMPLENVR_CORRESPONDENCE_RESOURCE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare evidence directory
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/correspondence-resources"
+          printf 'SIMPLENVR_CORRESPONDENCE_REPORT=%s/correspondence-resources/measurements.json\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: false
+      - name: Install stock media tools
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o APT::Update::Error-Mode=any update
+          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y --no-install-recommends ffmpeg
+      - name: Record runner context
+        run: |
+          set -euo pipefail
+          {
+            printf 'head=%s run_attempt=%s\n' "$GITHUB_SHA" "$GITHUB_RUN_ATTEMPT"
+            uname -a
+            go version
+            ffmpeg -version
+            df -T "$RUNNER_TEMP"
+          } > "$RUNNER_TEMP/correspondence-resources/environment.txt"
+      - name: Compile the exact checkout test binary without race instrumentation
+        timeout-minutes: 8
+        run: |
+          set -euo pipefail
+          go mod download
+          go mod verify
+          git diff --exit-code -- go.mod go.sum
+          go test -c -o "$RUNNER_TEMP/correspondence-resource.test" .
+      - name: Measure longer generated recordings and existing ceiling refusal
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/correspondence-resource.test" -test.v -test.run '^TestCorrResource' -test.timeout=420s 2>&1 | tee "$RUNNER_TEMP/correspondence-resources/tests.log"
+          test -s "$SIMPLENVR_CORRESPONDENCE_REPORT"
+          git diff --exit-code -- go.mod go.sum
+      - name: Retain resource evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: correspondence-resources-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/correspondence-resources
+          if-no-files-found: error
+          retention-days: 14
+
   verify:
     name: Required checks — all must pass
     if: always()
-    needs: [core, browser]
+    needs: [core, browser, correspondence_resources]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
-      - name: Require core checks and both browser attempts
+      - name: Require core, both browser attempts and resource measurements
         env:
           CORE_RESULT: ${{ needs.core.result }}
           BROWSER_RESULT: ${{ needs.browser.result }}
+          RESOURCE_RESULT: ${{ needs.correspondence_resources.result }}
         run: |
           set -euo pipefail
-          printf 'core=%s browser=%s\n' "$CORE_RESULT" "$BROWSER_RESULT"
+          printf 'core=%s browser=%s resources=%s\n' "$CORE_RESULT" "$BROWSER_RESULT" "$RESOURCE_RESULT"
           test "$CORE_RESULT" = success
           test "$BROWSER_RESULT" = success
+          test "$RESOURCE_RESULT" = success
