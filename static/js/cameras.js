@@ -440,6 +440,57 @@ function removeAllCameras() {
 }
 
 
+// Interpret only the current server schema; never invent missing deletion totals.
+function orphanCleanupOutcome(data) {
+    const counter = value => Number.isSafeInteger(value) && value >= 0;
+    if (!data || Array.isArray(data) || typeof data !== 'object' ||
+        typeof data.success !== 'boolean' || !counter(data.count) ||
+        !counter(data.failures) || !counter(data.skipped_recovery_dirs) ||
+        typeof data.interrupted !== 'boolean' || typeof data.limit_reached !== 'boolean' ||
+        !Number.isFinite(data.size_mb) || data.size_mb < 0) {
+        throw new Error('Invalid cleanup response');
+    }
+    const complete = data.success && data.failures === 0 &&
+        !data.interrupted && !data.limit_reached;
+    const preserved = data.skipped_recovery_dirs > 0;
+    const reasons = [];
+    if (data.failures) reasons.push(`${data.failures} failure(s)`);
+    if (data.interrupted) reasons.push('interrupted');
+    if (data.limit_reached) reasons.push('inspection limit reached');
+    if (!data.success && reasons.length === 0) reasons.push('server reported an unsuccessful pass');
+    let message = `Server reported ${data.count} orphaned file(s) deleted (${data.size_mb.toFixed(2)} MB). `;
+    message += `${data.skipped_recovery_dirs} recovery/inspection-sensitive directory(s) preserved.`;
+    if (!complete) message += ` Cleanup incomplete: ${reasons.join('; ')}. Remaining files may still exist.`;
+    return {
+        title: !complete ? 'Cleanup incomplete' :
+            (preserved ? 'Cleanup finished with preserved directories' : 'Cleanup pass complete'),
+        level: complete && !preserved ? 'success' : 'warning',
+        message
+    };
+}
+
+function renderOrphanCleanupOutcome(outcome) {
+    const color = outcome.level === 'success' ? '#4CAF50' :
+        (outcome.level === 'warning' ? '#ffb300' : '#f44336');
+    for (const prefix of ['', 'modal-']) {
+        const panel = document.getElementById(prefix + 'cleanup-results');
+        const text = document.getElementById(prefix + 'cleanup-results-text');
+        if (panel && text) {
+            const heading = panel.querySelector('h4');
+            if (heading) {
+                heading.textContent = outcome.title;
+                heading.style.color = color;
+            }
+            text.textContent = outcome.message;
+            panel.style.borderLeftColor = color;
+            panel.style.display = 'block';
+        }
+    }
+    if (outcome.level === 'success') showSuccess(outcome.message);
+    else if (outcome.level === 'warning') showWarning(outcome.message);
+    else showError(outcome.message);
+}
+
 // Cleanup orphaned recordings from deleted cameras
 function cleanupOrphanedRecordings() {
     if (!orphanedCleanupConfirmed) {
@@ -447,7 +498,7 @@ function cleanupOrphanedRecordings() {
         btn.textContent = 'Click Again to Confirm';
         btn.classList.add('confirm');
         orphanedCleanupConfirmed = true;
-        
+
         clearTimeout(orphanedCleanupTimer);
         orphanedCleanupTimer = setTimeout(() => {
             btn.textContent = 'Cleanup Orphaned Recordings';
@@ -456,58 +507,41 @@ function cleanupOrphanedRecordings() {
         }, 3000);
         return;
     }
-    
+
     const btn = event.target;
-    const resultsDiv = document.getElementById('cleanup-results');
-    const resultsText = document.getElementById('cleanup-results-text');
-    const modalResultsDiv = document.getElementById('modal-cleanup-results');
-    const modalResultsText = document.getElementById('modal-cleanup-results-text');
-    
+
     clearTimeout(orphanedCleanupTimer);
     orphanedCleanupConfirmed = false;
     btn.textContent = 'Cleanup Orphaned Recordings';
     btn.classList.remove('confirm');
     btn.disabled = true;
     btn.textContent = 'Cleaning up...';
-    
-    if (resultsDiv) {
-        resultsDiv.style.display = 'none';
+
+    for (const prefix of ['', 'modal-']) {
+        const panel = document.getElementById(prefix + 'cleanup-results');
+        if (panel) panel.style.display = 'none';
     }
-    if (modalResultsDiv) {
-        modalResultsDiv.style.display = 'none';
-    }
-    
-    fetch('/api/recordings/cleanup-orphaned', {
+    let responseStatus = null;
+    return fetch('/api/recordings/cleanup-orphaned', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
     })
     .then(response => {
-        if (!response.ok) {
-            throw new Error('Failed to cleanup orphaned recordings');
-        }
+        responseStatus = response.status;
+        if (!response.ok) throw new Error('Cleanup HTTP response was unsuccessful');
         return response.json();
     })
-    .then(data => {
-        btn.disabled = false;
-        btn.textContent = 'Cleanup Orphaned Recordings';
-        
-        const sizeMB = data.size_mb.toFixed(2);
-        const message = `Deleted ${data.files_deleted} orphaned file(s), freed ${sizeMB} MB`;
-        
-        if (resultsDiv && resultsText) {
-            resultsText.innerHTML = `Deleted <strong>${data.files_deleted}</strong> orphaned file(s), freed <strong>${sizeMB} MB</strong>`;
-            resultsDiv.style.display = 'block';
-        }
-        if (modalResultsDiv && modalResultsText) {
-            modalResultsText.innerHTML = `Deleted <strong>${data.files_deleted}</strong> orphaned file(s), freed <strong>${sizeMB} MB</strong>`;
-            modalResultsDiv.style.display = 'block';
-        }
-        
-        showSuccess(message);
-    })
+    .then(data => renderOrphanCleanupOutcome(orphanCleanupOutcome(data)))
     .catch(error => {
-        console.error('Error cleaning up orphaned recordings:', error);
-        showError('Failed to cleanup orphaned recordings: ' + error.message);
+        console.error('Unable to verify orphan cleanup result:', error);
+        const status = Number.isInteger(responseStatus) ? ` (HTTP ${responseStatus})` : '';
+        renderOrphanCleanupOutcome({
+            title: 'Cleanup outcome not verified',
+            level: 'error',
+            message: `Cleanup outcome could not be verified${status}. Files may have been removed; no deletion totals are confirmed. Review server state before another attempt. No automatic retry was made.`
+        });
+    })
+    .finally(() => {
         btn.disabled = false;
         btn.textContent = 'Cleanup Orphaned Recordings';
     });
