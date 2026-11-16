@@ -156,15 +156,16 @@ func TestCameraDeletionPersistenceFailuresFailClosed(t *testing.T) {
  })}
 }
 
-func TestCameraDeletionBulkPersistsEachOutcomeAndKeepsOrder(t *testing.T) {
+func TestCameraDeletionBulkStopsOnRemovalFailureAndKeepsOrder(t *testing.T) {
  n,_:=lifecycleFixture(ModeContinuous);n.cameras=map[string]*Camera{}
  for _,id:=range []string{"a","b","c"} {n.cameras[id]=&Camera{ID:id,RecordDir:id,IsRecording:true}}
  n.cameraOrder=[]string{"c","a","b"};saves:=0;var durable persistedState;var removed []string
  deps:=deletionDeps(n,func() error {saves++;durable=deletionSnapshot(n);return nil},func(_ context.Context,dir string,_ func() error) error {removed=append(removed,dir);if dir=="b" {return errCameraDeleteBlocked};return nil})
  err:=deleteManagedCameras(context.Background(),n,nil,deps)
- if !errors.Is(err,errCameraDeleteBlocked) || saves!=5 || strings.Join(removed,",")!="a,b,c" {t.Fatal("bulk outcome hidden",err,saves,removed)}
- if len(n.cameras)!=1 || n.cameras["b"]==nil || n.cameras["b"].IsRecording || strings.Join(n.cameraOrder,",")!="b" {t.Fatal("registry/order mismatch")}
- if len(durable.Cameras)!=1 || durable.Cameras["b"].IsRecording || strings.Join(durable.CameraOrder,",")!="b" {t.Fatal("partial outcome not saved")}
+ if !errors.Is(err,errCameraDeleteBlocked) || saves!=3 || strings.Join(removed,",")!="a,b" {t.Fatal("bulk did not stop at removal failure",err,saves,removed)}
+ if len(n.cameras)!=2 || n.cameras["a"]!=nil || n.cameras["b"]==nil || n.cameras["b"].IsRecording || n.cameras["c"]==nil || !n.cameras["c"].IsRecording || strings.Join(n.cameraOrder,",")!="c,b" {t.Fatal("registry/order mismatch after fail-stop")}
+ if len(durable.Cameras)!=2 || durable.Cameras["a"]!=nil || durable.Cameras["b"]==nil || durable.Cameras["b"].IsRecording || durable.Cameras["c"]==nil || !durable.Cameras["c"].IsRecording || strings.Join(durable.CameraOrder,",")!="c,b" {t.Fatal("fail-stop partial outcome not saved")}
+ if len(recordingMediaOwnership.token)!=0 {t.Fatal("fail-stop leaked media ownership")}
 }
 
 func TestCameraDeletionJoinCancellationShutdownAndRegistryAvailability(t *testing.T) {
