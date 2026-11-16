@@ -97,7 +97,10 @@ func (n *NVR) loadAt(path string) error {
  defer persistenceMu.Unlock()
  raw, err := os.ReadFile(path)
  if os.IsNotExist(err) {
-  if _, backupErr := os.Stat(path+".bak"); backupErr == nil { return fmt.Errorf("configuration missing but backup exists at %s.bak; restore explicitly", path) } else if !os.IsNotExist(backupErr) { return backupErr }
+  // ReadFile follows symlinks: ENOENT does not prove the config entry is absent.
+  if _, entryErr := os.Lstat(path); entryErr == nil { return fmt.Errorf("configuration entry exists but cannot be read at %s; restore explicitly", path) } else if !os.IsNotExist(entryErr) { return entryErr }
+  // Even a dangling backup symlink is existing recovery evidence, not absence.
+  if _, backupErr := os.Lstat(path+".bak"); backupErr == nil { return fmt.Errorf("configuration missing but backup exists at %s.bak; restore explicitly", path) } else if !os.IsNotExist(backupErr) { return backupErr }
   return nil
  }
  if err != nil { return err }
