@@ -77,7 +77,9 @@ func deleteManagedCameras(ctx context.Context,n *NVR,selection []string,deps cam
    // State may have changed while admission was blocked.
    if err:=guard();err!=nil {return err,true}
    // The callback borrows ownership; it must not reacquire or release it.
-   if err:=deps.remove(ctx,item.dir,guard);err!=nil {return err,false}
+   // Removal errors can follow partial unlinking or a failed directory sync.
+   // Do not advance to another camera after an uncertain destructive outcome.
+   if err:=deps.remove(ctx,item.dir,guard);err!=nil {return err,true}
    if err:=guard();err!=nil {return err,true}
    n.mu.Lock()
    if n.cameras[item.id]!=item.cam || item.cam.ID!=item.id || item.cam.RecordDir!=item.dir {n.mu.Unlock();return errRecordingStateChanged,true}
