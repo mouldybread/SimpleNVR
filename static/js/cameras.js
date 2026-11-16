@@ -10,6 +10,10 @@ let orphanedCleanupDeadline = 0;
 let orphanedCleanupVersion = 0;
 let deleteCamerasCode = '';
 let deleteCamerasConfirmCount = 0;
+let deleteCamerasPending = false;
+let deleteCamerasVersion = 0;
+let deleteCamerasTimer = null;
+let deleteCamerasDeadline = 0;
 
 // Load cameras on page load
 document.addEventListener('DOMContentLoaded', () => {
@@ -121,29 +125,9 @@ function setupForms() {
 // Setup delete all cameras modal
 function setupDeleteCamerasModal() {
     const input = document.getElementById('delete-cameras-code-input');
-    if (input) {
-        input.oninput = () => {
-            const btn = document.getElementById('delete-cameras-btn');
-            if (input.value === deleteCamerasCode) {
-                btn.disabled = false;
-                btn.textContent = 'Click to Confirm';
-                btn.classList.remove('confirm');
-                deleteCamerasConfirmCount = 0;
-            } else {
-                btn.disabled = true;
-                btn.textContent = 'Delete All Cameras';
-            }
-        };
-    }
-    
+    if (input) input.oninput = updateCameraRemovalInput;
     const modal = document.getElementById('delete-cameras-modal');
-    if (modal) {
-        modal.onclick = (e) => {
-            if (e.target === modal) {
-                closeDeleteAllCamerasModal();
-            }
-        };
-    }
+    if (modal) modal.onclick = e => { if (e.target === modal) closeDeleteAllCamerasModal(); };
 }
 
 function updateRetention(cameraId) {
@@ -353,96 +337,119 @@ function clearCameraEvents(cameraName) {
     });
 }
 
-// Open delete all cameras modal
-function openDeleteAllCamerasModal() {
-    deleteCamerasCode = Math.floor(1000 + Math.random() * 9000).toString();
-    document.getElementById('delete-cameras-code').textContent = deleteCamerasCode;
-    document.getElementById('delete-cameras-code-input').value = '';
-    document.getElementById('delete-cameras-btn').disabled = true;
+// Bulk camera removal: UI confirmation is consumed per request, not deletion authority.
+function disarmCameraRemoval() {
+    deleteCamerasVersion++;
+    if (deleteCamerasTimer !== null) clearTimeout(deleteCamerasTimer);
+    deleteCamerasTimer = null;
+    deleteCamerasDeadline = 0;
     deleteCamerasConfirmCount = 0;
-    
+}
+function resetCameraRemovalConfirmation() {
+    disarmCameraRemoval();
+    deleteCamerasCode = '';
+    const input = document.getElementById('delete-cameras-code-input');
+    if (input) { input.value = ''; input.disabled = deleteCamerasPending; }
+    const code = document.getElementById('delete-cameras-code');
+    if (code) code.textContent = 'Reopen this dialog to confirm another attempt';
+    const btn = document.getElementById('delete-cameras-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Delete All Cameras'; btn.classList.remove('confirm'); }
+}
+function cameraRemovalCodeValid() {
     const modal = document.getElementById('delete-cameras-modal');
-    modal.classList.add('active');
-    modal.style.display = 'block';
-    
+    const input = document.getElementById('delete-cameras-code-input');
+    const code = document.getElementById('delete-cameras-code');
+    return !deleteCamerasPending && /^[0-9]{4}$/.test(deleteCamerasCode) &&
+        modal?.classList.contains('active') && input?.value === deleteCamerasCode &&
+        code?.textContent === deleteCamerasCode && !!document.getElementById('delete-cameras-btn');
+}
+function updateCameraRemovalInput() {
+    disarmCameraRemoval();
+    const btn = document.getElementById('delete-cameras-btn');
+    if (!btn) return;
+    const valid = cameraRemovalCodeValid();
+    btn.disabled = !valid;
+    btn.textContent = deleteCamerasPending ? 'Deleting...' : (valid ? 'Click to Confirm' : 'Delete All Cameras');
+    btn.classList.remove('confirm');
+}
+function openDeleteAllCamerasModal() {
+    if (deleteCamerasPending) {
+        showWarning('A camera-removal request is still pending. No additional request was started.');
+        return;
+    }
+    resetCameraRemovalConfirmation();
+    const modal = document.getElementById('delete-cameras-modal');
+    const input = document.getElementById('delete-cameras-code-input');
+    const code = document.getElementById('delete-cameras-code');
+    if (!modal || !input || !code || !document.getElementById('delete-cameras-btn')) return;
+    deleteCamerasCode = Math.floor(1000 + Math.random() * 9000).toString();
+    code.textContent = deleteCamerasCode;
+    modal.classList.add('active'); modal.style.display = 'block';
+    const version = deleteCamerasVersion;
     setTimeout(() => {
-        document.getElementById('delete-cameras-code-input').focus();
+        if (version === deleteCamerasVersion && !deleteCamerasPending && modal.classList.contains('active')) input.focus();
     }, 100);
 }
-
-// Close delete all cameras modal
 function closeDeleteAllCamerasModal() {
     const modal = document.getElementById('delete-cameras-modal');
-    modal.classList.remove('active');
-    modal.style.display = 'none';
-    deleteCamerasCode = '';
-    deleteCamerasConfirmCount = 0;
-    
-    const btn = document.getElementById('delete-cameras-btn');
-    btn.textContent = 'Delete All Cameras';
-    btn.classList.remove('confirm');
-    btn.disabled = true;
+    if (modal) { modal.classList.remove('active'); modal.style.display = 'none'; }
+    resetCameraRemovalConfirmation();
 }
-
-// Delete all cameras with modal confirmation
-function removeAllCameras() {
+function cameraRemovalRefreshWarning(error) {
+    console.error('Camera-removal response received, but UI refresh failed:', error);
+    showWarning('Camera-removal response received, but the display could not refresh. Reload to review current cameras; no deletion totals were provided.');
+}
+async function removeAllCameras() {
+    if (deleteCamerasPending) return;
+    if (!cameraRemovalCodeValid()) { updateCameraRemovalInput(); return; }
     const btn = document.getElementById('delete-cameras-btn');
-    
-    if (deleteCamerasConfirmCount === 0) {
-        btn.textContent = 'Click Again to Confirm';
-        btn.classList.add('confirm');
+    if (deleteCamerasConfirmCount !== 1 || Date.now() >= deleteCamerasDeadline) {
+        disarmCameraRemoval();
         deleteCamerasConfirmCount = 1;
-        
-        setTimeout(() => {
-            if (deleteCamerasConfirmCount === 1) {
-                btn.textContent = 'Click to Confirm';
-                btn.classList.remove('confirm');
-                deleteCamerasConfirmCount = 0;
-            }
+        deleteCamerasDeadline = Date.now() + 3000;
+        const version = deleteCamerasVersion;
+        btn.disabled = false; btn.textContent = 'Click Again to Confirm'; btn.classList.add('confirm');
+        deleteCamerasTimer = setTimeout(() => {
+            if (version === deleteCamerasVersion && !deleteCamerasPending) updateCameraRemovalInput();
         }, 3000);
         return;
     }
-    
-    btn.disabled = true;
+    deleteCamerasPending = true;
+    resetCameraRemovalConfirmation();
     btn.textContent = 'Deleting...';
-    
-    fetch('/api/cameras/delete-all', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-    })
-    .then(response => {
-        if (!response.ok) throw new Error('Failed to remove all cameras');
-        return response.text();
-    })
-    .then(html => {
-        document.getElementById('camera-list').innerHTML = html;
+    let responseStatus = null, responseReceived = false;
+    try {
+        const response = await fetch('/api/cameras/delete-all', {
+            method: 'POST', headers: {'Content-Type':'application/json'}, redirect: 'error'
+        });
+        responseStatus = response.status;
+        if (!response.ok || response.status !== 200 || response.redirected) throw new Error('Unexpected camera-removal response');
+        const contentType = (response.headers.get('Content-Type') || '').split(';')[0].trim().toLowerCase();
+        if (contentType !== 'text/html') throw new Error('Expected camera-list HTML');
+        const html = await response.text();
+        if (typeof html !== 'string' || !html.trim() || /<(?:!doctype|html|head|body)\b/i.test(html)) throw new Error('Expected a camera-list fragment');
+        responseReceived = true;
+        const mainList = document.getElementById('camera-list');
         const modalList = document.getElementById('modal-camera-list');
-        if (modalList) {
-            modalList.innerHTML = html;
-        }
-        if (typeof updateSectionHeight === 'function') {
-            updateSectionHeight('cameras-content');
-        }
-        
-        // Reload timeline camera selector
-        if (typeof loadTimelineCameras === 'function') {
-            loadTimelineCameras();
-        }
-        
-        showSuccess('Successfully deleted all cameras');
+        if (!mainList && !modalList) throw new Error('Camera list display unavailable');
+        if (mainList) mainList.innerHTML = html;
+        if (modalList) modalList.innerHTML = html;
+        showInfo('Server returned a camera list after the removal request. Review the refreshed list; media deletion totals were not provided.');
         closeDeleteAllCamerasModal();
-    })
-    .catch(error => {
-        console.error('Error removing all cameras:', error);
-        showError('Failed to remove all cameras: ' + error.message);
-    })
-    .finally(() => {
-        btn.disabled = false;
-        btn.textContent = 'Delete All Cameras';
-        btn.classList.remove('confirm');
-    });
+        if (typeof updateSectionHeight === 'function') updateSectionHeight('cameras-content');
+        if (typeof loadTimelineCameras === 'function') Promise.resolve(loadTimelineCameras()).catch(cameraRemovalRefreshWarning);
+    } catch (error) {
+        if (responseReceived) cameraRemovalRefreshWarning(error);
+        else {
+            console.error('Unable to verify camera-removal outcome:', error);
+            const status = Number.isInteger(responseStatus) ? ` (HTTP ${responseStatus})` : '';
+            showError(`Camera-removal outcome could not be verified${status}. Cameras may have been stopped or removed and files may have been deleted; no removal totals are confirmed. Review server state before reopening this dialog for fresh confirmation. No automatic retry was made.`);
+        }
+    } finally {
+        deleteCamerasPending = false;
+        resetCameraRemovalConfirmation();
+    }
 }
-
 
 // Interpret only the current server schema; never invent missing deletion totals.
 function orphanCleanupOutcome(data) {
@@ -680,29 +687,21 @@ function saveNewOrder() {
     })
     .then(response => {
         if (!response.ok) throw new Error('Failed to save order');
-        
-        // Refresh the camera list to get updated HTML
         return fetch('/api/cameras');
     })
     .then(response => response.text())
     .then(html => {
-        // Update both lists
         const mainList = document.getElementById('camera-list');
         if (mainList) {
             mainList.innerHTML = html;
         }
-        
         const modalList = document.getElementById('modal-camera-list');
         if (modalList) {
             modalList.innerHTML = html;
         }
-        
-        // CRITICAL: Re-initialize drag and drop after HTML update
         setTimeout(() => {
             initializeDragAndDrop();
         }, 50);
-        
-        // Refresh timeline camera selector
         if (typeof loadTimelineCameras === 'function') {
             loadTimelineCameras();
         }
