@@ -40,8 +40,19 @@ jobs:
           git diff --exit-code -- go.mod go.sum
       - name: Build
         run: go build ./...
+      - name: Core evidence assessor regression tests
+        run: python3 -m unittest discover -s tests -p 'test_core_ci_evidence.py' -v
       - name: Race-enabled tests including media and shutdown lifecycle
-        run: go test -race -count=1 -timeout=120s ./...
+        shell: bash
+        run: bash tests/core-ci-evidence.sh "$RUNNER_TEMP/simplenvr-core-evidence"
+      - name: Retain core test execution evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-test-execution-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/simplenvr-core-evidence
+          if-no-files-found: error
+          retention-days: 14
       - name: Static analysis
         if: always()
         run: go vet ./...
