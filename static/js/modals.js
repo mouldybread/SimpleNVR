@@ -4,6 +4,14 @@
 let currentVideo = null;
 
 function viewLiveStream(cameraName) {
+    let streamPath;
+    try {
+        if (typeof cameraName !== 'string' || cameraName.length === 0 || cameraName === '.' || cameraName === '..') throw new Error('Unsupported camera name');
+        streamPath = '/api/stream/' + encodeURIComponent(cameraName);
+    } catch (_) {
+        showError('Camera name cannot be used for live playback; review the camera configuration.');
+        return;
+    }
     let modal = document.getElementById('liveModal');
     
     // Create modal if it doesn't exist
@@ -25,7 +33,7 @@ function viewLiveStream(cameraName) {
     container.innerHTML = '<video id="liveVideo" controls autoplay muted style="width: 100%; max-height: 70vh;"></video>';
     
     currentVideo = document.getElementById('liveVideo');
-    currentVideo.src = '/api/stream/' + cameraName;
+    currentVideo.src = streamPath;
 }
 
 function createLiveModal() {
