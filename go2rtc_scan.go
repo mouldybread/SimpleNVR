@@ -9,8 +9,6 @@ import (
  "net"
  "net/http"
  "net/url"
- "os"
- "path/filepath"
  "sort"
  "strings"
  "time"
@@ -103,7 +101,7 @@ func serveGo2rtcScan(w http.ResponseWriter,r *http.Request,client *http.Client,b
  if err!=nil {
   status,message:=502,"go2rtc scan failed"
   var failure *scanFailure
-  if errors.As(err,&failure) {status,message=failure.status,failure.message} else if errors.Is(err,errRecorderShuttingDown) {status,message=503,"Server shutting down"} else if errors.Is(err,context.Canceled) {status,message=408,"Scan request canceled"} else {
+  if errors.Is(err,errCameraRegistrationPersistence) {status,message=500,"Camera registration changed but could not be persisted"} else if errors.As(err,&failure) {status,message=failure.status,failure.message} else if errors.Is(err,errCameraRegistration) {status,message=500,"Unable to create camera registration"} else if errors.Is(err,errRecordingStateChanged) {status,message=409,"Camera registry changed; retry"} else if errors.Is(err,errRecorderShuttingDown) {status,message=503,"Server shutting down"} else if errors.Is(err,context.Canceled) {status,message=408,"Scan request canceled"} else {
    var timeout net.Error
    if errors.Is(err,context.DeadlineExceeded) || (errors.As(err,&timeout) && timeout.Timeout()) {status,message=504,"go2rtc scan timed out"}
   }
@@ -113,31 +111,12 @@ func serveGo2rtcScan(w http.ResponseWriter,r *http.Request,client *http.Client,b
 }
 
 func (n *NVR) applyScanStreams(ctx context.Context,streams []scannedStream) error {
- recordingControlMu.Lock();defer recordingControlMu.Unlock()
- n.mu.Lock();defer n.mu.Unlock()
- if n.shuttingDown.Load() {return errRecorderShuttingDown}
- if err:=ctx.Err();err!=nil {return err}
- existing:=make(map[string]bool,len(n.cameras))
- for _,cam:=range n.cameras {existing[cam.RTSPUrl]=true}
- pending:=make([]*Camera,0,len(streams))
- committed:=false
- defer func(){if !committed {for _,cam:=range pending {os.Remove(cam.RecordDir)}}}()
- now:=time.Now().UTC()
- for _,stream:=range streams {
-  if existing[stream.RTSPURL] {continue}
-  if err:=ctx.Err();err!=nil {return err}
-  id:=generateID(stream.Name,now);dir:=filepath.Join("/recordings",id)
-  if err:=os.Mkdir(dir,0755);err!=nil {return &scanFailure{500,"Unable to create recording directory"}}
-  pending=append(pending,&Camera{ID:id,Name:stream.Name,RTSPUrl:stream.RTSPURL,RecordDir:dir,RetentionDays:7,RecordingMode:ModeContinuous,AddedAt:now})
-  existing[stream.RTSPURL]=true
- }
- if n.shuttingDown.Load() {return errRecorderShuttingDown}
- if err:=ctx.Err();err!=nil {return err}
- for _,cam:=range pending {n.cameras[cam.ID]=cam;n.cameraOrder=append(n.cameraOrder,cam.ID)}
- committed=true
- return nil
+ return registerCameraSources(ctx,n,"/recordings",streams,true,realCameraRegistrationOps(),nil)
+}
+func (n *NVR) applyScanStreamsAndSave(ctx context.Context,streams []scannedStream) error {
+ return registerCameraSources(ctx,n,"/recordings",streams,true,realCameraRegistrationOps(),n.save)
 }
 
 func scanGo2rtcHandler(w http.ResponseWriter,r *http.Request) {
- if serveGo2rtcScan(w,r,scanHTTPClient,scanTimeout,nvr.applyScanStreams) {finishCameraUpdate(w,r)}
+ if serveGo2rtcScan(w,r,scanHTTPClient,scanTimeout,nvr.applyScanStreamsAndSave) {camerasHandler(w,r)}
 }

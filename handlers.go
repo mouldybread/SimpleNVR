@@ -6,24 +6,10 @@ import (
  "net/http"
  "os"
  "path/filepath"
- "time"
 )
 
-func addCameraHandler(w http.ResponseWriter, r *http.Request) {
- r.ParseForm()
- name := r.FormValue("camera-name")
- rtspUrl := r.FormValue("rtsp-url")
- if name == "" || rtspUrl == "" {http.Error(w,"Name and RTSP URL required",400);return}
- now:=time.Now().UTC()
- id:=generateID(name,now)
- recordDir:=filepath.Join("/recordings",id)
- if err:=os.MkdirAll(recordDir,0755);err!=nil {http.Error(w,"Unable to create recording directory",500);return}
- cam:=&Camera{ID:id,Name:name,RTSPUrl:rtspUrl,RecordDir:recordDir,RetentionDays:7,RecordingMode:ModeContinuous,AddedAt:now}
- nvr.mu.Lock()
- nvr.cameras[id]=cam
- nvr.cameraOrder=append(nvr.cameraOrder,id)
- nvr.mu.Unlock()
- finishCameraUpdate(w,r)
+func addCameraHandler(w http.ResponseWriter,r *http.Request) {
+ if serveAddCameraAt(w,r,nvr,"/recordings",realCameraRegistrationOps(),nvr.save) {camerasHandler(w,r)}
 }
 
 func deleteCameraHandler(w http.ResponseWriter,r *http.Request) {
@@ -136,4 +122,3 @@ func formatBytes(bytes int64) string {
  div,exp:=int64(unit),0
  for n:=bytes/unit;n>=unit;n/=unit {div*=unit;exp++}
  return fmt.Sprintf("%.1f %cB",float64(bytes)/float64(div),"KMGTPE"[exp])
-}
