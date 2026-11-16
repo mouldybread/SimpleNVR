@@ -31,7 +31,9 @@ observe_export_writer() {
     started=$(awk '{print $22}' "$task/stat") || { complete=0; continue; }
     printf 'W\t%s\t%s\t%s\t%s\t%s\n' "$pid" "${task##*/}" "$started" "$wait" "$written"
   done
-  started=$(awk '{print $22}' "$p/stat") || return 1
+  # C was emitted before this scan. If final identity cannot be read, omit B:
+  # the retained child stays incomplete, never pressure-qualified or clean.
+  started=$(awk '{print $22}' "$p/stat") || return 0
   printf 'B\t%s\t%s\t%s\n' "$pid" "$started" "$complete"
 }
 """
