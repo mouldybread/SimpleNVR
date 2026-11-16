@@ -4,6 +4,10 @@
 let removeConfirmTimers = {};
 let orphanedCleanupConfirmed = false;
 let orphanedCleanupTimer = null;
+let orphanedCleanupButton = null;
+let orphanedCleanupPending = false;
+let orphanedCleanupDeadline = 0;
+let orphanedCleanupVersion = 0;
 let deleteCamerasCode = '';
 let deleteCamerasConfirmCount = 0;
 
@@ -491,48 +495,63 @@ function renderOrphanCleanupOutcome(outcome) {
     else showError(outcome.message);
 }
 
-// Cleanup orphaned recordings from deleted cameras
-function cleanupOrphanedRecordings() {
-    if (!orphanedCleanupConfirmed) {
-        const btn = event.target;
+// Existing page/modal controls; this UI guard is not server deletion authority.
+function orphanCleanupButtons() {
+    return Array.from(document.querySelectorAll('button[onclick="cleanupOrphanedRecordings()"]'));
+}
+function resetOrphanCleanupConfirmation() {
+    orphanedCleanupVersion++;
+    if (orphanedCleanupTimer !== null) clearTimeout(orphanedCleanupTimer);
+    orphanedCleanupTimer = null;
+    const buttons = new Set(orphanCleanupButtons());
+    if (orphanedCleanupButton) buttons.add(orphanedCleanupButton);
+    for (const button of buttons) {
+        button.textContent = orphanedCleanupPending ? 'Cleaning up...' : 'Cleanup Orphaned Recordings';
+        button.disabled = orphanedCleanupPending;
+        button.classList.remove('confirm');
+    }
+    orphanedCleanupConfirmed = false;
+    orphanedCleanupButton = null;
+    orphanedCleanupDeadline = 0;
+}
+async function cleanupOrphanedRecordings(trigger = globalThis.event) {
+    if (orphanedCleanupPending) { resetOrphanCleanupConfirmation(); return; }
+    const target = trigger?.currentTarget || trigger?.target || trigger;
+    const btn = target?.closest?.('button') || target;
+    if (!btn || !orphanCleanupButtons().includes(btn) || !btn.isConnected ||
+        btn.disabled || btn.getClientRects().length === 0) {
+        resetOrphanCleanupConfirmation();
+        return;
+    }
+    if (!orphanedCleanupConfirmed || orphanedCleanupButton !== btn || Date.now() >= orphanedCleanupDeadline) {
+        resetOrphanCleanupConfirmation();
+        orphanedCleanupConfirmed = true;
+        orphanedCleanupButton = btn;
+        orphanedCleanupDeadline = Date.now() + 3000;
+        const version = orphanedCleanupVersion;
         btn.textContent = 'Click Again to Confirm';
         btn.classList.add('confirm');
-        orphanedCleanupConfirmed = true;
-
-        clearTimeout(orphanedCleanupTimer);
         orphanedCleanupTimer = setTimeout(() => {
-            btn.textContent = 'Cleanup Orphaned Recordings';
-            btn.classList.remove('confirm');
-            orphanedCleanupConfirmed = false;
+            if (version === orphanedCleanupVersion && !orphanedCleanupPending) resetOrphanCleanupConfirmation();
         }, 3000);
         return;
     }
-
-    const btn = event.target;
-
-    clearTimeout(orphanedCleanupTimer);
-    orphanedCleanupConfirmed = false;
-    btn.textContent = 'Cleanup Orphaned Recordings';
-    btn.classList.remove('confirm');
-    btn.disabled = true;
-    btn.textContent = 'Cleaning up...';
-
+    orphanedCleanupPending = true;
+    resetOrphanCleanupConfirmation();
     for (const prefix of ['', 'modal-']) {
         const panel = document.getElementById(prefix + 'cleanup-results');
         if (panel) panel.style.display = 'none';
     }
     let responseStatus = null;
-    return fetch('/api/recordings/cleanup-orphaned', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-    })
-    .then(response => {
+    try {
+        const response = await fetch('/api/recordings/cleanup-orphaned', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
         responseStatus = response.status;
         if (!response.ok) throw new Error('Cleanup HTTP response was unsuccessful');
-        return response.json();
-    })
-    .then(data => renderOrphanCleanupOutcome(orphanCleanupOutcome(data)))
-    .catch(error => {
+        renderOrphanCleanupOutcome(orphanCleanupOutcome(await response.json()));
+    } catch (error) {
         console.error('Unable to verify orphan cleanup result:', error);
         const status = Number.isInteger(responseStatus) ? ` (HTTP ${responseStatus})` : '';
         renderOrphanCleanupOutcome({
@@ -540,12 +559,20 @@ function cleanupOrphanedRecordings() {
             level: 'error',
             message: `Cleanup outcome could not be verified${status}. Files may have been removed; no deletion totals are confirmed. Review server state before another attempt. No automatic retry was made.`
         });
-    })
-    .finally(() => {
-        btn.disabled = false;
-        btn.textContent = 'Cleanup Orphaned Recordings';
-    });
+    } finally {
+        orphanedCleanupPending = false;
+        resetOrphanCleanupConfirmation();
+    }
 }
+document.addEventListener('click', e => {
+    if (orphanedCleanupConfirmed && !orphanedCleanupButton?.contains(e.target)) resetOrphanCleanupConfirmation();
+}, true);
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && orphanedCleanupConfirmed) resetOrphanCleanupConfirmation();
+}, true);
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden && orphanedCleanupConfirmed) resetOrphanCleanupConfirmation();
+});
 
 // Initialize drag and drop for camera reordering
 function initializeDragAndDrop() {
