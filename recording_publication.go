@@ -101,6 +101,16 @@ func publishRecordingDurablyObservedLeased(ctx context.Context,lease *mediaMutat
  // Once rename succeeds, finish durability work even if cancellation arrives.
  // Return cancellation afterward so event callers conservatively retain inputs.
  for _,directory:=range directories {if err:=ops.syncDirectory(directory);err!=nil {result=errors.Join(result,fmt.Errorf("sync recording publication directory: %w",err))}}
+ // Syncing a pinned descriptor does not prove its pathname still names it.
+ // Recheck both parents after commit, without abandoning durability work or
+ // rolling back the final file on an ambiguous publication outcome.
+ for i,directory:=range directories {
+  held,err:=directory.Stat()
+  if err!=nil {result=errors.Join(result,err);continue}
+  named,err:=os.Lstat(parents[i])
+  if err!=nil {result=errors.Join(result,err);continue}
+  if !named.IsDir() || named.Mode()&os.ModeSymlink!=0 || !os.SameFile(held,named) {result=errors.Join(result,errors.New("recording publication directory changed after rename"))}
+ }
  published,err:=os.Lstat(final)
  if err!=nil {result=errors.Join(result,err)} else if !samePublicationFile(before,published) {result=errors.Join(result,errors.New("published recording identity changed"))}
  if observe!=nil && result==nil && ctx.Err()==nil {result=observe(pinned,directories[len(directories)-1])}
