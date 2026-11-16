@@ -4,27 +4,35 @@ function showToast(message, type = 'info', duration = 3000) {
     const container = document.getElementById('toast-container');
     if (!container) return;
 
-    const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
-    
     const icons = {
         success: '✓',
         error: '✗',
         warning: '⚠',
         info: 'ℹ'
     };
-    
-    toast.innerHTML = `
-        <div class="toast-icon">${icons[type] || icons.info}</div>
-        <div class="toast-message">${message}</div>
-        <div class="toast-close" onclick="this.parentElement.remove()">×</div>
-    `;
-    
+    const variant = typeof type === 'string' &&
+        Object.prototype.hasOwnProperty.call(icons, type) ? type : 'info';
+    const toast = document.createElement('div');
+    toast.className = `toast ${variant}`;
+
+    const icon = document.createElement('div');
+    icon.className = 'toast-icon';
+    icon.textContent = icons[variant];
+    const text = document.createElement('div');
+    text.className = 'toast-message';
+    text.textContent = String(message);
+    const close = document.createElement('div');
+    close.className = 'toast-close';
+    close.textContent = '×';
+    close.addEventListener('click', () => toast.remove());
+    toast.appendChild(icon);
+    toast.appendChild(text);
+    toast.appendChild(close);
     container.appendChild(toast);
-    
+
     // Trigger animation
     setTimeout(() => toast.classList.add('show'), 10);
-    
+
     // Auto remove after duration
     if (duration > 0) {
         setTimeout(() => {
@@ -32,7 +40,7 @@ function showToast(message, type = 'info', duration = 3000) {
             setTimeout(() => toast.remove(), 300);
         }, duration);
     }
-    
+
     return toast;
 }
 
