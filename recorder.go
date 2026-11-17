@@ -54,19 +54,10 @@ func waitRecordingRetry(ctx context.Context) bool {
 }
 
 func recordCameraEventBased(ctx context.Context,cam *Camera) {
- defer cam.recordWG.Done()
- bm:=newBufferManager(ctx,cam)
- defer bm.cancel()
- for _,dir:=range []string{filepath.Join(cam.RecordDir,"buffer"),filepath.Join(cam.RecordDir,"temp")} {
-  if err:=ensureEventStorageDirectory(dir);err!=nil {
-   log.Printf("Unable to initialize event storage for camera %s",cam.ID)
-   nvr.mu.Lock();cam.IsRecording=false;nvr.mu.Unlock();return
-  }
- }
- nvr.mu.Lock();cam.bufferManager=bm;nvr.mu.Unlock()
- defer func(){nvr.mu.Lock();if cam.bufferManager==bm {cam.bufferManager=nil};nvr.mu.Unlock()}()
- bm.runWorkers([]func(){bm.segmentBuffer,bm.pruneLoop},bm.handleEvent)
- bm.cleanupBuffer()
+ recordCameraEventBasedWithSetup(ctx,nvr,cam,ensureEventStorageDirectory,waitRecordingRetry,func(bm *BufferManager){
+  bm.runWorkers([]func(){bm.segmentBuffer,bm.pruneLoop},bm.handleEvent)
+  bm.cleanupBuffer()
+ })
 }
 
 // All Add calls finish before Wait. Event workers never spawn untracked work.
