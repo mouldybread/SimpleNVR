@@ -117,7 +117,10 @@ func removeCameraDirectory(ctx context.Context,dir string,guard func() error) er
  return removeCameraDirectoryWithUnlink(ctx,dir,guard,unix.Unlinkat)
 }
 func removeCameraDirectoryWithUnlink(ctx context.Context,dir string,guard func() error,unlink func(int,string,int) error) error {
- check:=func() error {if err:=ctx.Err();err!=nil {return err};if guard==nil || unlink==nil {return errCameraDeleteBlocked};return guard()}
+ return removeCameraDirectoryWithIO(ctx,dir,guard,unlink,func(root *os.File) error{return root.Sync()})
+}
+func removeCameraDirectoryWithIO(ctx context.Context,dir string,guard func() error,unlink func(int,string,int) error,syncRoot func(*os.File) error) (resultErr error) {
+ check:=func() error {if err:=ctx.Err();err!=nil {return err};if guard==nil || unlink==nil || syncRoot==nil {return errCameraDeleteBlocked};return guard()}
  if err:=check();err!=nil {return err}
  parent,err:=openCameraDeleteDirectory(unix.AT_FDCWD,filepath.Dir(dir));if err!=nil {return err}
  defer parent.Close()
@@ -128,6 +131,9 @@ func removeCameraDirectoryWithUnlink(ctx context.Context,dir string,guard func()
  // A missing directory is not inferred to be empty: it can be a lost mount.
  if err!=nil {return fmt.Errorf("camera directory unavailable; registration retained: %w",err)}
  defer root.Close()
+ // Successful child unlinks need a sync attempt even when a later check fails.
+ dirty:=false
+ defer func(){if dirty {resultErr=errors.Join(resultErr,syncRoot(root))}}()
  var identity unix.Stat_t
  if err:=unix.Fstat(int(root.Fd()),&identity);err!=nil {return err}
  rootCheck:=func() error {
@@ -185,8 +191,10 @@ func removeCameraDirectoryWithUnlink(ctx context.Context,dir string,guard func()
   if err:=validate(entry);err!=nil {return err}
   flags:=0;if entry.directory {flags=unix.AT_REMOVEDIR}
   if err:=unlink(int(root.Fd()),entry.name,flags);err!=nil {return err}
+  dirty=true
  }
- if err:=root.Sync();err!=nil {return err}
+ if err:=syncRoot(root);err!=nil {return err}
+ dirty=false
  if err:=rootCheck();err!=nil {return err}
  // Atomic rmdir refuses late entries. Never replace this with RemoveAll.
  if err:=unlink(int(parent.Fd()),name,unix.AT_REMOVEDIR);err!=nil {return err}
