@@ -365,7 +365,10 @@ function setupModalCameraForms() {
                 method: 'POST',
                 body: formData
             })
-            .then(response => response.text())
+            .then(response => {
+                if (!response.ok) throw new Error('Failed to add camera');
+                return response.text();
+            })
             .then(html => {
                 // Update BOTH lists
                 document.getElementById('modal-camera-list').innerHTML = html;
@@ -443,7 +446,10 @@ function setAllRetentionFromModal() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ retention_days: days })
     })
-    .then(response => response.text())
+    .then(response => {
+        if (!response.ok) throw new Error('Failed to update retention');
+        return response.text();
+    })
     .then(html => {
         document.getElementById('modal-camera-list').innerHTML = html;
         showSuccess('Retention period updated for all cameras');
