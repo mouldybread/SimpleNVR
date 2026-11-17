@@ -62,20 +62,14 @@ func decodeState(raw []byte) (persistedState, error) {
 }
 
 func atomicWrite(path string, raw []byte) error {
- f, err := os.CreateTemp(filepath.Dir(path), ".simplenvr-config-*")
- if err != nil { return err }
- defer os.Remove(f.Name())
- if _, err = f.Write(raw); err != nil { f.Close(); return err }
- if err = f.Sync(); err != nil { f.Close(); return err }
- if err = f.Close(); err != nil { return err }
- if err = os.Rename(f.Name(), path); err != nil { return err }
- dir, err := os.Open(filepath.Dir(path))
- if err != nil { return err }
- defer dir.Close()
- return dir.Sync()
+ return atomicWriteWithOps(path,raw,realPersistenceWriteOps())
 }
 
 func (n *NVR) saveAt(path string) error {
+ return n.saveAtWithWriter(path,atomicWrite)
+}
+
+func (n *NVR) saveAtWithWriter(path string,write func(string,[]byte)error) error {
  persistenceMu.Lock()
  defer persistenceMu.Unlock()
  n.mu.RLock()
@@ -87,7 +81,7 @@ func (n *NVR) saveAt(path string) error {
  old, err := readPersistencePrimary(path)
  if err == nil {
   if _, err = decodeState(old); err != nil { return fmt.Errorf("refusing to overwrite invalid existing configuration: %w", err) }
-  if err = atomicWrite(path+".bak", old); err != nil { return fmt.Errorf("backup configuration: %w", err) }
+  if err = write(path+".bak", old); err != nil { return fmt.Errorf("backup configuration: %w", err) }
  } else {
   if !os.IsNotExist(err) { return err }
   // A failed read does not prove absence: preserve dangling primary entries.
@@ -95,7 +89,7 @@ func (n *NVR) saveAt(path string) error {
   // Do not create a fresh primary over a missing-config recovery situation.
   if _, backupErr := os.Lstat(path+".bak"); backupErr == nil { return fmt.Errorf("refusing to create configuration while backup exists at %s.bak; restore explicitly", path) } else if !os.IsNotExist(backupErr) { return backupErr }
  }
- return atomicWrite(path, raw)
+ return write(path, raw)
 }
 
 func (n *NVR) loadAt(path string) error {
