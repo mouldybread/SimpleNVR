@@ -191,7 +191,7 @@ function startRecording(cameraId) {
         if (typeof updateSectionHeight === 'function') {
             updateSectionHeight('cameras-content');
         }
-        showSuccess('Recording started');
+        showSuccess('Recording enabled; footage capture is not yet verified.');
     })
     .catch(error => {
         console.error('Error starting recording:', error);
