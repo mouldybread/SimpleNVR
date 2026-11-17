@@ -121,6 +121,8 @@ func removeCameraDirectoryWithUnlink(ctx context.Context,dir string,guard func()
  if err:=check();err!=nil {return err}
  parent,err:=openCameraDeleteDirectory(unix.AT_FDCWD,filepath.Dir(dir));if err!=nil {return err}
  defer parent.Close()
+ var parentIdentity unix.Stat_t
+ if err:=unix.Fstat(int(parent.Fd()),&parentIdentity);err!=nil {return err}
  name:=filepath.Base(dir)
  root,err:=openCameraDeleteDirectory(int(parent.Fd()),name)
  // A missing directory is not inferred to be empty: it can be a lost mount.
@@ -131,6 +133,10 @@ func removeCameraDirectoryWithUnlink(ctx context.Context,dir string,guard func()
  rootCheck:=func() error {
   if err:=check();err!=nil {return err}
   var current unix.Stat_t
+  // A held parent descriptor can outlive its pathname. Refuse to continue
+  // deleting from a detached tree when the named parent disappears or changes.
+  if err:=unix.Fstatat(unix.AT_FDCWD,filepath.Dir(dir),&current,unix.AT_SYMLINK_NOFOLLOW);err!=nil {return err}
+  if current.Dev!=parentIdentity.Dev || current.Ino!=parentIdentity.Ino || current.Mode&unix.S_IFMT!=unix.S_IFDIR {return errCameraDeleteBlocked}
   if err:=unix.Fstatat(int(parent.Fd()),name,&current,unix.AT_SYMLINK_NOFOLLOW);err!=nil {return err}
   if current.Dev!=identity.Dev || current.Ino!=identity.Ino || current.Mode&unix.S_IFMT!=unix.S_IFDIR {return errCameraDeleteBlocked}
   return nil
