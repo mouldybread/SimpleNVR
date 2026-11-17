@@ -84,7 +84,7 @@ func (n *NVR) saveAt(path string) error {
  if err != nil { return err }
  raw = append(raw, '\n')
  if _, err = decodeState(raw); err != nil { return fmt.Errorf("refusing invalid configuration: %w", err) }
- old, err := os.ReadFile(path)
+ old, err := readPersistencePrimary(path)
  if err == nil {
   if _, err = decodeState(old); err != nil { return fmt.Errorf("refusing to overwrite invalid existing configuration: %w", err) }
   if err = atomicWrite(path+".bak", old); err != nil { return fmt.Errorf("backup configuration: %w", err) }
@@ -101,7 +101,7 @@ func (n *NVR) saveAt(path string) error {
 func (n *NVR) loadAt(path string) error {
  persistenceMu.Lock()
  defer persistenceMu.Unlock()
- raw, err := os.ReadFile(path)
+ raw, err := readPersistencePrimary(path)
  if os.IsNotExist(err) {
   // ReadFile follows symlinks: ENOENT does not prove the config entry is absent.
   if _, entryErr := os.Lstat(path); entryErr == nil { return fmt.Errorf("configuration entry exists but cannot be read at %s; restore explicitly", path) } else if !os.IsNotExist(entryErr) { return entryErr }
