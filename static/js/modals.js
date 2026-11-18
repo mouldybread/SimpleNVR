@@ -290,7 +290,7 @@ function createCameraSettingsModal() {
                 <span class="close" onclick="closeCameraSettings()">&times;</span>
                 
                 <div class="config-subsection">
-                    <h3>?? Go2RTC Integration</h3>
+                    <h3>🔗 Go2RTC Integration</h3>
                     <form id="modal-go2rtc-form" class="form" style="display: flex; align-items: center; gap: 10px;">
                         <label for="modal-go2rtc-url" style="margin: 0; white-space: nowrap;">Go2RTC URL:</label>
                         <input type="text" id="modal-go2rtc-url" name="go2rtc-url" value="http://go2rtc:1984" style="flex: 1;">
@@ -299,7 +299,7 @@ function createCameraSettingsModal() {
                 </div>
 
                 <div class="config-subsection">
-                    <h3>? Add Camera Manually</h3>
+                    <h3>➕ Add Camera Manually</h3>
                     <form id="modal-add-camera-form" class="form" style="display: flex; align-items: center; gap: 10px;">
                         <label for="modal-camera-name" style="margin: 0; white-space: nowrap;">Camera Name:</label>
                         <input type="text" id="modal-camera-name" name="camera-name" required style="width: 200px;">
@@ -310,7 +310,7 @@ function createCameraSettingsModal() {
                 </div>
 
                 <div class="config-subsection">
-                    <h3>?? Bulk Operations</h3>
+                    <h3>Bulk Operations</h3>
                     <div class="bulk-ops" style="display: flex; justify-content: space-between; align-items: center; gap: 10px;">
                         <div class="form-group" style="display: flex; align-items: center; gap: 10px; margin: 0;">
                             <label for="modal-retention-all" style="margin: 0; white-space: nowrap;">Retention period (days):</label>
@@ -328,12 +328,12 @@ function createCameraSettingsModal() {
                 
                 <!-- Cleanup Results Display -->
                 <div id="modal-cleanup-results" style="display: none; background: #1f1f1f; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #4CAF50;">
-                    <h4 style="margin: 0 0 10px 0; color: #4CAF50;">? Cleanup Complete</h4>
+                    <h4 style="margin: 0 0 10px 0; color: #4CAF50;">✓ Cleanup Complete</h4>
                     <p id="modal-cleanup-results-text" style="margin: 0; color: #ccc;"></p>
                 </div>
 
                 <div class="config-subsection">
-                    <h3>?? Your Cameras</h3>
+                    <h3>📹 Your Cameras</h3>
                     <div id="modal-camera-list"></div>
                 </div>
             </div>
