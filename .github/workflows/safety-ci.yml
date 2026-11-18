@@ -28,12 +28,12 @@ jobs:
         with:
           go-version: '1.26.x'
           cache: false
-      - name: Install synthetic media test tools
+      - name: Refresh Ubuntu package indexes
         timeout-minutes: 5
-        run: |
-          set -euo pipefail
-          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o APT::Update::Error-Mode=any update
-          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y --no-install-recommends ffmpeg python3-venv openssl
+        run: bash .github/scripts/ci-media-apt.sh update
+      - name: Install media test tools
+        timeout-minutes: 8
+        run: bash .github/scripts/ci-media-apt.sh install ffmpeg python3-venv openssl
       - name: Download and verify pinned dependencies
         run: |
           go mod download
@@ -137,12 +137,12 @@ jobs:
         attempt: [1, 2]
     steps:
       - uses: actions/checkout@v4
-      - name: Install synthetic media test tools
+      - name: Refresh Ubuntu package indexes
         timeout-minutes: 5
-        run: |
-          set -euo pipefail
-          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o APT::Update::Error-Mode=any update
-          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y --no-install-recommends ffmpeg python3-venv openssl
+        run: bash .github/scripts/ci-media-apt.sh update
+      - name: Install media test tools
+        timeout-minutes: 8
+        run: bash .github/scripts/ci-media-apt.sh install ffmpeg python3-venv openssl
       - name: Build the exact checkout runtime image
         timeout-minutes: 8
         run: docker build -t simplenvr-safety-test .
@@ -189,12 +189,12 @@ jobs:
         with:
           go-version: '1.26.x'
           cache: false
-      - name: Install stock media tools
+      - name: Refresh Ubuntu package indexes
         timeout-minutes: 5
-        run: |
-          set -euo pipefail
-          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o APT::Update::Error-Mode=any update
-          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y --no-install-recommends ffmpeg
+        run: bash .github/scripts/ci-media-apt.sh update
+      - name: Install media test tools
+        timeout-minutes: 8
+        run: bash .github/scripts/ci-media-apt.sh install ffmpeg
       - name: Record runner context
         run: |
           set -euo pipefail
