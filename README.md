@@ -11,7 +11,7 @@ Save as `compose.yaml`:
 ```yaml
 services:
   simplenvr:
-    image: ghcr.io/mouldybread/simplenvr:${SIMPLENVR_VERSION:?Set SIMPLENVR_VERSION in .env}
+    image: ghcr.io/mouldybread/simplenvr:latest
     restart: unless-stopped
     ports:
       - "127.0.0.1:8443:443"
