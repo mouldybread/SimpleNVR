@@ -32,3 +32,9 @@ This is a work/disposition matrix, not whole-branch acceptance or deployment per
 - Correspondence assessment: https://www.dropbox.com/scl/fi/s1rhk05e6q75bthb2ze1u
 
 These links record reviewed source identities, not signed run provenance. Keep the supplied artifacts and any failed/incomplete attempts.
+
+## Final closeout pointer — November 18, 2026
+
+Current per-section status, exact-candidate CI evidence at 49dbec007f28601eab9958c9d5b6242fbdd447e5,
+skip accounting and accepted restrictions are recorded in AUDIT_FINAL_CLOSEOUT.md. The rows
+above are historical dispositions and are not rewritten.

@@ -112,3 +112,9 @@ Six new test functions cover preservation, newly appearing staging, injected err
 ## Explicit scope decisions, not automatic feature additions
 
 Audio-aware trimming/broader media profiles, synchronized multi-camera advancement, next-day fetching, gapless transitions, a storage/recovery UI and legacy event-ID migration can be deferred if original acceptance criteria permit. Automatic recovery, staging expiry and evidence deletion are not implicitly authorized by this checklist. Any future recovery write needs separate validated semantics and explicit approval.
+
+## Final closeout pointer — November 18, 2026
+
+See AUDIT_FINAL_CLOSEOUT.md for the final section ledger and verdict. Historical sections
+and original checkboxes above are preserved unchanged. Live-camera/storage qualification is
+deferred by the owner to after merge and is not claimed.
