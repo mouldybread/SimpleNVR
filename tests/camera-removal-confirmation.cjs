@@ -23,6 +23,7 @@ function harness(options = {}) {
     class Clock extends Date { static now() { return now; } }
     const c=vm.createContext({
         Date:Clock,document:{getElementById:id => nodes[id] || null,addEventListener(){}},
+        event:{target:element('single-remove-button',options)},
         setTimeout(fn,delay) { const id=++next; timers.set(id,{fn,delay}); return id; },clearTimeout:id => timers.delete(id),
         console:{error(){}},
         showSuccess:message => notices.push({level:'success',message}),showInfo:message => notices.push({level:'info',message}),
@@ -33,7 +34,7 @@ function harness(options = {}) {
             return options.refreshReject ? Promise.reject(new Error('refresh rejected')) : Promise.resolve();
         },
         fetch(url,init) {
-            assert.equal(url,'/api/cameras/delete-all');
+            assert.equal(url,options.endpoint || '/api/cameras/delete-all');
             let resolve,reject; const promise=new Promise((a,b) => { resolve=a;reject=b; });
             calls.push({url,init,resolve,reject});
             if (options.syncThrow) throw new Error('<img src=x onerror=bad()>');
@@ -59,6 +60,59 @@ function harness(options = {}) {
         }
     };
 }
+for (const [name,status,body,extra] of [
+    ['refusal',409,'<b>Retained evidence</b>',{type:'text/plain'}],
+    ['final-save-failure',500,'<b>Camera removed in memory but final save failed</b>',{type:'text/plain'}],
+    ['unexpected-success-page',200,'<!DOCTYPE html><html><body>Sign in</body></html>',{}]
+]) test('single-camera-' + name + '-does-not-confirm-removal', async () => {
+    const h=harness({endpoint:'/api/cameras/delete'});
+    const oldList='<div class="camera-box">Original camera row</div>';
+    h.nodes['camera-list'].innerHTML=oldList;
+    h.nodes['modal-camera-list'].innerHTML=oldList;
+    h.c.removeCamera('camera-1');
+    await Promise.resolve();
+    assert.equal(h.calls.length,0);
+    h.c.removeCamera('camera-1');
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(h.calls.length,1);
+    assert.equal(h.calls[0].init.method,'POST');
+    assert.equal(h.calls[0].init.redirect,'error');
+    assert.deepEqual(JSON.parse(h.calls[0].init.body),{id:'camera-1'});
+    h.reply(body,status,extra);
+    await new Promise(resolve=>setImmediate(resolve));
+    h.flush(3000);
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(h.calls.length,1);
+    assert.equal(h.refreshes,0);
+    assert.equal(h.nodes['camera-list'].innerHTML,oldList);
+    assert.equal(h.nodes['modal-camera-list'].innerHTML,oldList);
+    assert.deepEqual(h.notices.map(notice=>notice.level),['error']);
+    const message=h.notices[0].message;
+    assert.ok(message.includes(`HTTP ${status}`));
+    assert.match(message,/row may be stale/);
+    assert.match(message,/registration or recordings may already have changed/);
+    assert.match(message,/Refresh and review current state before retrying/);
+    assert.doesNotMatch(message,/roll(?:ed)?\s*back|unchanged|<b>|<html>/i);
+});
+test('single-camera-success-updates-both-lists-once', async () => {
+    const h=harness({endpoint:'/api/cameras/delete'});
+    const oldList='<div class="camera-box" data-camera-id="camera-1">Original camera row</div>';
+    const currentList='<div class="camera-box" data-camera-id="camera-2"><div class="camera-details"><div class="camera-title">Remaining camera</div></div></div>';
+    h.nodes['camera-list'].innerHTML=oldList;
+    h.nodes['modal-camera-list'].innerHTML=oldList;
+    h.c.removeCamera('camera-1');
+    h.c.removeCamera('camera-1');
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(h.calls.length,1);
+    h.reply(currentList,200,{type:'text/html; charset=utf-8',redirected:false});
+    await new Promise(resolve=>setImmediate(resolve));
+    h.flush(3000);
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(h.nodes['camera-list'].innerHTML,currentList);
+    assert.equal(h.nodes['modal-camera-list'].innerHTML,currentList);
+    assert.deepEqual(h.notices,[{level:'success',message:'Camera removed successfully'}]);
+    assert.equal(h.calls.length,1);
+});
 test('closed-and-empty-challenge-cannot-submit', async () => {
     const h=harness();await h.c.removeAllCameras();await h.c.removeAllCameras();
     h.c.openDeleteAllCamerasModal();h.type('');await h.c.removeAllCameras();await h.c.removeAllCameras();assert.equal(h.calls.length,0);

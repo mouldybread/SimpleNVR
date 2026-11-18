@@ -274,14 +274,25 @@ function removeCamera(cameraId) {
         button.textContent = 'Remove';
         button.classList.remove('confirm');
         
-        fetch('/api/cameras/delete', {
+        let responseStatus = null;
+        Promise.resolve().then(() => fetch('/api/cameras/delete', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: cameraId })
-        })
-        .then(response => {
-            if (!response.ok) throw new Error('Failed to remove camera');
-            return response.text();
+            body: JSON.stringify({ id: cameraId }),
+            redirect: 'error'
+        }))
+        .then(async response => {
+            responseStatus = response.status;
+            if (!response.ok || response.status !== 200 || response.redirected) {
+                throw new Error('Unexpected camera-removal response');
+            }
+            const contentType = (response.headers.get('Content-Type') || '').split(';')[0].trim().toLowerCase();
+            if (contentType !== 'text/html') throw new Error('Expected camera-list HTML');
+            const html = await response.text();
+            if (typeof html !== 'string' || !html.trim() || /<(?:!doctype|html|head|body)\b/i.test(html)) {
+                throw new Error('Expected a camera-list fragment');
+            }
+            return html;
         })
         .then(html => {
             document.getElementById('camera-list').innerHTML = html;
@@ -302,7 +313,8 @@ function removeCamera(cameraId) {
         })
         .catch(error => {
             console.error('Error removing camera:', error);
-            showError('Failed to remove camera: ' + error.message);
+            const status = Number.isInteger(responseStatus) ? ` (HTTP ${responseStatus})` : '';
+            showError(`Camera-removal outcome could not be verified${status}. The displayed camera row may be stale: camera registration or recordings may already have changed. Refresh and review current state before retrying. No automatic retry was made.`);
         });
     } else {
         button.textContent = 'Click Again to Confirm';
