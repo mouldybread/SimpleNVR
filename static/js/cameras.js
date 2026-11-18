@@ -4,8 +4,16 @@
 let removeConfirmTimers = {};
 let orphanedCleanupConfirmed = false;
 let orphanedCleanupTimer = null;
+let orphanedCleanupButton = null;
+let orphanedCleanupPending = false;
+let orphanedCleanupDeadline = 0;
+let orphanedCleanupVersion = 0;
 let deleteCamerasCode = '';
 let deleteCamerasConfirmCount = 0;
+let deleteCamerasPending = false;
+let deleteCamerasVersion = 0;
+let deleteCamerasTimer = null;
+let deleteCamerasDeadline = 0;
 
 // Load cameras on page load
 document.addEventListener('DOMContentLoaded', () => {
@@ -117,29 +125,9 @@ function setupForms() {
 // Setup delete all cameras modal
 function setupDeleteCamerasModal() {
     const input = document.getElementById('delete-cameras-code-input');
-    if (input) {
-        input.oninput = () => {
-            const btn = document.getElementById('delete-cameras-btn');
-            if (input.value === deleteCamerasCode) {
-                btn.disabled = false;
-                btn.textContent = 'Click to Confirm';
-                btn.classList.remove('confirm');
-                deleteCamerasConfirmCount = 0;
-            } else {
-                btn.disabled = true;
-                btn.textContent = 'Delete All Cameras';
-            }
-        };
-    }
-    
+    if (input) input.oninput = updateCameraRemovalInput;
     const modal = document.getElementById('delete-cameras-modal');
-    if (modal) {
-        modal.onclick = (e) => {
-            if (e.target === modal) {
-                closeDeleteAllCamerasModal();
-            }
-        };
-    }
+    if (modal) modal.onclick = e => { if (e.target === modal) closeDeleteAllCamerasModal(); };
 }
 
 function updateRetention(cameraId) {
@@ -203,7 +191,7 @@ function startRecording(cameraId) {
         if (typeof updateSectionHeight === 'function') {
             updateSectionHeight('cameras-content');
         }
-        showSuccess('Recording started');
+        showSuccess('Recording enabled; footage capture is not yet verified.');
     })
     .catch(error => {
         console.error('Error starting recording:', error);
@@ -286,14 +274,25 @@ function removeCamera(cameraId) {
         button.textContent = 'Remove';
         button.classList.remove('confirm');
         
-        fetch('/api/cameras/delete', {
+        let responseStatus = null;
+        Promise.resolve().then(() => fetch('/api/cameras/delete', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: cameraId })
-        })
-        .then(response => {
-            if (!response.ok) throw new Error('Failed to remove camera');
-            return response.text();
+            body: JSON.stringify({ id: cameraId }),
+            redirect: 'error'
+        }))
+        .then(async response => {
+            responseStatus = response.status;
+            if (!response.ok || response.status !== 200 || response.redirected) {
+                throw new Error('Unexpected camera-removal response');
+            }
+            const contentType = (response.headers.get('Content-Type') || '').split(';')[0].trim().toLowerCase();
+            if (contentType !== 'text/html') throw new Error('Expected camera-list HTML');
+            const html = await response.text();
+            if (typeof html !== 'string' || !html.trim() || /<(?:!doctype|html|head|body)\b/i.test(html)) {
+                throw new Error('Expected a camera-list fragment');
+            }
+            return html;
         })
         .then(html => {
             document.getElementById('camera-list').innerHTML = html;
@@ -314,7 +313,8 @@ function removeCamera(cameraId) {
         })
         .catch(error => {
             console.error('Error removing camera:', error);
-            showError('Failed to remove camera: ' + error.message);
+            const status = Number.isInteger(responseStatus) ? ` (HTTP ${responseStatus})` : '';
+            showError(`Camera-removal outcome could not be verified${status}. The displayed camera row may be stale: camera registration or recordings may already have changed. Refresh and review current state before retrying. No automatic retry was made.`);
         });
     } else {
         button.textContent = 'Click Again to Confirm';
@@ -349,169 +349,249 @@ function clearCameraEvents(cameraName) {
     });
 }
 
-// Open delete all cameras modal
-function openDeleteAllCamerasModal() {
-    deleteCamerasCode = Math.floor(1000 + Math.random() * 9000).toString();
-    document.getElementById('delete-cameras-code').textContent = deleteCamerasCode;
-    document.getElementById('delete-cameras-code-input').value = '';
-    document.getElementById('delete-cameras-btn').disabled = true;
+// Bulk camera removal: UI confirmation is consumed per request, not deletion authority.
+function disarmCameraRemoval() {
+    deleteCamerasVersion++;
+    if (deleteCamerasTimer !== null) clearTimeout(deleteCamerasTimer);
+    deleteCamerasTimer = null;
+    deleteCamerasDeadline = 0;
     deleteCamerasConfirmCount = 0;
-    
+}
+function resetCameraRemovalConfirmation() {
+    disarmCameraRemoval();
+    deleteCamerasCode = '';
+    const input = document.getElementById('delete-cameras-code-input');
+    if (input) { input.value = ''; input.disabled = deleteCamerasPending; }
+    const code = document.getElementById('delete-cameras-code');
+    if (code) code.textContent = 'Reopen this dialog to confirm another attempt';
+    const btn = document.getElementById('delete-cameras-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Delete All Cameras'; btn.classList.remove('confirm'); }
+}
+function cameraRemovalCodeValid() {
     const modal = document.getElementById('delete-cameras-modal');
-    modal.classList.add('active');
-    modal.style.display = 'block';
-    
+    const input = document.getElementById('delete-cameras-code-input');
+    const code = document.getElementById('delete-cameras-code');
+    return !deleteCamerasPending && /^[0-9]{4}$/.test(deleteCamerasCode) &&
+        modal?.classList.contains('active') && input?.value === deleteCamerasCode &&
+        code?.textContent === deleteCamerasCode && !!document.getElementById('delete-cameras-btn');
+}
+function updateCameraRemovalInput() {
+    disarmCameraRemoval();
+    const btn = document.getElementById('delete-cameras-btn');
+    if (!btn) return;
+    const valid = cameraRemovalCodeValid();
+    btn.disabled = !valid;
+    btn.textContent = deleteCamerasPending ? 'Deleting...' : (valid ? 'Click to Confirm' : 'Delete All Cameras');
+    btn.classList.remove('confirm');
+}
+function openDeleteAllCamerasModal() {
+    if (deleteCamerasPending) {
+        showWarning('A camera-removal request is still pending. No additional request was started.');
+        return;
+    }
+    resetCameraRemovalConfirmation();
+    const modal = document.getElementById('delete-cameras-modal');
+    const input = document.getElementById('delete-cameras-code-input');
+    const code = document.getElementById('delete-cameras-code');
+    if (!modal || !input || !code || !document.getElementById('delete-cameras-btn')) return;
+    deleteCamerasCode = Math.floor(1000 + Math.random() * 9000).toString();
+    code.textContent = deleteCamerasCode;
+    modal.classList.add('active'); modal.style.display = 'block';
+    const version = deleteCamerasVersion;
     setTimeout(() => {
-        document.getElementById('delete-cameras-code-input').focus();
+        if (version === deleteCamerasVersion && !deleteCamerasPending && modal.classList.contains('active')) input.focus();
     }, 100);
 }
-
-// Close delete all cameras modal
 function closeDeleteAllCamerasModal() {
     const modal = document.getElementById('delete-cameras-modal');
-    modal.classList.remove('active');
-    modal.style.display = 'none';
-    deleteCamerasCode = '';
-    deleteCamerasConfirmCount = 0;
-    
-    const btn = document.getElementById('delete-cameras-btn');
-    btn.textContent = 'Delete All Cameras';
-    btn.classList.remove('confirm');
-    btn.disabled = true;
+    if (modal) { modal.classList.remove('active'); modal.style.display = 'none'; }
+    resetCameraRemovalConfirmation();
 }
-
-// Delete all cameras with modal confirmation
-function removeAllCameras() {
+function cameraRemovalRefreshWarning(error) {
+    console.error('Camera-removal response received, but UI refresh failed:', error);
+    showWarning('Camera-removal response received, but the display could not refresh. Reload to review current cameras; no deletion totals were provided.');
+}
+async function removeAllCameras() {
+    if (deleteCamerasPending) return;
+    if (!cameraRemovalCodeValid()) { updateCameraRemovalInput(); return; }
     const btn = document.getElementById('delete-cameras-btn');
-    
-    if (deleteCamerasConfirmCount === 0) {
-        btn.textContent = 'Click Again to Confirm';
-        btn.classList.add('confirm');
+    if (deleteCamerasConfirmCount !== 1 || Date.now() >= deleteCamerasDeadline) {
+        disarmCameraRemoval();
         deleteCamerasConfirmCount = 1;
-        
-        setTimeout(() => {
-            if (deleteCamerasConfirmCount === 1) {
-                btn.textContent = 'Click to Confirm';
-                btn.classList.remove('confirm');
-                deleteCamerasConfirmCount = 0;
-            }
+        deleteCamerasDeadline = Date.now() + 3000;
+        const version = deleteCamerasVersion;
+        btn.disabled = false; btn.textContent = 'Click Again to Confirm'; btn.classList.add('confirm');
+        deleteCamerasTimer = setTimeout(() => {
+            if (version === deleteCamerasVersion && !deleteCamerasPending) updateCameraRemovalInput();
         }, 3000);
         return;
     }
-    
-    btn.disabled = true;
+    deleteCamerasPending = true;
+    resetCameraRemovalConfirmation();
     btn.textContent = 'Deleting...';
-    
-    fetch('/api/cameras/delete-all', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-    })
-    .then(response => {
-        if (!response.ok) throw new Error('Failed to remove all cameras');
-        return response.text();
-    })
-    .then(html => {
-        document.getElementById('camera-list').innerHTML = html;
+    let responseStatus = null, responseReceived = false;
+    try {
+        const response = await fetch('/api/cameras/delete-all', {
+            method: 'POST', headers: {'Content-Type':'application/json'}, redirect: 'error'
+        });
+        responseStatus = response.status;
+        if (!response.ok || response.status !== 200 || response.redirected) throw new Error('Unexpected camera-removal response');
+        const contentType = (response.headers.get('Content-Type') || '').split(';')[0].trim().toLowerCase();
+        if (contentType !== 'text/html') throw new Error('Expected camera-list HTML');
+        const html = await response.text();
+        if (typeof html !== 'string' || !html.trim() || /<(?:!doctype|html|head|body)\b/i.test(html)) throw new Error('Expected a camera-list fragment');
+        responseReceived = true;
+        const mainList = document.getElementById('camera-list');
         const modalList = document.getElementById('modal-camera-list');
-        if (modalList) {
-            modalList.innerHTML = html;
-        }
-        if (typeof updateSectionHeight === 'function') {
-            updateSectionHeight('cameras-content');
-        }
-        
-        // Reload timeline camera selector
-        if (typeof loadTimelineCameras === 'function') {
-            loadTimelineCameras();
-        }
-        
-        showSuccess('Successfully deleted all cameras');
+        if (!mainList && !modalList) throw new Error('Camera list display unavailable');
+        if (mainList) mainList.innerHTML = html;
+        if (modalList) modalList.innerHTML = html;
+        showInfo('Server returned a camera list after the removal request. Review the refreshed list; media deletion totals were not provided.');
         closeDeleteAllCamerasModal();
-    })
-    .catch(error => {
-        console.error('Error removing all cameras:', error);
-        showError('Failed to remove all cameras: ' + error.message);
-    })
-    .finally(() => {
-        btn.disabled = false;
-        btn.textContent = 'Delete All Cameras';
-        btn.classList.remove('confirm');
-    });
+        if (typeof updateSectionHeight === 'function') updateSectionHeight('cameras-content');
+        if (typeof loadTimelineCameras === 'function') Promise.resolve(loadTimelineCameras()).catch(cameraRemovalRefreshWarning);
+    } catch (error) {
+        if (responseReceived) cameraRemovalRefreshWarning(error);
+        else {
+            console.error('Unable to verify camera-removal outcome:', error);
+            const status = Number.isInteger(responseStatus) ? ` (HTTP ${responseStatus})` : '';
+            showError(`Camera-removal outcome could not be verified${status}. Cameras may have been stopped or removed and files may have been deleted; no removal totals are confirmed. Review server state before reopening this dialog for fresh confirmation. No automatic retry was made.`);
+        }
+    } finally {
+        deleteCamerasPending = false;
+        resetCameraRemovalConfirmation();
+    }
 }
 
+// Interpret only the current server schema; never invent missing deletion totals.
+function orphanCleanupOutcome(data) {
+    const counter = value => Number.isSafeInteger(value) && value >= 0;
+    if (!data || Array.isArray(data) || typeof data !== 'object' ||
+        typeof data.success !== 'boolean' || !counter(data.count) ||
+        !counter(data.failures) || !counter(data.skipped_recovery_dirs) ||
+        typeof data.interrupted !== 'boolean' || typeof data.limit_reached !== 'boolean' ||
+        !Number.isFinite(data.size_mb) || data.size_mb < 0) {
+        throw new Error('Invalid cleanup response');
+    }
+    const complete = data.success && data.failures === 0 &&
+        !data.interrupted && !data.limit_reached;
+    const preserved = data.skipped_recovery_dirs > 0;
+    const reasons = [];
+    if (data.failures) reasons.push(`${data.failures} failure(s)`);
+    if (data.interrupted) reasons.push('interrupted');
+    if (data.limit_reached) reasons.push('inspection limit reached');
+    if (!data.success && reasons.length === 0) reasons.push('server reported an unsuccessful pass');
+    let message = `Server reported ${data.count} orphaned file(s) deleted (${data.size_mb.toFixed(2)} MB). `;
+    message += `${data.skipped_recovery_dirs} recovery/inspection-sensitive directory(s) preserved.`;
+    if (!complete) message += ` Cleanup incomplete: ${reasons.join('; ')}. Remaining files may still exist.`;
+    return {
+        title: !complete ? 'Cleanup incomplete' :
+            (preserved ? 'Cleanup finished with preserved directories' : 'Cleanup pass complete'),
+        level: complete && !preserved ? 'success' : 'warning',
+        message
+    };
+}
 
-// Cleanup orphaned recordings from deleted cameras
-function cleanupOrphanedRecordings() {
-    if (!orphanedCleanupConfirmed) {
-        const btn = event.target;
+function renderOrphanCleanupOutcome(outcome) {
+    const color = outcome.level === 'success' ? '#4CAF50' :
+        (outcome.level === 'warning' ? '#ffb300' : '#f44336');
+    for (const prefix of ['', 'modal-']) {
+        const panel = document.getElementById(prefix + 'cleanup-results');
+        const text = document.getElementById(prefix + 'cleanup-results-text');
+        if (panel && text) {
+            const heading = panel.querySelector('h4');
+            if (heading) {
+                heading.textContent = outcome.title;
+                heading.style.color = color;
+            }
+            text.textContent = outcome.message;
+            panel.style.borderLeftColor = color;
+            panel.style.display = 'block';
+        }
+    }
+    if (outcome.level === 'success') showSuccess(outcome.message);
+    else if (outcome.level === 'warning') showWarning(outcome.message);
+    else showError(outcome.message);
+}
+
+// Existing page/modal controls; this UI guard is not server deletion authority.
+function orphanCleanupButtons() {
+    return Array.from(document.querySelectorAll('button[onclick="cleanupOrphanedRecordings()"]'));
+}
+function resetOrphanCleanupConfirmation() {
+    orphanedCleanupVersion++;
+    if (orphanedCleanupTimer !== null) clearTimeout(orphanedCleanupTimer);
+    orphanedCleanupTimer = null;
+    const buttons = new Set(orphanCleanupButtons());
+    if (orphanedCleanupButton) buttons.add(orphanedCleanupButton);
+    for (const button of buttons) {
+        button.textContent = orphanedCleanupPending ? 'Cleaning up...' : 'Cleanup Orphaned Recordings';
+        button.disabled = orphanedCleanupPending;
+        button.classList.remove('confirm');
+    }
+    orphanedCleanupConfirmed = false;
+    orphanedCleanupButton = null;
+    orphanedCleanupDeadline = 0;
+}
+async function cleanupOrphanedRecordings(trigger = globalThis.event) {
+    if (orphanedCleanupPending) { resetOrphanCleanupConfirmation(); return; }
+    const target = trigger?.currentTarget || trigger?.target || trigger;
+    const btn = target?.closest?.('button') || target;
+    if (!btn || !orphanCleanupButtons().includes(btn) || !btn.isConnected ||
+        btn.disabled || btn.getClientRects().length === 0) {
+        resetOrphanCleanupConfirmation();
+        return;
+    }
+    if (!orphanedCleanupConfirmed || orphanedCleanupButton !== btn || Date.now() >= orphanedCleanupDeadline) {
+        resetOrphanCleanupConfirmation();
+        orphanedCleanupConfirmed = true;
+        orphanedCleanupButton = btn;
+        orphanedCleanupDeadline = Date.now() + 3000;
+        const version = orphanedCleanupVersion;
         btn.textContent = 'Click Again to Confirm';
         btn.classList.add('confirm');
-        orphanedCleanupConfirmed = true;
-        
-        clearTimeout(orphanedCleanupTimer);
         orphanedCleanupTimer = setTimeout(() => {
-            btn.textContent = 'Cleanup Orphaned Recordings';
-            btn.classList.remove('confirm');
-            orphanedCleanupConfirmed = false;
+            if (version === orphanedCleanupVersion && !orphanedCleanupPending) resetOrphanCleanupConfirmation();
         }, 3000);
         return;
     }
-    
-    const btn = event.target;
-    const resultsDiv = document.getElementById('cleanup-results');
-    const resultsText = document.getElementById('cleanup-results-text');
-    const modalResultsDiv = document.getElementById('modal-cleanup-results');
-    const modalResultsText = document.getElementById('modal-cleanup-results-text');
-    
-    clearTimeout(orphanedCleanupTimer);
-    orphanedCleanupConfirmed = false;
-    btn.textContent = 'Cleanup Orphaned Recordings';
-    btn.classList.remove('confirm');
-    btn.disabled = true;
-    btn.textContent = 'Cleaning up...';
-    
-    if (resultsDiv) {
-        resultsDiv.style.display = 'none';
+    orphanedCleanupPending = true;
+    resetOrphanCleanupConfirmation();
+    for (const prefix of ['', 'modal-']) {
+        const panel = document.getElementById(prefix + 'cleanup-results');
+        if (panel) panel.style.display = 'none';
     }
-    if (modalResultsDiv) {
-        modalResultsDiv.style.display = 'none';
+    let responseStatus = null;
+    try {
+        const response = await fetch('/api/recordings/cleanup-orphaned', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        responseStatus = response.status;
+        if (!response.ok) throw new Error('Cleanup HTTP response was unsuccessful');
+        renderOrphanCleanupOutcome(orphanCleanupOutcome(await response.json()));
+    } catch (error) {
+        console.error('Unable to verify orphan cleanup result:', error);
+        const status = Number.isInteger(responseStatus) ? ` (HTTP ${responseStatus})` : '';
+        renderOrphanCleanupOutcome({
+            title: 'Cleanup outcome not verified',
+            level: 'error',
+            message: `Cleanup outcome could not be verified${status}. Files may have been removed; no deletion totals are confirmed. Review server state before another attempt. No automatic retry was made.`
+        });
+    } finally {
+        orphanedCleanupPending = false;
+        resetOrphanCleanupConfirmation();
     }
-    
-    fetch('/api/recordings/cleanup-orphaned', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-    })
-    .then(response => {
-        if (!response.ok) {
-            throw new Error('Failed to cleanup orphaned recordings');
-        }
-        return response.json();
-    })
-    .then(data => {
-        btn.disabled = false;
-        btn.textContent = 'Cleanup Orphaned Recordings';
-        
-        const sizeMB = data.size_mb.toFixed(2);
-        const message = `Deleted ${data.files_deleted} orphaned file(s), freed ${sizeMB} MB`;
-        
-        if (resultsDiv && resultsText) {
-            resultsText.innerHTML = `Deleted <strong>${data.files_deleted}</strong> orphaned file(s), freed <strong>${sizeMB} MB</strong>`;
-            resultsDiv.style.display = 'block';
-        }
-        if (modalResultsDiv && modalResultsText) {
-            modalResultsText.innerHTML = `Deleted <strong>${data.files_deleted}</strong> orphaned file(s), freed <strong>${sizeMB} MB</strong>`;
-            modalResultsDiv.style.display = 'block';
-        }
-        
-        showSuccess(message);
-    })
-    .catch(error => {
-        console.error('Error cleaning up orphaned recordings:', error);
-        showError('Failed to cleanup orphaned recordings: ' + error.message);
-        btn.disabled = false;
-        btn.textContent = 'Cleanup Orphaned Recordings';
-    });
 }
+document.addEventListener('click', e => {
+    if (orphanedCleanupConfirmed && !orphanedCleanupButton?.contains(e.target)) resetOrphanCleanupConfirmation();
+}, true);
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && orphanedCleanupConfirmed) resetOrphanCleanupConfirmation();
+}, true);
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden && orphanedCleanupConfirmed) resetOrphanCleanupConfirmation();
+});
 
 // Initialize drag and drop for camera reordering
 function initializeDragAndDrop() {
@@ -619,29 +699,21 @@ function saveNewOrder() {
     })
     .then(response => {
         if (!response.ok) throw new Error('Failed to save order');
-        
-        // Refresh the camera list to get updated HTML
         return fetch('/api/cameras');
     })
     .then(response => response.text())
     .then(html => {
-        // Update both lists
         const mainList = document.getElementById('camera-list');
         if (mainList) {
             mainList.innerHTML = html;
         }
-        
         const modalList = document.getElementById('modal-camera-list');
         if (modalList) {
             modalList.innerHTML = html;
         }
-        
-        // CRITICAL: Re-initialize drag and drop after HTML update
         setTimeout(() => {
             initializeDragAndDrop();
         }, 50);
-        
-        // Refresh timeline camera selector
         if (typeof loadTimelineCameras === 'function') {
             loadTimelineCameras();
         }

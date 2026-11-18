@@ -1,122 +1,124 @@
-// Delete All Recordings functionality
-
+// Delete All Recordings: confirmation is per attempt, not deletion authority.
 let deleteCode = '';
 let deleteConfirmCount = 0;
+let deleteRecordingsPending = false;
+let deleteRecordingsVersion = 0;
+let deleteConfirmTimer = null;
+let deleteConfirmDeadline = 0;
 
-// Open delete all recordings modal
-function openDeleteAllRecordingsModal() {
-    // Generate random 4-digit code
-    deleteCode = Math.floor(1000 + Math.random() * 9000).toString();
-    
-    document.getElementById('delete-code').textContent = deleteCode;
-    document.getElementById('delete-code-input').value = '';
-    document.getElementById('delete-recordings-btn').disabled = true;
+function disarmRecordingDeletion() {
+    deleteRecordingsVersion++;
+    if (deleteConfirmTimer !== null) clearTimeout(deleteConfirmTimer);
+    deleteConfirmTimer = null;
+    deleteConfirmDeadline = 0;
     deleteConfirmCount = 0;
-    
+}
+function resetRecordingDeletionConfirmation() {
+    disarmRecordingDeletion();
+    deleteCode = '';
+    const input = document.getElementById('delete-code-input');
+    if (input) { input.value = ''; input.disabled = deleteRecordingsPending; }
+    const code = document.getElementById('delete-code');
+    if (code) code.textContent = 'Reopen this dialog to confirm another attempt';
+    const btn = document.getElementById('delete-recordings-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Delete All Recordings'; btn.classList.remove('confirm'); }
+}
+function recordingDeletionCodeValid() {
     const modal = document.getElementById('delete-recordings-modal');
-    modal.classList.add('active');
-    modal.style.display = 'block';
-    
-    // Focus on input
+    const input = document.getElementById('delete-code-input');
+    const code = document.getElementById('delete-code');
+    return !deleteRecordingsPending && /^[0-9]{4}$/.test(deleteCode) &&
+        modal?.classList.contains('active') && input?.value === deleteCode &&
+        code?.textContent === deleteCode && !!document.getElementById('delete-recordings-btn');
+}
+function updateRecordingDeletionInput() {
+    disarmRecordingDeletion();
+    const btn = document.getElementById('delete-recordings-btn');
+    if (!btn) return;
+    const valid = recordingDeletionCodeValid();
+    btn.disabled = !valid;
+    btn.textContent = deleteRecordingsPending ? 'Deleting...' : (valid ? 'Click to Confirm' : 'Delete All Recordings');
+    btn.classList.remove('confirm');
+}
+function openDeleteAllRecordingsModal() {
+    if (deleteRecordingsPending) {
+        showWarning('A recording-deletion request is still pending. No additional request was started.');
+        return;
+    }
+    resetRecordingDeletionConfirmation();
+    const modal = document.getElementById('delete-recordings-modal');
+    const input = document.getElementById('delete-code-input');
+    const code = document.getElementById('delete-code');
+    if (!modal || !input || !code || !document.getElementById('delete-recordings-btn')) return;
+    deleteCode = Math.floor(1000 + Math.random() * 9000).toString();
+    code.textContent = deleteCode;
+    modal.classList.add('active'); modal.style.display = 'block';
+    const version = deleteRecordingsVersion;
     setTimeout(() => {
-        document.getElementById('delete-code-input').focus();
+        if (version === deleteRecordingsVersion && !deleteRecordingsPending && modal.classList.contains('active')) input.focus();
     }, 100);
 }
-
-// Close delete modal
 function closeDeleteRecordingsModal() {
     const modal = document.getElementById('delete-recordings-modal');
-    modal.classList.remove('active');
-    modal.style.display = 'none';
-    deleteCode = '';
-    deleteConfirmCount = 0;
-    
-    const btn = document.getElementById('delete-recordings-btn');
-    btn.textContent = 'Delete All Recordings';
-    btn.classList.remove('confirm');
-    btn.disabled = true;
+    if (modal) { modal.classList.remove('active'); modal.style.display = 'none'; }
+    resetRecordingDeletionConfirmation();
 }
-
-// Validate code input
-document.addEventListener('DOMContentLoaded', () => {
-    const input = document.getElementById('delete-code-input');
-    if (input) {
-        input.oninput = () => {
-            const btn = document.getElementById('delete-recordings-btn');
-            if (input.value === deleteCode) {
-                btn.disabled = false;
-                btn.textContent = 'Click to Confirm';
-                btn.classList.remove('confirm');
-                deleteConfirmCount = 0;
-            } else {
-                btn.disabled = true;
-                btn.textContent = 'Delete All Recordings';
-            }
-        };
-    }
-});
-
-// Delete all recordings
-function deleteAllRecordings() {
+function recordingDeletionOutcome(data) {
+    const counter = value => Number.isSafeInteger(value) && value >= 0;
+    if (!data || Array.isArray(data) || typeof data.success !== 'boolean' ||
+        !counter(data.deleted) || !counter(data.failures) ||
+        !Number.isFinite(data.size_mb) || data.size_mb < 0) throw new Error('Invalid deletion response');
+    const complete = data.success && data.failures === 0;
+    let message = `Server reported ${data.deleted} recording(s) deleted (${data.size_mb.toFixed(2)} MB), ${data.failures} failure(s).`;
+    if (!complete) message += ' Deletion incomplete. Review server state; another attempt requires reopening this dialog and fresh confirmation.';
+    return {complete, deleted:data.deleted, message};
+}
+async function deleteAllRecordings() {
+    if (deleteRecordingsPending) return;
+    if (!recordingDeletionCodeValid()) { updateRecordingDeletionInput(); return; }
     const btn = document.getElementById('delete-recordings-btn');
-    
-    if (deleteConfirmCount === 0) {
-        // First press
-        btn.textContent = 'Click Again to Confirm';
-        btn.classList.add('confirm');
+    if (deleteConfirmCount !== 1 || Date.now() >= deleteConfirmDeadline) {
+        disarmRecordingDeletion();
         deleteConfirmCount = 1;
-        
-        // Reset after 3 seconds
-        setTimeout(() => {
-            if (deleteConfirmCount === 1) {
-                btn.textContent = 'Click to Confirm';
-                btn.classList.remove('confirm');
-                deleteConfirmCount = 0;
-            }
+        deleteConfirmDeadline = Date.now() + 3000;
+        const version = deleteRecordingsVersion;
+        btn.textContent = 'Click Again to Confirm'; btn.classList.add('confirm'); btn.disabled = false;
+        deleteConfirmTimer = setTimeout(() => {
+            if (version === deleteRecordingsVersion && !deleteRecordingsPending) updateRecordingDeletionInput();
         }, 3000);
         return;
     }
-    
-    // Second press - actually delete
-    btn.disabled = true;
+    deleteRecordingsPending = true;
+    resetRecordingDeletionConfirmation();
     btn.textContent = 'Deleting...';
-    
-    fetch('/api/recordings/delete-all', {
-        method: 'POST'
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            showSuccess(`Successfully deleted ${data.deleted} recordings (${data.size_mb.toFixed(2)} MB freed)`);
-            closeDeleteRecordingsModal();
-            
-            // Reload timeline if on playback section
-            if (typeof loadTimelineData === 'function') {
-                loadTimelineData();
+    let responseStatus = null;
+    try {
+        const response = await fetch('/api/recordings/delete-all', {method:'POST'});
+        responseStatus = response.status;
+        if (!response.ok) throw new Error('Deletion HTTP response was unsuccessful');
+        const outcome = recordingDeletionOutcome(await response.json());
+        if (outcome.complete) { showSuccess(outcome.message); closeDeleteRecordingsModal(); }
+        else showWarning(outcome.message);
+        if ((outcome.complete || outcome.deleted > 0) && typeof loadTimelineData === 'function') {
+            try { loadTimelineData(); }
+            catch (error) {
+                console.error('Deletion result received, but timeline refresh failed:', error);
+                showWarning('Deletion result received, but the timeline could not refresh. Reload the page to review it.');
             }
-        } else {
-            showError('Failed to delete recordings');
         }
-    })
-    .catch(error => {
-        console.error('Error deleting recordings:', error);
-        showError('Failed to delete recordings');
-    })
-    .finally(() => {
-        btn.disabled = false;
-        btn.textContent = 'Delete All Recordings';
-        btn.classList.remove('confirm');
-    });
+    } catch (error) {
+        console.error('Unable to verify recording-deletion outcome:', error);
+        const status = Number.isInteger(responseStatus) ? ` (HTTP ${responseStatus})` : '';
+        showError(`Recording-deletion outcome could not be verified${status}. Files may have been removed; no deletion totals are confirmed. Review server state before reopening this dialog for a fresh confirmation. No automatic retry was made.`);
+    } finally {
+        deleteRecordingsPending = false;
+        resetRecordingDeletionConfirmation();
+    }
 }
 
-// Close modal on outside click
 document.addEventListener('DOMContentLoaded', () => {
+    const input = document.getElementById('delete-code-input');
+    if (input) input.oninput = updateRecordingDeletionInput;
     const modal = document.getElementById('delete-recordings-modal');
-    if (modal) {
-        modal.onclick = (e) => {
-            if (e.target === modal) {
-                closeDeleteRecordingsModal();
-            }
-        };
-    }
+    if (modal) modal.onclick = e => { if (e.target === modal) closeDeleteRecordingsModal(); };
 });

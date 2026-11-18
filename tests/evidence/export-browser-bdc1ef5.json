@@ -1,0 +1,18 @@
+{
+  "browser": "134.0.6998.35",
+  "headless": true,
+  "script_blobs": {
+    "export-ui.js": "58cc92fe4ec29e3d7247aa622c83a59288a8c430",
+    "timeline-geometry.js": "77e518605508caa99a8c60b42c7fb477063c460b"
+  },
+  "checks_passed": [
+    "nine-cameras",
+    "http-error",
+    "length-cap",
+    "prepared-cancel",
+    "saved-download",
+    "browser-DST-helper"
+  ],
+  "fixture_sha256": "2de7d0cd970c94aebbffa8727ae247be9a25aee6b939f9fdf8eaec2ed821a739",
+  "limits": "Routed responses and controlled DOM; browser-managed automated saving, not end-user OS dialogs, full backend, playback lifecycle, media-error/autoplay acceptance, or canvas integration."
+}

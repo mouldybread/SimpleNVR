@@ -1,0 +1,265 @@
+name: Safety verification
+
+on:
+  push:
+    branches: [main, fix/recording-safety-audit]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    name: Core — build, race, storage & lifecycle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      GOFLAGS: -mod=readonly
+      SIMPLENVR_REQUIRE_FFMPEG: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Browser CI diagnostic helper regression tests
+        run: |
+          python3 -m unittest discover -s tests -p 'test_browser_ci_diagnostics.py' -v
+          python3 -m unittest discover -s tests -p 'test_browser_network_ready.py' -v
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: false
+      - name: Install synthetic media test tools
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o APT::Update::Error-Mode=any update
+          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y --no-install-recommends ffmpeg python3-venv openssl
+      - name: Download and verify pinned dependencies
+        run: |
+          go mod download
+          go mod verify
+          git diff --exit-code -- go.mod go.sum
+      - name: Build
+        run: go build ./...
+      - name: Core evidence assessor regression tests
+        run: python3 -m unittest discover -s tests -p 'test_core_ci_evidence.py' -v
+      - name: Race-enabled tests including media and shutdown lifecycle
+        shell: bash
+        run: bash tests/core-ci-evidence.sh "$RUNNER_TEMP/simplenvr-core-evidence"
+      - name: Retain core test execution evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-test-execution-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/simplenvr-core-evidence
+          if-no-files-found: error
+          retention-days: 14
+      - name: Static analysis
+        if: always()
+        run: go vet ./...
+      - name: Reachable vulnerability scan (govulncheck)
+        if: always()
+        run: |
+          set -euo pipefail
+          go install golang.org/x/vuln/cmd/govulncheck@v1.10.0
+          "$(go env GOPATH)/bin/govulncheck" ./...
+      - name: Assert dependency files remain unchanged
+        if: always()
+        run: git diff --exit-code -- go.mod go.sum
+      - name: Isolated real storage failures (private tmpfs namespace)
+        shell: bash
+        run: |
+          set -euo pipefail
+          go_bin=$(command -v go)
+          unshare_bin=$(command -v unshare)
+          host_mnt_ns=$(readlink /proc/self/ns/mnt)
+          module_cache=$(go env GOMODCACHE)
+          cache_dir=$(mktemp -d "${RUNNER_TEMP:?}/simplenvr-storage-go-cache.XXXXXX")
+          trap 'sudo rm -rf -- "$cache_dir"' EXIT
+          sudo env \
+            SIMPLENVR_STORAGE_FAILURE_TESTS=1 \
+            SIMPLENVR_STORAGE_HOST_MNT_NS="$host_mnt_ns" \
+            SIMPLENVR_REQUIRE_FFMPEG=1 \
+            GOFLAGS=-mod=readonly \
+            GOMODCACHE="$module_cache" \
+            GOCACHE="$cache_dir" \
+            "$unshare_bin" --mount --propagation private --fork \
+            "$go_bin" test -race -count=1 -timeout=120s -v \
+            -run '^TestStorageFailureMountNamespace' ./...
+          git diff --exit-code -- go.mod go.sum
+      - name: Verify runtime image builds
+        run: docker build -t simplenvr-safety-test .
+      - name: Active runtime-container recording, SIGTERM and restart intent
+        shell: bash
+        run: bash tests/active-container-storage.sh simplenvr-safety-test
+      - name: Runtime container SIGTERM smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          state=$(mktemp -d)
+          name=simplenvr-shutdown-ci
+          trap 'docker rm -f "$name" >/dev/null 2>&1 || true; rm -rf "$state"' EXIT
+          printf '{"cameras":{},"camera_order":[],"events":[]}\n' > "$state/cameras.json"
+          python3 -c 'import secrets; print(secrets.token_urlsafe(32))' | docker run --rm -i --user "$(id -u):$(id -g)" -v "$state:/recordings" simplenvr-safety-test auth set-password ci-admin
+          docker run -d --name "$name" -v "$state:/recordings" --tmpfs /certs simplenvr-safety-test
+          ready=0
+          for attempt in $(seq 1 60); do
+            if docker exec "$name" wget --no-check-certificate -q -O /dev/null https://127.0.0.1/auth/login; then ready=1; break; fi
+            sleep 0.5
+          done
+          if [ "$ready" -ne 1 ]; then docker logs "$name"; exit 1; fi
+          docker stop --timeout 75 "$name"
+          docker logs "$name"
+          test "$(docker inspect -f '{{.State.ExitCode}}' "$name")" -eq 0
+          docker logs "$name" 2>&1 | grep -F 'Shutdown complete; recording intent persisted'
+          sudo python3 -c 'import json,os,stat,sys; p=sys.argv[1]; s=os.stat(p); assert stat.S_ISREG(s.st_mode); assert stat.S_IMODE(s.st_mode) == 0o600, oct(stat.S_IMODE(s.st_mode)); d=json.load(open(p)); assert d["cameras"] == {}' "$state/cameras.json"
+
+      - name: Runtime export backpressure, disconnect, SIGTERM and restart
+        timeout-minutes: 6
+        shell: bash
+        run: bash tests/runtime-export-acceptance.sh simplenvr-safety-test "$RUNNER_TEMP/simplenvr-export-evidence"
+      - name: Retain runtime-export evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-export-acceptance-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/simplenvr-export-evidence
+          if-no-files-found: error
+          retention-days: 14
+
+  browser:
+    name: Chrome acceptance — isolated run ${{ matrix.attempt }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        attempt: [1, 2]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install synthetic media test tools
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o APT::Update::Error-Mode=any update
+          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y --no-install-recommends ffmpeg python3-venv openssl
+      - name: Build the exact checkout runtime image
+        timeout-minutes: 8
+        run: docker build -t simplenvr-safety-test .
+      - name: Install pinned browser acceptance tooling
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/simplenvr-browser-venv"
+          . "$RUNNER_TEMP/simplenvr-browser-venv/bin/activate"
+          python -m pip install 'playwright==1.56.0'
+          python -m playwright install --with-deps chrome
+      - name: Real runtime HTTPS exports and Chrome playback/downloads
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          set -euo pipefail
+          . "$RUNNER_TEMP/simplenvr-browser-venv/bin/activate"
+          bash tests/runtime-browser-acceptance.sh simplenvr-safety-test "$RUNNER_TEMP/simplenvr-browser-evidence"
+      - name: Retain runtime-browser acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-browser-acceptance-${{ github.sha }}-${{ github.run_attempt }}-${{ matrix.attempt }}
+          path: ${{ runner.temp }}/simplenvr-browser-evidence
+          if-no-files-found: warn
+          retention-days: 14
+
+  correspondence_resources:
+    name: Ordered content — bounded synthetic resource measurements
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      GOFLAGS: -mod=readonly
+      SIMPLENVR_CORRESPONDENCE_RESOURCE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare evidence directory
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/correspondence-resources"
+          printf 'SIMPLENVR_CORRESPONDENCE_REPORT=%s/correspondence-resources/measurements.json\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: false
+      - name: Install stock media tools
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o APT::Update::Error-Mode=any update
+          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y --no-install-recommends ffmpeg
+      - name: Record runner context
+        run: |
+          set -euo pipefail
+          {
+            printf 'head=%s run_attempt=%s\n' "$GITHUB_SHA" "$GITHUB_RUN_ATTEMPT"
+            uname -a
+            go version
+            ffmpeg -version
+            df -T "$RUNNER_TEMP"
+          } > "$RUNNER_TEMP/correspondence-resources/environment.txt"
+      - name: Compile the exact checkout test binary without race instrumentation
+        timeout-minutes: 8
+        run: |
+          set -euo pipefail
+          go mod download
+          go mod verify
+          git diff --exit-code -- go.mod go.sum
+          go test -c -o "$RUNNER_TEMP/correspondence-resource.test" .
+      - name: Measure longer generated recordings and existing ceiling refusal
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/correspondence-resource.test" -test.v -test.run '^TestCorrResource' -test.timeout=420s 2>&1 | tee "$RUNNER_TEMP/correspondence-resources/tests.log"
+          test -s "$SIMPLENVR_CORRESPONDENCE_REPORT"
+          git diff --exit-code -- go.mod go.sum
+      - name: Evidence assessment regression tests
+        if: always()
+        run: python3 -m unittest discover -s tests -p 'test_correspondence_assessment.py' -v
+      - name: Assess full adapter and native prebuffer evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/correspondence_assessment.py "$RUNNER_TEMP/correspondence-resources" \
+            --expected-head "$GITHUB_SHA" \
+            --output "$RUNNER_TEMP/correspondence-resources/assessment.json" \
+            --summary "$RUNNER_TEMP/correspondence-resources/assessment.md"
+      - name: Publish evidence assessment summary
+        if: always()
+        run: cat "$RUNNER_TEMP/correspondence-resources/assessment.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Retain resource evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: correspondence-resources-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/correspondence-resources
+          if-no-files-found: error
+          retention-days: 14
+
+  verify:
+    name: Required checks — all must pass
+    if: always()
+    needs: [core, browser, correspondence_resources]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require core, both browser attempts and resource measurements
+        env:
+          CORE_RESULT: ${{ needs.core.result }}
+          BROWSER_RESULT: ${{ needs.browser.result }}
+          RESOURCE_RESULT: ${{ needs.correspondence_resources.result }}
+        run: |
+          set -euo pipefail
+          printf 'core=%s browser=%s resources=%s\n' "$CORE_RESULT" "$BROWSER_RESULT" "$RESOURCE_RESULT"
+          test "$CORE_RESULT" = success
+          test "$BROWSER_RESULT" = success
+          test "$RESOURCE_RESULT" = success

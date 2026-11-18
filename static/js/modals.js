@@ -4,6 +4,14 @@
 let currentVideo = null;
 
 function viewLiveStream(cameraName) {
+    let streamPath;
+    try {
+        if (typeof cameraName !== 'string' || cameraName.length === 0 || cameraName === '.' || cameraName === '..') throw new Error('Unsupported camera name');
+        streamPath = '/api/stream/' + encodeURIComponent(cameraName);
+    } catch (_) {
+        showError('Camera name cannot be used for live playback; review the camera configuration.');
+        return;
+    }
     let modal = document.getElementById('liveModal');
     
     // Create modal if it doesn't exist
@@ -25,7 +33,7 @@ function viewLiveStream(cameraName) {
     container.innerHTML = '<video id="liveVideo" controls autoplay muted style="width: 100%; max-height: 70vh;"></video>';
     
     currentVideo = document.getElementById('liveVideo');
-    currentVideo.src = '/api/stream/' + cameraName;
+    currentVideo.src = streamPath;
 }
 
 function createLiveModal() {
@@ -357,7 +365,10 @@ function setupModalCameraForms() {
                 method: 'POST',
                 body: formData
             })
-            .then(response => response.text())
+            .then(response => {
+                if (!response.ok) throw new Error('Failed to add camera');
+                return response.text();
+            })
             .then(html => {
                 // Update BOTH lists
                 document.getElementById('modal-camera-list').innerHTML = html;
@@ -435,7 +446,10 @@ function setAllRetentionFromModal() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ retention_days: days })
     })
-    .then(response => response.text())
+    .then(response => {
+        if (!response.ok) throw new Error('Failed to update retention');
+        return response.text();
+    })
     .then(html => {
         document.getElementById('modal-camera-list').innerHTML = html;
         showSuccess('Retention period updated for all cameras');
@@ -446,125 +460,133 @@ function setAllRetentionFromModal() {
     });
 }
 
-// Clear All Events functionality
-let clearEventsCode;
+// Clear All Events: per-attempt UI confirmation, not server authorization.
+let clearEventsCode = '';
 let clearEventsConfirmCount = 0;
+let clearEventsPending = false;
+let clearEventsVersion = 0;
+let clearEventsTimer = null;
+let clearEventsDeadline = 0;
 
-// Open clear events modal
-function openClearEventsModal() {
-    // Generate random 4-digit code
-    clearEventsCode = (Math.floor(1000 + Math.random() * 9000)).toString();
-    
-    document.getElementById('clear-events-code').textContent = clearEventsCode;
-    document.getElementById('clear-events-code-input').value = '';
-    document.getElementById('clear-events-btn').disabled = true;
+function disarmEventClear() {
+    clearEventsVersion++;
+    if (clearEventsTimer !== null) clearTimeout(clearEventsTimer);
+    clearEventsTimer = null;
+    clearEventsDeadline = 0;
     clearEventsConfirmCount = 0;
-    
+}
+function resetEventClearConfirmation() {
+    disarmEventClear();
+    clearEventsCode = '';
+    const input = document.getElementById('clear-events-code-input');
+    if (input) { input.value = ''; input.disabled = clearEventsPending; }
+    const code = document.getElementById('clear-events-code');
+    if (code) code.textContent = 'Reopen this dialog to confirm another attempt';
+    const btn = document.getElementById('clear-events-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Clear All Events'; btn.classList.remove('confirm'); }
+}
+function eventClearCodeValid() {
     const modal = document.getElementById('clear-events-modal');
-    modal.classList.add('active');
-    modal.style.display = 'block';
-    
-    // Focus on input
+    const input = document.getElementById('clear-events-code-input');
+    const code = document.getElementById('clear-events-code');
+    return !clearEventsPending && /^[0-9]{4}$/.test(clearEventsCode) &&
+        modal?.classList.contains('active') && input?.value === clearEventsCode &&
+        code?.textContent === clearEventsCode && !!document.getElementById('clear-events-btn');
+}
+function updateEventClearInput() {
+    disarmEventClear();
+    const btn = document.getElementById('clear-events-btn');
+    if (!btn) return;
+    const valid = eventClearCodeValid();
+    btn.disabled = !valid;
+    btn.textContent = clearEventsPending ? 'Clearing...' : (valid ? 'Click to Confirm' : 'Clear All Events');
+    btn.classList.remove('confirm');
+}
+function openClearEventsModal() {
+    if (clearEventsPending) {
+        showWarning('An event-clear request is still pending. No additional request was started.');
+        return;
+    }
+    resetEventClearConfirmation();
+    const modal = document.getElementById('clear-events-modal');
+    const input = document.getElementById('clear-events-code-input');
+    const code = document.getElementById('clear-events-code');
+    if (!modal || !input || !code || !document.getElementById('clear-events-btn')) return;
+    clearEventsCode = Math.floor(1000 + Math.random() * 9000).toString();
+    code.textContent = clearEventsCode;
+    modal.classList.add('active'); modal.style.display = 'block';
+    const version = clearEventsVersion;
     setTimeout(() => {
-        document.getElementById('clear-events-code-input').focus();
+        if (version === clearEventsVersion && !clearEventsPending && modal.classList.contains('active')) input.focus();
     }, 100);
 }
-
-// Close clear events modal
 function closeClearEventsModal() {
     const modal = document.getElementById('clear-events-modal');
-    modal.classList.remove('active');
-    modal.style.display = 'none';
-    clearEventsCode = '';
-    clearEventsConfirmCount = 0;
-    
-    const btn = document.getElementById('clear-events-btn');
-    btn.textContent = 'Clear All Events';
-    btn.classList.remove('confirm');
-    btn.disabled = true;
+    if (modal) { modal.classList.remove('active'); modal.style.display = 'none'; }
+    resetEventClearConfirmation();
 }
-
-// Clear all events
-function clearAllEvents() {
+function eventClearOutcome(data) {
+    if (!data || Array.isArray(data) || typeof data !== 'object' || typeof data.success !== 'boolean') throw new Error('Invalid event-clear response');
+    if (!data.success) return {
+        confirmed:false,
+        message:'Server did not confirm a successful event-metadata clear. Metadata may already have changed; no cleared count is confirmed. Review state before reopening this dialog for fresh confirmation.'
+    };
+    if (!Number.isSafeInteger(data.count) || data.count < 0) throw new Error('Invalid event-clear count');
+    return {confirmed:true,message:`Server reported ${data.count} event record(s) cleared. This clears event metadata, not recording files.`};
+}
+function eventClearRefreshWarning(error) {
+    console.error('Event-clear response received, but display refresh failed:', error);
+    showWarning('Event-clear response received, but the event display could not refresh. Reload to review current metadata.');
+}
+async function clearAllEvents() {
+    if (clearEventsPending) return;
+    if (!eventClearCodeValid()) { updateEventClearInput(); return; }
     const btn = document.getElementById('clear-events-btn');
-    
-    if (clearEventsConfirmCount === 0) {
-        // First press
-        btn.textContent = 'Click Again to Confirm';
-        btn.classList.add('confirm');
+    if (clearEventsConfirmCount !== 1 || Date.now() >= clearEventsDeadline) {
+        disarmEventClear();
         clearEventsConfirmCount = 1;
-        
-        // Reset after 3 seconds
-        setTimeout(() => {
-            if (clearEventsConfirmCount === 1) {
-                btn.textContent = 'Click to Confirm';
-                btn.classList.remove('confirm');
-                clearEventsConfirmCount = 0;
-            }
+        clearEventsDeadline = Date.now() + 3000;
+        const version = clearEventsVersion;
+        btn.disabled = false; btn.textContent = 'Click Again to Confirm'; btn.classList.add('confirm');
+        clearEventsTimer = setTimeout(() => {
+            if (version === clearEventsVersion && !clearEventsPending) updateEventClearInput();
         }, 3000);
         return;
     }
-    
-    // Second press - actually clear
-    btn.disabled = true;
+    clearEventsPending = true;
+    resetEventClearConfirmation();
     btn.textContent = 'Clearing...';
-    
-    fetch('/api/events/clear-all', {
-        method: 'POST'
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            showSuccess(`Successfully deleted ${data.count} events`);
-            closeClearEventsModal();
-            
-            // Refresh events if modal is open
-            if (typeof refreshEventsList === 'function') {
-                refreshEventsList();
-            }
-        } else {
-            showError('Failed to clear events');
+    let responseStatus = null, responseReceived = false;
+    try {
+        const response = await fetch('/api/events/clear-all', {method:'POST',redirect:'error'});
+        responseStatus = response.status;
+        if (!response.ok || response.status !== 200 || response.redirected) throw new Error('Unexpected event-clear response');
+        const contentType = (response.headers.get('Content-Type') || '').split(';')[0].trim().toLowerCase();
+        if (contentType !== 'application/json') throw new Error('Expected event-clear JSON');
+        const outcome = eventClearOutcome(await response.json());
+        responseReceived = true;
+        if (!outcome.confirmed) { showWarning(outcome.message); return; }
+        showSuccess(outcome.message);
+        closeClearEventsModal();
+        if (typeof refreshEventsList === 'function') Promise.resolve(refreshEventsList()).catch(eventClearRefreshWarning);
+    } catch (error) {
+        if (responseReceived) eventClearRefreshWarning(error);
+        else {
+            console.error('Unable to verify event-clear outcome:', error);
+            const status = Number.isInteger(responseStatus) ? ` (HTTP ${responseStatus})` : '';
+            showError(`Event-clear outcome could not be verified${status}. Event metadata may already have changed; completion and persistence are not verified and no cleared count is confirmed. Review server state before reopening this dialog for fresh confirmation. No automatic retry was made.`);
         }
-    })
-    .catch(error => {
-        console.error('Error clearing events:', error);
-        showError('Failed to clear events');
-    })
-    .finally(() => {
-        btn.disabled = false;
-        btn.textContent = 'Clear All Events';
-        btn.classList.remove('confirm');
-    });
+    } finally {
+        clearEventsPending = false;
+        resetEventClearConfirmation();
+    }
 }
 
-// Setup event listeners on page load
 document.addEventListener('DOMContentLoaded', () => {
-    // Clear events code input validation
-    const clearEventsInput = document.getElementById('clear-events-code-input');
-    if (clearEventsInput) {
-        clearEventsInput.oninput = () => {
-            const btn = document.getElementById('clear-events-btn');
-            if (clearEventsInput.value === clearEventsCode) {
-                btn.disabled = false;
-                btn.textContent = 'Click to Confirm';
-                btn.classList.remove('confirm');
-                clearEventsConfirmCount = 0;
-            } else {
-                btn.disabled = true;
-                btn.textContent = 'Clear All Events';
-            }
-        };
-    }
-    
-    // Close clear events modal on outside click
-    const clearEventsModal = document.getElementById('clear-events-modal');
-    if (clearEventsModal) {
-        clearEventsModal.onclick = (e) => {
-            if (e.target === clearEventsModal) {
-                closeClearEventsModal();
-            }
-        };
-    }
+    const input = document.getElementById('clear-events-code-input');
+    if (input) input.oninput = updateEventClearInput;
+    const modal = document.getElementById('clear-events-modal');
+    if (modal) modal.onclick = e => { if (e.target === modal) closeClearEventsModal(); };
 });
 
 // Close modals when clicking outside
