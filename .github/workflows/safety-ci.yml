@@ -5,6 +5,7 @@ on:
     branches: [main, fix/recording-safety-audit]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -56,6 +57,12 @@ jobs:
       - name: Static analysis
         if: always()
         run: go vet ./...
+      - name: Reachable vulnerability scan (govulncheck)
+        if: always()
+        run: |
+          set -euo pipefail
+          go install golang.org/x/vuln/cmd/govulncheck@v1.10.0
+          "$(go env GOPATH)/bin/govulncheck" ./...
       - name: Assert dependency files remain unchanged
         if: always()
         run: git diff --exit-code -- go.mod go.sum
