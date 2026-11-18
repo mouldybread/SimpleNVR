@@ -1,116 +1,38 @@
 # SimpleNVR
 
-SimpleNVR is a lightweight, self-hosted network video recorder. It uses FFmpeg
-to record RTSP streams and provides a browser interface for camera management,
-timeline playback, event review, and MP4 exports. It is designed to work with
-go2rtc and can receive events from Home Assistant.
+SimpleNVR records RTSP cameras with FFmpeg. Use the web interface to manage cameras, play recordings, review events, and export MP4 clips.
 
-## Quick start: local Docker test
+## Try it with Docker
 
-The commands below build from this checkout and use a separate test volume.
-They do not mount an existing recordings directory or publish an image.
+From this checkout, build the image, set an admin password, and start a local test instance:
 
 ```sh
-docker build -t simplenvr:local .
-docker run --rm -it \
-  --mount type=volume,src=simplenvr-local-test,dst=/recordings \
-  simplenvr:local auth set-password admin
-docker run --rm --name simplenvr-local \
-  -p 127.0.0.1:8443:443 \
-  --mount type=volume,src=simplenvr-local-test,dst=/recordings \
-  -v /certs \
-  simplenvr:local
+docker build -t simplenvr:local . &&
+docker run --rm -it -v simplenvr-local-test:/recordings simplenvr:local auth set-password admin &&
+docker run --rm --name simplenvr-local -p 127.0.0.1:8443:443 -v simplenvr-local-test:/recordings -v simplenvr-local-certs:/certs simplenvr:local
 ```
 
-Open `https://localhost:8443/auth/login` on the machine running Docker and sign
-in as `admin`. On first boot, SimpleNVR generates a self-signed HTTPS certificate
-if none is supplied, so expect a browser warning. The password prompt does not
-echo input. Use at least 15 characters. There are no default credentials or
-unauthenticated setup page. The server and the password setup command must use
-the same recordings volume.
+Use a password of at least 15 characters. Open `https://localhost:8443/auth/login` on the Docker host and sign in as `admin`. The default self-signed certificate triggers a browser warning. The named volumes keep your test recordings, settings, login, and certificate between runs. Once the password is set, skip that step on later starts. Do not use your production recordings for this test.
 
-The named test volume retains configuration, credentials, and test recordings
-between runs. The anonymous certificate volume in this example is disposable.
-Do not attach your existing recordings to this test instance.
+## Record and play back
 
-## Recording, playback, and export
+- In Camera Settings, add an RTSP URL or import streams from go2rtc. Choose continuous recording, event-based recording with a prebuffer, or no recording. Adding a camera does not start recording.
+- Live preview requires go2rtc on the host in the camera's RTSP URL, with its HTTP API on port `1984`. The camera name must be unique and match the go2rtc stream name. Direct-camera preview and custom go2rtc HTTP ports are not supported.
+- Use the timeline to find recordings and events. Playback does not automatically skip gaps. Use Downloads to select cameras and a time range for MP4 export.
+- Removing a camera can delete its published recordings. If removal fails or the result is unclear, refresh and check the camera and its recordings before retrying.
 
-- Add cameras manually by RTSP URL or scan a go2rtc instance from Camera Settings.
-- Configure continuous recording, event-based recording with a prebuffer, or no
-  recording. Camera registration and recorder start are separate operations.
-- Browse available recordings by camera and date, seek on the timeline, and
-  review event markers. Do not assume gapless playback or synchronized
-  advancement across cameras. See [timeline behavior](docs/audit/TIMELINE_API.md).
-- Select cameras and a time range in Downloads to prepare monitored MP4 exports.
-  See [export behavior](docs/audit/EXPORT_UI.md) for the supported controls and
-  cut semantics.
-- Live preview supports the documented go2rtc topology: the camera's RTSP URL
-  points to the go2rtc host, its HTTP API is on port `1984`, and the SimpleNVR
-  camera name matches the go2rtc stream name. Direct-camera preview and a custom
-  go2rtc API port are not supported by this proxy. See
-  [live-proxy boundaries](docs/LIVE_PROXY_BOUNDARIES.md).
+## Home Assistant events
 
-Camera removal can delete published recordings. It can also refuse if retained
-evidence or an unexpected directory entry is present. A failed or uncertain
-response does not guarantee that nothing changed: refresh and review the camera
-and recordings before retrying. See
-[camera deletion safety](docs/audit/CAMERA_DELETION_SAFETY.md).
-
-## Authentication and Home Assistant
-
-Browser access requires a session. The `/auth/login` page is the entry point;
-the dashboard and recording files are not public endpoints. Keep HTTPS and
-appropriate network access controls in place. If you reverse proxy SimpleNVR,
-preserve the browser-facing Host header.
-
-For Home Assistant, create an event-only token using the same recordings volume
-as your server. For the local example above:
+Create an event token with the same image and recordings volume used by the server. For the test instance above:
 
 ```sh
-docker run --rm \
-  --mount type=volume,src=simplenvr-local-test,dst=/recordings \
-  simplenvr:local auth rotate-event-token
+docker run --rm -v simplenvr-local-test:/recordings simplenvr:local auth rotate-event-token
 ```
 
-Store the token in Home Assistant secrets. Send `Authorization: Bearer TOKEN`
-with a `POST` to `/api/events/trigger`. The token is only for that endpoint; it
-does not grant access to the dashboard or recordings. Use a certificate your Home
-Assistant instance trusts. See the [authentication guide](docs/AUTHENTICATION.md)
-for password resets, token rotation, and credential storage.
+Store the token in Home Assistant secrets. Send it as `Authorization: Bearer TOKEN` in a `POST` to `/api/events/trigger`. The token does not grant dashboard or recording access. Use HTTPS with a certificate Home Assistant trusts.
 
-## Storage and deployment
+## Before using real recordings
 
-`/recordings` holds application state and media, including camera configuration
-and login credentials. `/certs` holds TLS material. Back up configuration and
-credentials securely, and keep test and production storage separate.
+Use a dedicated, trusted local filesystem for `/recordings`. Verify the intended mount before startup, monitor capacity, and stop the container before changing the mount. Interrupted events can leave staging files; SimpleNVR does not automatically recover or expire them. Test your cameras and storage before relying on the system.
 
-For intended deployment, use a dedicated, trusted local recordings filesystem.
-Verify the mount before container startup, monitor free space and retained
-staging, and stop the container and verify it exited before storage maintenance.
-A free-space check is not a reservation or proof that the intended mount is
-present. The runtime requires compatible Linux procfs and no-replace rename
-behavior. See [storage deployment boundaries](docs/STORAGE_DEPLOYMENT_BOUNDARIES.md)
-for the supported profile and scratch-filesystem check.
-
-Interrupted events can leave staging files for inspection. SimpleNVR does not
-automatically reassemble them or expire staging. A file that exists or plays
-is not proof that all requested footage was captured. Synthetic CI and a local
-smoke test do not qualify live cameras or deployment storage.
-
-## Development and releases
-
-The Docker build includes the Go application, frontend assets, and FFmpeg.
-Go unit and integration tests live alongside the packages they exercise;
-browser and runtime fixture scripts live in `tests/`. See the
-[Safety verification workflow](.github/workflows/safety-ci.yml) for the CI
-checks and their dependencies.
-
-A push of a `v*` tag triggers validation of the tagged commit before the
-[Docker publish workflow](.github/workflows/docker-publish.yml) can publish an
-image to GitHub Container Registry. A local Docker build does not publish.
-
-## Project records
-
-- [Recording-safety audit and historical evidence](docs/audit/README.md)
-- [Disclaimer and limitations](DISCLAIMER.md)
-- [License](LICENSE.md)
+[License](LICENSE.md) | [Disclaimer](DISCLAIMER.md)
