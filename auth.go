@@ -71,9 +71,11 @@ func validUsername(s string) bool {
 
 func newAuth(path string) (*authManager, error) {
  if _, _, err := readAuthConfig(path); err != nil { return nil, fmt.Errorf("authentication configuration unavailable; initialize with 'auth set-password USERNAME': %w", err) }
+ idle, lifetime, err := sessionTimeouts()
+ if err != nil { return nil, err }
  s := scs.New()
- s.Lifetime = 8*time.Hour
- s.IdleTimeout = 20*time.Minute
+ s.Lifetime = lifetime
+ s.IdleTimeout = idle
  s.HashTokenInStore = true
  s.Cookie.Name = "__Host-simplenvr"
  s.Cookie.Path = "/"
@@ -83,6 +85,32 @@ func newAuth(path string) (*authManager, error) {
  s.Cookie.SameSite = http.SameSiteLaxMode
  s.Cookie.Persist = false
  return &authManager{path: path, sessions: s, hashing: make(chan struct{}, 2)}, nil
+}
+
+const (
+ defaultSessionIdleTimeout = 20*time.Minute
+ defaultSessionLifetime = 8*time.Hour
+)
+
+// sessionTimeouts reads NVR_SESSION_IDLE_TIMEOUT and NVR_SESSION_LIFETIME.
+// Unset or blank values keep the defaults; invalid values are rejected so a
+// typo cannot silently weaken or disable session expiry.
+func sessionTimeouts() (idle, lifetime time.Duration, err error) {
+ idle, err = durationFromEnv("NVR_SESSION_IDLE_TIMEOUT", defaultSessionIdleTimeout, time.Minute, 24*time.Hour)
+ if err != nil { return 0, 0, err }
+ lifetime, err = durationFromEnv("NVR_SESSION_LIFETIME", defaultSessionLifetime, 5*time.Minute, 30*24*time.Hour)
+ if err != nil { return 0, 0, err }
+ if idle > lifetime { return 0, 0, fmt.Errorf("NVR_SESSION_IDLE_TIMEOUT (%s) must not exceed NVR_SESSION_LIFETIME (%s)", idle, lifetime) }
+ return idle, lifetime, nil
+}
+
+func durationFromEnv(name string, def, lo, hi time.Duration) (time.Duration, error) {
+ raw := strings.TrimSpace(os.Getenv(name))
+ if raw == "" { return def, nil }
+ d, err := time.ParseDuration(raw)
+ if err != nil { return 0, fmt.Errorf("%s: %q is not a duration such as 45m or 12h", name, raw) }
+ if d < lo || d > hi { return 0, fmt.Errorf("%s: %s is outside the allowed range %s to %s", name, d, lo, hi) }
+ return d, nil
 }
 
 var mutationPaths = map[string]bool{

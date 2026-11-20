@@ -35,6 +35,18 @@ docker compose up -d
 
 Use a password of at least 15 characters. On the Docker host, open `https://localhost:8443/auth/login` and sign in as `admin`. The default self-signed certificate triggers a browser warning. Set the password once; skip that step on later starts. The example listens only on localhost. For a first test, use a fresh recordings directory, not production storage.
 
+## Session timeouts
+
+A session ends after 20 minutes without a request, or 8 hours after sign-in, whichever comes first. To change either limit, set these environment variables on the service and restart it:
+
+```yaml
+    environment:
+      NVR_SESSION_IDLE_TIMEOUT: 45m
+      NVR_SESSION_LIFETIME: 12h
+```
+
+Values are durations such as `30m` or `12h`. The idle timeout must be between 1 minute and 24 hours, the lifetime between 5 minutes and 720 hours, and the idle timeout cannot exceed the lifetime. An invalid value stops startup with an error. Restarting the container ends all current sessions.
+
 ## Record and play back
 
 - In Camera Settings, add an RTSP URL or import streams from go2rtc. Choose continuous recording, event-based recording with a prebuffer, or no recording. Adding a camera does not start recording.
