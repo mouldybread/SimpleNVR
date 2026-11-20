@@ -1,26 +1,39 @@
 // Core functionality: Section management, initialization, utilities
 
+// Protected dashboard requests return 401 rather than a document redirect.
+(function installSessionRedirect() {
+    let redirecting = false;
+    function handleUnauthorized(status, url) {
+        if (status !== 401 || redirecting || !url) return;
+        const target = new URL(url, window.location.href);
+        if (target.origin !== window.location.origin || target.pathname.startsWith('/auth/')) return;
+        redirecting = true;
+        window.location.replace('/auth/login');
+    }
+
+    const fetch = window.fetch.bind(window);
+    window.fetch = async function (...args) {
+        const response = await fetch(...args);
+        handleUnauthorized(response.status, response.url);
+        return response;
+    };
+
+    document.body.addEventListener('htmx:beforeSwap', function(event) {
+        const xhr = event.detail.xhr;
+        if (xhr) handleUnauthorized(xhr.status, xhr.responseURL);
+    });
+})();
+
 // Collapsible section toggle
 function toggleSection(sectionId) {
     const content = document.getElementById(sectionId);
     const icon = document.getElementById(sectionId + '-icon');
-    
-    if (content.classList.contains('collapsed')) {
-        content.classList.remove('collapsed');
-        icon.classList.remove('collapsed');
-        content.style.maxHeight = content.scrollHeight + 'px';
-        // Save expanded state
-        saveSectionState(sectionId, true);
-    } else {
-        content.classList.add('collapsed');
-        icon.classList.add('collapsed');
-        content.style.maxHeight = '0';
-        // Save collapsed state
-        saveSectionState(sectionId, false);
-    }
+    const collapsed = content.classList.toggle('collapsed');
+    icon.classList.toggle('collapsed', collapsed);
+    content.style.maxHeight = collapsed ? '0' : content.scrollHeight + 'px';
+    saveSectionState(sectionId, !collapsed);
 }
 
-// Save section state to localStorage
 function saveSectionState(sectionId, isExpanded) {
     try {
         localStorage.setItem('section_' + sectionId, isExpanded ? 'expanded' : 'collapsed');
@@ -29,19 +42,15 @@ function saveSectionState(sectionId, isExpanded) {
     }
 }
 
-// Load section state from localStorage
 function loadSectionState(sectionId) {
     try {
-        const state = localStorage.getItem('section_' + sectionId);
-        // Default to expanded if no state saved
-        return state === 'collapsed' ? false : true;
+        return localStorage.getItem('section_' + sectionId) !== 'collapsed';
     } catch (e) {
         console.warn('Failed to load section state:', e);
-        return true; // Default to expanded
+        return true;
     }
 }
 
-// Update section height after content changes
 function updateSectionHeight(sectionId) {
     const content = document.getElementById(sectionId);
     if (content && !content.classList.contains('collapsed')) {
@@ -51,37 +60,23 @@ function updateSectionHeight(sectionId) {
     }
 }
 
-// Initialize sections based on saved state
 window.addEventListener('DOMContentLoaded', function() {
     const sections = ['playback-section', 'cameras-section', 'config-section'];
-    
     sections.forEach(function(sectionId) {
         const content = document.getElementById(sectionId);
         const icon = document.getElementById(sectionId + '-icon');
-        
         if (!content || !icon) return;
-        
-        // Load saved state
         const isExpanded = loadSectionState(sectionId);
-        
+        content.classList.toggle('collapsed', !isExpanded);
+        icon.classList.toggle('collapsed', !isExpanded);
+        content.style.maxHeight = isExpanded ? 'none' : '0';
         if (isExpanded) {
-            // Expanded state
-            content.classList.remove('collapsed');
-            icon.classList.remove('collapsed');
-            content.style.maxHeight = 'none';
-            
             setTimeout(function() {
                 content.style.maxHeight = content.scrollHeight + 'px';
             }, 100);
-        } else {
-            // Collapsed state
-            content.classList.add('collapsed');
-            icon.classList.add('collapsed');
-            content.style.maxHeight = '0';
         }
     });
-    
-    // Initialize other modules after htmx settles
+
     setTimeout(function() {
         updateSectionHeight('cameras-section');
         if (typeof populatePlaybackCameras === 'function') {
@@ -90,14 +85,12 @@ window.addEventListener('DOMContentLoaded', function() {
     }, 1000);
 });
 
-// Listen for htmx events to update section heights
 document.body.addEventListener('htmx:afterSwap', function(event) {
     if (event.detail.target.id === 'camera-list') {
         updateSectionHeight('cameras-section');
     }
 });
 
-// Utility: Format file size
 function formatFileSize(bytes) {
     if (bytes === 0) return '0 Bytes';
     const k = 1024;
@@ -106,7 +99,6 @@ function formatFileSize(bytes) {
     return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
 }
 
-// Global keyboard shortcuts
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
         if (typeof closeLiveStream === 'function') closeLiveStream();
