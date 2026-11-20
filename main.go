@@ -96,6 +96,8 @@ func indexHandler(w http.ResponseWriter,r *http.Request) {
 func main() {
  if len(os.Args)>1 && os.Args[1]=="auth" {if err:=authCommand(os.Args[2:]);err!=nil {log.Fatal(err)};return}
  appCtx,stopSignals:=signal.NotifyContext(context.Background(),os.Interrupt,syscall.SIGTERM);defer stopSignals()
+ if err:=ensureBrowserSetup(appCtx,authFile());err!=nil {if appCtx.Err()!=nil {return};log.Fatal("First-run setup: ",err)}
+ if appCtx.Err()!=nil {return}
  auth,err:=newAuth(authFile());if err!=nil {log.Fatal(err)}
  // Saving new session settings asks for the same graceful shutdown as SIGTERM;
  // the container's restart policy then starts the process again.
