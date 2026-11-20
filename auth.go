@@ -10,6 +10,7 @@ import (
  "errors"
  "fmt"
  "io"
+ "mime"
  "net/http"
  "os"
  "path/filepath"
@@ -34,8 +35,13 @@ type authManager struct {
  path string
  sessions *scs.SessionManager
  mu sync.Mutex
+ settingsMu sync.Mutex
  nextLogin time.Time
  hashing chan struct{}
+ // restart asks the process to shut down gracefully so a supervisor (for
+ // example Docker's restart policy) starts it again. It is nil unless main
+ // wires it, so tests and other callers can never stop the process by accident.
+ restart func()
 }
 
 func authFile() string {
@@ -71,9 +77,12 @@ func validUsername(s string) bool {
 
 func newAuth(path string) (*authManager, error) {
  if _, _, err := readAuthConfig(path); err != nil { return nil, fmt.Errorf("authentication configuration unavailable; initialize with 'auth set-password USERNAME': %w", err) }
+ settings, err := loadSessionSettings(sessionSettingsPath(path))
+ if err != nil { return nil, err }
+ idle, lifetime := settings.durations()
  s := scs.New()
- s.Lifetime = 8*time.Hour
- s.IdleTimeout = 20*time.Minute
+ s.Lifetime = lifetime
+ s.IdleTimeout = idle
  s.HashTokenInStore = true
  s.Cookie.Name = "__Host-simplenvr"
  s.Cookie.Path = "/"
@@ -83,6 +92,131 @@ func newAuth(path string) (*authManager, error) {
  s.Cookie.SameSite = http.SameSiteLaxMode
  s.Cookie.Persist = false
  return &authManager{path: path, sessions: s, hashing: make(chan struct{}, 2)}, nil
+}
+
+// Session timeouts are stored beside the credentials file, never inside it:
+// the credentials file's hash is part of every session, so rewriting it would
+// sign everyone out. Changes apply the next time the server starts.
+type sessionSettings struct {
+ IdleMinutes int `json:"idle_minutes"`
+ LifetimeMinutes int `json:"lifetime_minutes"`
+}
+
+type sessionSettingsView struct {
+ IdleMinutes int `json:"idle_minutes"`
+ LifetimeMinutes int `json:"lifetime_minutes"`
+ ActiveIdleMinutes int `json:"active_idle_minutes"`
+ ActiveLifetimeMinutes int `json:"active_lifetime_minutes"`
+ RestartRequired bool `json:"restart_required"`
+}
+
+const (
+ defaultSessionIdleMinutes = 20
+ defaultSessionLifetimeMinutes = 8*60
+ minSessionIdleMinutes = 1
+ maxSessionIdleMinutes = 24*60
+ minSessionLifetimeMinutes = 5
+ maxSessionLifetimeMinutes = 30*24*60
+)
+
+func defaultSessionSettings() sessionSettings {
+ return sessionSettings{IdleMinutes: defaultSessionIdleMinutes, LifetimeMinutes: defaultSessionLifetimeMinutes}
+}
+
+func (s sessionSettings) validate() error {
+ if s.IdleMinutes < minSessionIdleMinutes || s.IdleMinutes > maxSessionIdleMinutes { return fmt.Errorf("idle timeout must be between %d and %d minutes", minSessionIdleMinutes, maxSessionIdleMinutes) }
+ if s.LifetimeMinutes < minSessionLifetimeMinutes || s.LifetimeMinutes > maxSessionLifetimeMinutes { return fmt.Errorf("maximum session length must be between %d and %d minutes", minSessionLifetimeMinutes, maxSessionLifetimeMinutes) }
+ if s.IdleMinutes > s.LifetimeMinutes { return errors.New("idle timeout cannot exceed the maximum session length") }
+ return nil
+}
+
+func (s sessionSettings) durations() (idle, lifetime time.Duration) {
+ return time.Duration(s.IdleMinutes)*time.Minute, time.Duration(s.LifetimeMinutes)*time.Minute
+}
+
+func sessionSettingsPath(authPath string) string {
+ return filepath.Join(filepath.Dir(authPath), "settings.json")
+}
+
+// loadSessionSettings returns the defaults when the file does not exist and an
+// error for anything unreadable or invalid, so a damaged file cannot silently
+// change how long sessions last.
+func loadSessionSettings(path string) (sessionSettings, error) {
+ settings := defaultSessionSettings()
+ info, err := os.Lstat(path)
+ if errors.Is(err, os.ErrNotExist) { return settings, nil }
+ if err != nil { return settings, fmt.Errorf("session settings: %w", err) }
+ if !info.Mode().IsRegular() || info.Size() > 4096 { return settings, errors.New("session settings: file must be a regular file smaller than 4 KiB") }
+ raw, err := os.ReadFile(path)
+ if err != nil { return settings, fmt.Errorf("session settings: %w", err) }
+ dec := json.NewDecoder(strings.NewReader(string(raw)))
+ dec.DisallowUnknownFields()
+ if err = dec.Decode(&settings); err != nil { return settings, fmt.Errorf("session settings: %w", err) }
+ if err = dec.Decode(&struct{}{}); err != io.EOF { return settings, errors.New("session settings: unexpected data after the JSON object") }
+ if err = settings.validate(); err != nil { return settings, fmt.Errorf("session settings: %w", err) }
+ return settings, nil
+}
+
+func writeSessionSettings(path string, settings sessionSettings) error {
+ if err := settings.validate(); err != nil { return err }
+ if err := os.MkdirAll(filepath.Dir(path),0700); err != nil { return err }
+ raw, err := json.MarshalIndent(settings,"","  ")
+ if err != nil { return err }
+ return atomicWrite(path,append(raw,'\n'))
+}
+
+func (a *authManager) sessionSettingsView(saved sessionSettings) sessionSettingsView {
+ active := sessionSettings{IdleMinutes: int(a.sessions.IdleTimeout/time.Minute), LifetimeMinutes: int(a.sessions.Lifetime/time.Minute)}
+ return sessionSettingsView{IdleMinutes: saved.IdleMinutes, LifetimeMinutes: saved.LifetimeMinutes, ActiveIdleMinutes: active.IdleMinutes, ActiveLifetimeMinutes: active.LifetimeMinutes, RestartRequired: saved != active}
+}
+
+// sessionSettingsHandler runs only after the session check in Handler, so the
+// event token and unauthenticated callers never reach it.
+func (a *authManager) sessionSettingsHandler(w http.ResponseWriter, r *http.Request) {
+ file := sessionSettingsPath(a.path)
+ a.settingsMu.Lock()
+ defer a.settingsMu.Unlock()
+ switch r.Method {
+ case http.MethodGet:
+  saved, err := loadSessionSettings(file)
+  if err != nil { http.Error(w,"Unable to read session settings",http.StatusInternalServerError); return }
+  w.Header().Set("Content-Type","application/json; charset=utf-8")
+  json.NewEncoder(w).Encode(a.sessionSettingsView(saved))
+ case http.MethodPost:
+  if mediaType,_,err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mediaType != "application/json" { http.Error(w,"Content-Type must be application/json",http.StatusUnsupportedMediaType); return }
+  r.Body = http.MaxBytesReader(w,r.Body,4096)
+  dec := json.NewDecoder(r.Body)
+  dec.DisallowUnknownFields()
+  var requested sessionSettings
+  if err := dec.Decode(&requested); err != nil { http.Error(w,"Invalid settings request",http.StatusBadRequest); return }
+  if err := dec.Decode(&struct{}{}); err != io.EOF { http.Error(w,"Invalid settings request",http.StatusBadRequest); return }
+  if err := requested.validate(); err != nil { http.Error(w,err.Error(),http.StatusBadRequest); return }
+  if err := writeSessionSettings(file,requested); err != nil { http.Error(w,"Unable to save session settings",http.StatusInternalServerError); return }
+  w.Header().Set("Content-Type","application/json; charset=utf-8")
+  json.NewEncoder(w).Encode(a.sessionSettingsView(requested))
+ default:
+  w.Header().Set("Allow","GET, POST")
+  http.Error(w,"Method not allowed",http.StatusMethodNotAllowed)
+ }
+}
+
+// restartHandler shuts the process down gracefully, but only while the saved
+// session settings differ from the running ones, so it cannot be used as a
+// general-purpose restart button. The response is written before the hook runs.
+func (a *authManager) restartHandler(w http.ResponseWriter, r *http.Request) {
+ if r.Method != http.MethodPost { w.Header().Set("Allow","POST"); http.Error(w,"Method not allowed",http.StatusMethodNotAllowed); return }
+ if mediaType,_,err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mediaType != "application/json" { http.Error(w,"Content-Type must be application/json",http.StatusUnsupportedMediaType); return }
+ a.settingsMu.Lock()
+ defer a.settingsMu.Unlock()
+ restart := a.restart
+ if restart == nil { http.Error(w,"Restart is not available",http.StatusNotImplemented); return }
+ saved, err := loadSessionSettings(sessionSettingsPath(a.path))
+ if err != nil { http.Error(w,"Unable to read session settings",http.StatusInternalServerError); return }
+ if !a.sessionSettingsView(saved).RestartRequired { http.Error(w,"Saved settings already match the running settings",http.StatusConflict); return }
+ w.Header().Set("Content-Type","application/json; charset=utf-8")
+ w.WriteHeader(http.StatusAccepted)
+ json.NewEncoder(w).Encode(map[string]bool{"restarting":true})
+ go func() { time.Sleep(500*time.Millisecond); restart() }()
 }
 
 var mutationPaths = map[string]bool{
@@ -111,6 +245,8 @@ func (a *authManager) Handler(next http.Handler) http.Handler {
    if r.URL.Path == "/" && r.Method == http.MethodGet { http.Redirect(w,r,"/auth/login",http.StatusSeeOther) } else { http.Error(w,"Unauthorized",http.StatusUnauthorized) }
    return
   }
+  if r.URL.Path == "/api/settings/session" { a.sessionSettingsHandler(w,r); return }
+  if r.URL.Path == "/api/settings/restart" { a.restartHandler(w,r); return }
   if mutationPaths[r.URL.Path] {
    if r.Method != http.MethodPost { w.Header().Set("Allow","POST"); http.Error(w,"Method not allowed",http.StatusMethodNotAllowed); return }
   } else if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -122,7 +258,55 @@ func (a *authManager) Handler(next http.Handler) http.Handler {
   clean.Header.Del("Cookie")
   next.ServeHTTP(w,clean)
  })
- return http.NewCrossOriginProtection().Handler(a.sessions.LoadAndSave(protected))
+ normal := a.sessions.LoadAndSave(protected)
+ return http.NewCrossOriginProtection().Handler(http.HandlerFunc(
+  func(w http.ResponseWriter, r *http.Request) {
+   if r.URL.Path == "/auth/session" {
+    a.checkSession(w, r)
+    return
+   }
+   normal.ServeHTTP(w, r)
+  },
+ ))
+}
+
+func (a *authManager) checkSession(w http.ResponseWriter, r *http.Request) {
+ w.Header().Set("Cache-Control", "no-store")
+ w.Header().Set("X-Content-Type-Options", "nosniff")
+
+ if r.Method != http.MethodGet {
+  w.Header().Set("Allow", http.MethodGet)
+  http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+  return
+ }
+
+ cfg, stamp, err := readAuthConfig(a.path)
+ if err != nil {
+  http.Error(w, "Authentication unavailable", http.StatusServiceUnavailable)
+  return
+ }
+
+ cookie, err := r.Cookie(a.sessions.Cookie.Name)
+ if err != nil || cookie.Value == "" {
+  w.WriteHeader(http.StatusUnauthorized)
+  return
+ }
+
+ // Load without committing or writing a cookie. This request must not
+ // move the idle deadline.
+ ctx, err := a.sessions.Load(r.Context(), cookie.Value)
+ if err != nil {
+  http.Error(w, "Authentication unavailable", http.StatusServiceUnavailable)
+  return
+ }
+
+ if a.sessions.GetString(ctx, "user") != cfg.Username ||
+  a.sessions.GetString(ctx, "credential_version") != stamp {
+  w.WriteHeader(http.StatusUnauthorized)
+  return
+ }
+
+ w.WriteHeader(http.StatusNoContent)
 }
 
 func eventTokenMatches(token, digest string) bool {
@@ -165,7 +349,7 @@ func (a *authManager) logout(w http.ResponseWriter, r *http.Request) {
   io.WriteString(w,`<!doctype html><title>SimpleNVR logout</title><form method="post" action="/auth/logout"><button>Sign out</button></form>`)
   return
  }
- if r.Method != http.MethodPost { w.Header().Set("Allow","GET, POST"); http.Error(w,"Method not allowed",405); return }
+ if r.Method != http.MethodPost { w.Header().Set("Allow","POST"); http.Error(w,"Method not allowed",405); return }
  if err := a.sessions.Destroy(r.Context()); err != nil { http.Error(w,"Unable to end session",500); return }
  http.Redirect(w,r,"/auth/login",http.StatusSeeOther)
 }
