@@ -10,6 +10,7 @@ import (
  "errors"
  "fmt"
  "io"
+ "mime"
  "net/http"
  "os"
  "path/filepath"
@@ -34,6 +35,7 @@ type authManager struct {
  path string
  sessions *scs.SessionManager
  mu sync.Mutex
+ settingsMu sync.Mutex
  nextLogin time.Time
  hashing chan struct{}
 }
@@ -71,8 +73,9 @@ func validUsername(s string) bool {
 
 func newAuth(path string) (*authManager, error) {
  if _, _, err := readAuthConfig(path); err != nil { return nil, fmt.Errorf("authentication configuration unavailable; initialize with 'auth set-password USERNAME': %w", err) }
- idle, lifetime, err := sessionTimeouts()
+ settings, err := loadSessionSettings(sessionSettingsPath(path))
  if err != nil { return nil, err }
+ idle, lifetime := settings.durations()
  s := scs.New()
  s.Lifetime = lifetime
  s.IdleTimeout = idle
@@ -87,30 +90,110 @@ func newAuth(path string) (*authManager, error) {
  return &authManager{path: path, sessions: s, hashing: make(chan struct{}, 2)}, nil
 }
 
-const (
- defaultSessionIdleTimeout = 20*time.Minute
- defaultSessionLifetime = 8*time.Hour
-)
-
-// sessionTimeouts reads NVR_SESSION_IDLE_TIMEOUT and NVR_SESSION_LIFETIME.
-// Unset or blank values keep the defaults; invalid values are rejected so a
-// typo cannot silently weaken or disable session expiry.
-func sessionTimeouts() (idle, lifetime time.Duration, err error) {
- idle, err = durationFromEnv("NVR_SESSION_IDLE_TIMEOUT", defaultSessionIdleTimeout, time.Minute, 24*time.Hour)
- if err != nil { return 0, 0, err }
- lifetime, err = durationFromEnv("NVR_SESSION_LIFETIME", defaultSessionLifetime, 5*time.Minute, 30*24*time.Hour)
- if err != nil { return 0, 0, err }
- if idle > lifetime { return 0, 0, fmt.Errorf("NVR_SESSION_IDLE_TIMEOUT (%s) must not exceed NVR_SESSION_LIFETIME (%s)", idle, lifetime) }
- return idle, lifetime, nil
+// Session timeouts are stored beside the credentials file, never inside it:
+// the credentials file's hash is part of every session, so rewriting it would
+// sign everyone out. Changes apply the next time the server starts.
+type sessionSettings struct {
+ IdleMinutes int `json:"idle_minutes"`
+ LifetimeMinutes int `json:"lifetime_minutes"`
 }
 
-func durationFromEnv(name string, def, lo, hi time.Duration) (time.Duration, error) {
- raw := strings.TrimSpace(os.Getenv(name))
- if raw == "" { return def, nil }
- d, err := time.ParseDuration(raw)
- if err != nil { return 0, fmt.Errorf("%s: %q is not a duration such as 45m or 12h", name, raw) }
- if d < lo || d > hi { return 0, fmt.Errorf("%s: %s is outside the allowed range %s to %s", name, d, lo, hi) }
- return d, nil
+type sessionSettingsView struct {
+ IdleMinutes int `json:"idle_minutes"`
+ LifetimeMinutes int `json:"lifetime_minutes"`
+ ActiveIdleMinutes int `json:"active_idle_minutes"`
+ ActiveLifetimeMinutes int `json:"active_lifetime_minutes"`
+ RestartRequired bool `json:"restart_required"`
+}
+
+const (
+ defaultSessionIdleMinutes = 20
+ defaultSessionLifetimeMinutes = 8*60
+ minSessionIdleMinutes = 1
+ maxSessionIdleMinutes = 24*60
+ minSessionLifetimeMinutes = 5
+ maxSessionLifetimeMinutes = 30*24*60
+)
+
+func defaultSessionSettings() sessionSettings {
+ return sessionSettings{IdleMinutes: defaultSessionIdleMinutes, LifetimeMinutes: defaultSessionLifetimeMinutes}
+}
+
+func (s sessionSettings) validate() error {
+ if s.IdleMinutes < minSessionIdleMinutes || s.IdleMinutes > maxSessionIdleMinutes { return fmt.Errorf("idle timeout must be between %d and %d minutes", minSessionIdleMinutes, maxSessionIdleMinutes) }
+ if s.LifetimeMinutes < minSessionLifetimeMinutes || s.LifetimeMinutes > maxSessionLifetimeMinutes { return fmt.Errorf("maximum session length must be between %d and %d minutes", minSessionLifetimeMinutes, maxSessionLifetimeMinutes) }
+ if s.IdleMinutes > s.LifetimeMinutes { return errors.New("idle timeout cannot exceed the maximum session length") }
+ return nil
+}
+
+func (s sessionSettings) durations() (idle, lifetime time.Duration) {
+ return time.Duration(s.IdleMinutes)*time.Minute, time.Duration(s.LifetimeMinutes)*time.Minute
+}
+
+func sessionSettingsPath(authPath string) string {
+ return filepath.Join(filepath.Dir(authPath), "settings.json")
+}
+
+// loadSessionSettings returns the defaults when the file does not exist and an
+// error for anything unreadable or invalid, so a damaged file cannot silently
+// change how long sessions last.
+func loadSessionSettings(path string) (sessionSettings, error) {
+ settings := defaultSessionSettings()
+ info, err := os.Lstat(path)
+ if errors.Is(err, os.ErrNotExist) { return settings, nil }
+ if err != nil { return settings, fmt.Errorf("session settings: %w", err) }
+ if !info.Mode().IsRegular() || info.Size() > 4096 { return settings, errors.New("session settings: file must be a regular file smaller than 4 KiB") }
+ raw, err := os.ReadFile(path)
+ if err != nil { return settings, fmt.Errorf("session settings: %w", err) }
+ dec := json.NewDecoder(strings.NewReader(string(raw)))
+ dec.DisallowUnknownFields()
+ if err = dec.Decode(&settings); err != nil { return settings, fmt.Errorf("session settings: %w", err) }
+ if err = dec.Decode(&struct{}{}); err != io.EOF { return settings, errors.New("session settings: unexpected data after the JSON object") }
+ if err = settings.validate(); err != nil { return settings, fmt.Errorf("session settings: %w", err) }
+ return settings, nil
+}
+
+func writeSessionSettings(path string, settings sessionSettings) error {
+ if err := settings.validate(); err != nil { return err }
+ if err := os.MkdirAll(filepath.Dir(path),0700); err != nil { return err }
+ raw, err := json.MarshalIndent(settings,"","  ")
+ if err != nil { return err }
+ return atomicWrite(path,append(raw,'\n'))
+}
+
+func (a *authManager) sessionSettingsView(saved sessionSettings) sessionSettingsView {
+ active := sessionSettings{IdleMinutes: int(a.sessions.IdleTimeout/time.Minute), LifetimeMinutes: int(a.sessions.Lifetime/time.Minute)}
+ return sessionSettingsView{IdleMinutes: saved.IdleMinutes, LifetimeMinutes: saved.LifetimeMinutes, ActiveIdleMinutes: active.IdleMinutes, ActiveLifetimeMinutes: active.LifetimeMinutes, RestartRequired: saved != active}
+}
+
+// sessionSettingsHandler runs only after the session check in Handler, so the
+// event token and unauthenticated callers never reach it.
+func (a *authManager) sessionSettingsHandler(w http.ResponseWriter, r *http.Request) {
+ file := sessionSettingsPath(a.path)
+ a.settingsMu.Lock()
+ defer a.settingsMu.Unlock()
+ switch r.Method {
+ case http.MethodGet:
+  saved, err := loadSessionSettings(file)
+  if err != nil { http.Error(w,"Unable to read session settings",http.StatusInternalServerError); return }
+  w.Header().Set("Content-Type","application/json; charset=utf-8")
+  json.NewEncoder(w).Encode(a.sessionSettingsView(saved))
+ case http.MethodPost:
+  if mediaType,_,err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mediaType != "application/json" { http.Error(w,"Content-Type must be application/json",http.StatusUnsupportedMediaType); return }
+  r.Body = http.MaxBytesReader(w,r.Body,4096)
+  dec := json.NewDecoder(r.Body)
+  dec.DisallowUnknownFields()
+  var requested sessionSettings
+  if err := dec.Decode(&requested); err != nil { http.Error(w,"Invalid settings request",http.StatusBadRequest); return }
+  if err := dec.Decode(&struct{}{}); err != io.EOF { http.Error(w,"Invalid settings request",http.StatusBadRequest); return }
+  if err := requested.validate(); err != nil { http.Error(w,err.Error(),http.StatusBadRequest); return }
+  if err := writeSessionSettings(file,requested); err != nil { http.Error(w,"Unable to save session settings",http.StatusInternalServerError); return }
+  w.Header().Set("Content-Type","application/json; charset=utf-8")
+  json.NewEncoder(w).Encode(a.sessionSettingsView(requested))
+ default:
+  w.Header().Set("Allow","GET, POST")
+  http.Error(w,"Method not allowed",http.StatusMethodNotAllowed)
+ }
 }
 
 var mutationPaths = map[string]bool{
@@ -139,6 +222,7 @@ func (a *authManager) Handler(next http.Handler) http.Handler {
    if r.URL.Path == "/" && r.Method == http.MethodGet { http.Redirect(w,r,"/auth/login",http.StatusSeeOther) } else { http.Error(w,"Unauthorized",http.StatusUnauthorized) }
    return
   }
+  if r.URL.Path == "/api/settings/session" { a.sessionSettingsHandler(w,r); return }
   if mutationPaths[r.URL.Path] {
    if r.Method != http.MethodPost { w.Header().Set("Allow","POST"); http.Error(w,"Method not allowed",http.StatusMethodNotAllowed); return }
   } else if r.Method != http.MethodGet && r.Method != http.MethodHead {
