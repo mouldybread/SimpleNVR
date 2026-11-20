@@ -135,7 +135,7 @@ func main() {
  http.HandleFunc("/api/recordings/cleanup-orphaned",cleanupOrphanedRecordingsHandler)
  http.Handle("/static/",http.StripPrefix("/static/",http.FileServer(http.Dir("static"))))
  http.HandleFunc("/",indexHandler)
- gate:=newShutdownGate(auth.Handler(http.DefaultServeMux))
+ gate:=newShutdownGate(themedLoginPage(auth.Handler(http.DefaultServeMux)))
  server:=&http.Server{Addr:":443",Handler:gate,ReadHeaderTimeout:10*time.Second,ReadTimeout:30*time.Second,IdleTimeout:60*time.Second,MaxHeaderBytes:32768}
  autoStartRecordings()
  gate.startBackgroundJob(func(ctx context.Context){cleanupRoutine(ctx,nvr)})
