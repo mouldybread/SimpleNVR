@@ -2,7 +2,7 @@ name: Safety verification
 
 on:
   push:
-    branches: [main, fix/recording-safety-audit]
+    branches: [main, fix/recording-safety-audit, fix/session-expiry-redirect]
   pull_request:
   workflow_dispatch:
   workflow_call:
