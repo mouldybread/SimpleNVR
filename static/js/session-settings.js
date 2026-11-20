@@ -1,5 +1,9 @@
-// Session timeout settings. Values are saved on the server and apply the next time it restarts.
+// Session timeout settings. Saving restarts SimpleNVR so the new values take effect.
 const SESSION_SETTINGS_URL = '/api/settings/session';
+const SESSION_RESTART_URL = '/api/settings/restart';
+const SESSION_SAVE_LABEL = 'Save and restart';
+let sessionSettingsArmed = false;
+let sessionSettingsArmTimer = null;
 
 function sessionSettingsNode(tag, text = '', css = '') {
     const node = document.createElement(tag);
@@ -23,6 +27,14 @@ function sessionSettingsField(id, label, min, max) {
     return row;
 }
 
+function disarmSessionSettings() {
+    if (sessionSettingsArmTimer !== null) clearTimeout(sessionSettingsArmTimer);
+    sessionSettingsArmTimer = null;
+    sessionSettingsArmed = false;
+    const button = document.getElementById('session-settings-save');
+    if (button) button.textContent = SESSION_SAVE_LABEL;
+}
+
 function createSessionSettingsModal() {
     const modal = document.createElement('div');
     modal.id = 'session-settings-modal'; modal.className = 'modal';
@@ -33,13 +45,13 @@ function createSessionSettingsModal() {
     close.addEventListener('click', closeSessionSettings);
     content.appendChild(close);
     content.appendChild(sessionSettingsNode('h2', 'Session Settings'));
-    content.appendChild(sessionSettingsNode('p', 'Changes are saved now and apply the next time SimpleNVR restarts. Restarting signs everyone out.', 'color: #ccc; margin: 10px 0;'));
+    content.appendChild(sessionSettingsNode('p', 'Saving restarts SimpleNVR so the new values take effect. Live views and exports stop, recording pauses until it is back, and everyone is signed out.', 'color: #ccc; margin: 10px 0;'));
     content.appendChild(sessionSettingsField('session-idle-minutes', 'Idle timeout (minutes, 1 to 1440)', 1, 1440));
     content.appendChild(sessionSettingsField('session-lifetime-minutes', 'Maximum session length (minutes, 5 to 43200)', 5, 43200));
     const status = sessionSettingsNode('p', '', 'color: #ccc; margin: 10px 0; min-height: 1.4em;');
     status.id = 'session-settings-status'; status.setAttribute('aria-live', 'polite');
     content.appendChild(status);
-    const save = sessionSettingsNode('button', 'Save');
+    const save = sessionSettingsNode('button', SESSION_SAVE_LABEL);
     save.id = 'session-settings-save'; save.type = 'button'; save.className = 'btn btn-primary';
     save.addEventListener('click', saveSessionSettings);
     content.appendChild(save);
@@ -55,7 +67,7 @@ function applySessionSettings(data) {
     document.getElementById('session-idle-minutes').value = String(data.idle_minutes);
     document.getElementById('session-lifetime-minutes').value = String(data.lifetime_minutes);
     sessionSettingsStatus(data.restart_required
-        ? `Running now: idle ${data.active_idle_minutes} min, maximum ${data.active_lifetime_minutes} min. Restart SimpleNVR to apply the saved values.`
+        ? `Running now: idle ${data.active_idle_minutes} min, maximum ${data.active_lifetime_minutes} min. The saved values apply after a restart.`
         : `Running with idle ${data.active_idle_minutes} min and maximum ${data.active_lifetime_minutes} min.`);
 }
 
@@ -70,6 +82,18 @@ async function fetchSessionSettings() {
     }
 }
 
+async function sessionSettingsPost(url, body) {
+    const response = await fetch(url, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+    });
+    const text = await response.text();
+    if (!response.ok) throw new Error(text.trim() || 'HTTP ' + response.status);
+    return text;
+}
+
 async function saveSessionSettings() {
     const idle = Number(document.getElementById('session-idle-minutes').value);
     const lifetime = Number(document.getElementById('session-lifetime-minutes').value);
@@ -78,22 +102,32 @@ async function saveSessionSettings() {
         return;
     }
     const button = document.getElementById('session-settings-save');
+    if (!sessionSettingsArmed) {
+        sessionSettingsArmed = true;
+        button.textContent = 'Click Again to Confirm';
+        sessionSettingsStatus('This restarts SimpleNVR now. Click again within 3 seconds to continue.');
+        sessionSettingsArmTimer = setTimeout(disarmSessionSettings, 3000);
+        return;
+    }
+    disarmSessionSettings();
     button.disabled = true;
+    let saved = false;
     try {
-        const response = await fetch(SESSION_SETTINGS_URL, {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ idle_minutes: idle, lifetime_minutes: lifetime })
-        });
-        const text = await response.text();
-        if (!response.ok) throw new Error(text.trim() || 'HTTP ' + response.status);
-        applySessionSettings(JSON.parse(text));
-        if (typeof showSuccess === 'function') showSuccess('Session settings saved; restart SimpleNVR to apply them.');
+        const data = JSON.parse(await sessionSettingsPost(SESSION_SETTINGS_URL, { idle_minutes: idle, lifetime_minutes: lifetime }));
+        applySessionSettings(data);
+        saved = true;
+        if (!data.restart_required) {
+            sessionSettingsStatus('No change from the running settings, so no restart is needed.');
+            button.disabled = false;
+            return;
+        }
+        await sessionSettingsPost(SESSION_RESTART_URL, {});
+        sessionSettingsStatus('Restarting... you will be returned to the sign-in page. If SimpleNVR does not come back, its container has no automatic restart policy; start it again manually.');
+        if (typeof showInfo === 'function') showInfo('SimpleNVR is restarting to apply the new session settings.');
     } catch (error) {
-        sessionSettingsStatus('Not saved: ' + error.message);
-        if (typeof showError === 'function') showError('Session settings were not saved: ' + error.message);
-    } finally {
+        const message = (saved ? 'Saved, but the restart failed: ' : 'Not saved: ') + error.message;
+        sessionSettingsStatus(message);
+        if (typeof showError === 'function') showError(message);
         button.disabled = false;
     }
 }
@@ -105,6 +139,7 @@ function openSessionSettings() {
 }
 
 function closeSessionSettings() {
+    disarmSessionSettings();
     const modal = document.getElementById('session-settings-modal');
     if (!modal) return;
     modal.classList.remove('active'); modal.style.display = 'none';

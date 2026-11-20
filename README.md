@@ -37,7 +37,7 @@ Use a password of at least 15 characters. On the Docker host, open `https://loca
 
 ## Session timeouts
 
-A session ends after 20 minutes without a request, or 8 hours after sign-in, whichever comes first. To change either limit, click the lock button in the dashboard header, enter the new values in minutes, and save. The values are stored in `settings.json` in the same directory as the credentials file (`/recordings/.auth/settings.json` by default) and take effect the next time SimpleNVR restarts. Restarting the container ends all current sessions.
+A session ends after 20 minutes without a request, or 8 hours after sign-in, whichever comes first. To change either limit, click the lock button in the dashboard header, enter the new values in minutes, and choose Save and restart (click twice to confirm). SimpleNVR saves the values to `settings.json` in the same directory as the credentials file (`/recordings/.auth/settings.json` by default), shuts down gracefully, and relies on the container's restart policy to start it again. Keep `restart: unless-stopped` (or `always`) in your Compose file: with `on-failure` or no policy the container stays stopped until you start it. The restart stops live views and exports, pauses recording until SimpleNVR is back, and ends all current sessions. Nothing restarts if the saved values already match the running ones.
 
 The idle timeout must be between 1 minute and 24 hours, and the maximum session length between 5 minutes and 30 days. The idle timeout cannot exceed the maximum session length. If `settings.json` is damaged or out of range, SimpleNVR refuses to start until you fix or delete it.
 

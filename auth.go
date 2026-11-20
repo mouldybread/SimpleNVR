@@ -38,6 +38,10 @@ type authManager struct {
  settingsMu sync.Mutex
  nextLogin time.Time
  hashing chan struct{}
+ // restart asks the process to shut down gracefully so a supervisor (for
+ // example Docker's restart policy) starts it again. It is nil unless main
+ // wires it, so tests and other callers can never stop the process by accident.
+ restart func()
 }
 
 func authFile() string {
@@ -196,6 +200,25 @@ func (a *authManager) sessionSettingsHandler(w http.ResponseWriter, r *http.Requ
  }
 }
 
+// restartHandler shuts the process down gracefully, but only while the saved
+// session settings differ from the running ones, so it cannot be used as a
+// general-purpose restart button. The response is written before the hook runs.
+func (a *authManager) restartHandler(w http.ResponseWriter, r *http.Request) {
+ if r.Method != http.MethodPost { w.Header().Set("Allow","POST"); http.Error(w,"Method not allowed",http.StatusMethodNotAllowed); return }
+ if mediaType,_,err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mediaType != "application/json" { http.Error(w,"Content-Type must be application/json",http.StatusUnsupportedMediaType); return }
+ a.settingsMu.Lock()
+ defer a.settingsMu.Unlock()
+ restart := a.restart
+ if restart == nil { http.Error(w,"Restart is not available",http.StatusNotImplemented); return }
+ saved, err := loadSessionSettings(sessionSettingsPath(a.path))
+ if err != nil { http.Error(w,"Unable to read session settings",http.StatusInternalServerError); return }
+ if !a.sessionSettingsView(saved).RestartRequired { http.Error(w,"Saved settings already match the running settings",http.StatusConflict); return }
+ w.Header().Set("Content-Type","application/json; charset=utf-8")
+ w.WriteHeader(http.StatusAccepted)
+ json.NewEncoder(w).Encode(map[string]bool{"restarting":true})
+ go func() { time.Sleep(500*time.Millisecond); restart() }()
+}
+
 var mutationPaths = map[string]bool{
  "/api/cameras/add":true, "/api/cameras/delete":true, "/api/cameras/delete-all":true,
  "/api/cameras/update-retention":true, "/api/cameras/update-retention-all":true,
@@ -223,6 +246,7 @@ func (a *authManager) Handler(next http.Handler) http.Handler {
    return
   }
   if r.URL.Path == "/api/settings/session" { a.sessionSettingsHandler(w,r); return }
+  if r.URL.Path == "/api/settings/restart" { a.restartHandler(w,r); return }
   if mutationPaths[r.URL.Path] {
    if r.Method != http.MethodPost { w.Header().Set("Allow","POST"); http.Error(w,"Method not allowed",http.StatusMethodNotAllowed); return }
   } else if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -325,7 +349,7 @@ func (a *authManager) logout(w http.ResponseWriter, r *http.Request) {
   io.WriteString(w,`<!doctype html><title>SimpleNVR logout</title><form method="post" action="/auth/logout"><button>Sign out</button></form>`)
   return
  }
- if r.Method != http.MethodPost { w.Header().Set("Allow","GET, POST"); http.Error(w,"Method not allowed",405); return }
+ if r.Method != http.MethodPost { w.Header().Set("Allow","POST"); http.Error(w,"Method not allowed",405); return }
  if err := a.sessions.Destroy(r.Context()); err != nil { http.Error(w,"Unable to end session",500); return }
  http.Redirect(w,r,"/auth/login",http.StatusSeeOther)
 }

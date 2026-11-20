@@ -97,12 +97,15 @@ func main() {
  if len(os.Args)>1 && os.Args[1]=="auth" {if err:=authCommand(os.Args[2:]);err!=nil {log.Fatal(err)};return}
  appCtx,stopSignals:=signal.NotifyContext(context.Background(),os.Interrupt,syscall.SIGTERM);defer stopSignals()
  auth,err:=newAuth(authFile());if err!=nil {log.Fatal(err)}
+ // Saving new session settings asks for the same graceful shutdown as SIGTERM;
+ // the container's restart policy then starts the process again.
+ auth.restart=stopSignals
  templates,err=template.ParseGlob("templates/*.html");if err!=nil {log.Fatal("Failed to load templates: ",err)}
  if err=nvr.load();err!=nil {log.Fatal("Refusing startup with invalid camera configuration: ",err)}
  log.Printf("Loaded %d cameras from disk",len(nvr.cameras))
  recoverBeforeStartup(appCtx,nvr)
  if appCtx.Err()!=nil {return}
- if err=os.MkdirAll("/certs",0755);err!=nil {log.Fatal(err)}
+ if err=os.MkdirAll("/certs",0755);err!=nil {log.Fatal("Failed to initialize TLS certificates: ",err)}
  certPath,keyPath:=filepath.Join("/certs","cert.pem"),filepath.Join("/certs","key.pem")
  if err=ensureTLSCertificates(certPath,keyPath);err!=nil {log.Fatal("Failed to initialize TLS certificates: ",err)}
  if appCtx.Err()!=nil {return}
