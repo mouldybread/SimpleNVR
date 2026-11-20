@@ -74,7 +74,7 @@ func (s *firstRunSetup) ServeHTTP(w http.ResponseWriter,r *http.Request) {
  s.completed = true
  s.code = ""
  w.Header().Set("Content-Type","text/html; charset=utf-8")
- io.WriteString(w,`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Setup complete</title><h1>Administrator created</h1><p>SimpleNVR is starting. <a href="/auth/login">Continue to sign in</a>. If startup is still finishing, wait a moment and try again.</p></html>`)
+ io.WriteString(w,`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SimpleNVR setup complete</title><style>`+themedLoginCSS+`</style></head><body><main><h1>SimpleNVR</h1><section class="login-card" aria-labelledby="complete-title"><h2 id="complete-title">Administrator created</h2><p>Your account is ready. SimpleNVR is finishing startup.</p><p>If the sign-in page is not ready yet, wait a moment and try again.</p><form method="get" action="/auth/login"><button type="submit">Continue to sign in</button></form></section></main></body></html>`)
  close(s.ready)
 }
 
