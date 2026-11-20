@@ -122,7 +122,55 @@ func (a *authManager) Handler(next http.Handler) http.Handler {
   clean.Header.Del("Cookie")
   next.ServeHTTP(w,clean)
  })
- return http.NewCrossOriginProtection().Handler(a.sessions.LoadAndSave(protected))
+ normal := a.sessions.LoadAndSave(protected)
+ return http.NewCrossOriginProtection().Handler(http.HandlerFunc(
+  func(w http.ResponseWriter, r *http.Request) {
+   if r.URL.Path == "/auth/session" {
+    a.checkSession(w, r)
+    return
+   }
+   normal.ServeHTTP(w, r)
+  },
+ ))
+}
+
+func (a *authManager) checkSession(w http.ResponseWriter, r *http.Request) {
+ w.Header().Set("Cache-Control", "no-store")
+ w.Header().Set("X-Content-Type-Options", "nosniff")
+
+ if r.Method != http.MethodGet {
+  w.Header().Set("Allow", http.MethodGet)
+  http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+  return
+ }
+
+ cfg, stamp, err := readAuthConfig(a.path)
+ if err != nil {
+  http.Error(w, "Authentication unavailable", http.StatusServiceUnavailable)
+  return
+ }
+
+ cookie, err := r.Cookie(a.sessions.Cookie.Name)
+ if err != nil || cookie.Value == "" {
+  w.WriteHeader(http.StatusUnauthorized)
+  return
+ }
+
+ // Load without committing or writing a cookie. This request must not
+ // move the idle deadline.
+ ctx, err := a.sessions.Load(r.Context(), cookie.Value)
+ if err != nil {
+  http.Error(w, "Authentication unavailable", http.StatusServiceUnavailable)
+  return
+ }
+
+ if a.sessions.GetString(ctx, "user") != cfg.Username ||
+  a.sessions.GetString(ctx, "credential_version") != stamp {
+  w.WriteHeader(http.StatusUnauthorized)
+  return
+ }
+
+ w.WriteHeader(http.StatusNoContent)
 }
 
 func eventTokenMatches(token, digest string) bool {

@@ -22,6 +22,33 @@
         const xhr = event.detail.xhr;
         if (xhr) handleUnauthorized(xhr.status, xhr.responseURL);
     });
+
+    let checking = false;
+
+    async function checkSession() {
+        if (redirecting || checking || document.visibilityState !== 'visible') return;
+
+        checking = true;
+        try {
+            const response = await fetch('/auth/session', {
+                credentials: 'same-origin',
+                cache: 'no-store',
+                redirect: 'error',
+                signal: AbortSignal.timeout(10000),
+            });
+            if (response.status === 401) {
+                handleUnauthorized(401, window.location.href);
+            }
+        } catch {
+            // A failed check isn't evidence that the session expired.
+        } finally {
+            checking = false;
+        }
+    }
+
+    document.addEventListener('visibilitychange', checkSession);
+    window.setInterval(checkSession, 30_000);
+    void checkSession();
 })();
 
 // Collapsible section toggle
