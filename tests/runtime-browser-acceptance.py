@@ -242,7 +242,7 @@ async def run(args):
             url = await page.evaluate("exportUiBatch.jobs[0].url")
             received_hash = await page.evaluate("async url => {const bytes=await (await fetch(url)).arrayBuffer();return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))).map(x=>x.toString(16).padStart(2,'0')).join('');}", url)
             async with page.expect_download() as pending:
-                await page.get_by_role("button", name="Hand received file to browser", exact=True).click()
+                await page.get_by_role("button", name="Download prepared video", exact=True).click()
             download = await pending.value
             assert await download.failure() is None
             saved = args.evidence / "browser-saved-trim.mp4"
