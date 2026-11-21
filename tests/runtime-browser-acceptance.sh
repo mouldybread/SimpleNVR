@@ -5,9 +5,11 @@ evidence=${2:?evidence directory required}
 work=$(mktemp -d "${RUNNER_TEMP:-/tmp}/simplenvr-runtime-browser.XXXXXX")
 state=$work/state
 bin=$work/bin
+scratch=$work/exports
 name=simplenvr-runtime-browser-$$
-mkdir -p "$state/id_browser" "$bin" "$evidence"
+mkdir -p "$state/id_browser" "$bin" "$scratch" "$evidence"
 chmod 755 "$work" "$bin"
+chmod 700 "$scratch"
 cleanup() {
   docker logs "$name" > "$evidence/runtime-container.log" 2>&1 || true
   docker rm -f "$name" >/dev/null 2>&1 || true
@@ -16,12 +18,14 @@ cleanup() {
 trap cleanup EXIT
 timeout --kill-after=2 20 python3 -m unittest discover -s tests -p 'test_browser_playback*.py' -v \
   2>&1 | tee "$evidence/playback-edge-unit-tests.log"
-# Generate fixtures using the actual runtime image codecs, not host FFmpeg.
+# Deterministic non-reordered video exercises the supported subsection-copy path.
+# The Go suite separately retains reordered-video refusal and accurate rendering.
 for stamp in 120000 120008; do
   docker run --rm --network none --entrypoint /usr/bin/ffmpeg \
     --mount "type=bind,src=$state,dst=/recordings" "$image" \
     -nostdin -v error -f lavfi -i testsrc2=size=256x144:rate=10 \
-    -t 8 -c:v libx264 -threads 1 -g 10 -pix_fmt yuv420p -an -movflags +faststart \
+    -t 8 -c:v libx264 -threads 1 -bf 0 -g 10 -sc_threshold 0 \
+    -pix_fmt yuv420p -an -movflags +faststart \
     -y "/recordings/id_browser/20261110_${stamp}_fixture.mp4"
 done
 docker run --rm --network none --entrypoint /usr/bin/ffmpeg \
@@ -36,8 +40,7 @@ cam={'id':'id_browser','name':'Browser fixture','rtsp_url':'rtsp://unused-fixtur
 with open(sys.argv[1],'w') as f:
     json.dump({'cameras':{'id_browser':cam},'camera_order':['id_browser'],'events':[]},f)
 PY
-# Pace real FFmpeg input so cancellation can observe an active runtime render.
-# Preserve all application arguments and execute the real binary, not a fake MP4.
+# Pace real FFmpeg, preserving application arguments and process ownership.
 cat > "$bin/ffmpeg" <<'SH'
 #!/bin/sh
 exec /usr/bin/ffmpeg -re "$@"
@@ -47,13 +50,17 @@ SIMPLENVR_E2E_PASSWORD=$(python3 -c 'import secrets; print(secrets.token_urlsafe
 export SIMPLENVR_E2E_PASSWORD
 printf '%s\n' "$SIMPLENVR_E2E_PASSWORD" | docker run --rm -i \
   --mount "type=bind,src=$state,dst=/recordings" "$image" auth set-password ci-browser
-sudo chown -R 0:0 "$state"
-sudo chmod 700 "$state"
+sudo chown -R 0:0 "$state" "$scratch"
+sudo chmod 700 "$state" "$scratch"
 docker run -d --name "$name" --read-only --cap-drop ALL --cap-add NET_BIND_SERVICE \
   --security-opt no-new-privileges --tmpfs /certs:rw,nosuid,nodev,noexec \
   --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
   -p 127.0.0.1::443 \
   --env PATH=/fixture-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  --env NVR_EXPORT_SCRATCH_DIR=/exports \
+  --env NVR_EXPORT_MAX_BYTES=33554432 --env NVR_EXPORT_TOTAL_BYTES=67108864 \
+  --env NVR_EXPORT_MAX_JOBS=8 --env NVR_EXPORT_PARALLEL=1 \
+  --mount "type=bind,src=$scratch,dst=/exports" \
   --mount "type=bind,src=$state,dst=/recordings" \
   --mount "type=bind,src=$bin,dst=/fixture-bin,readonly" "$image" >/dev/null
 ready=0

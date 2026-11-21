@@ -1,28 +1,45 @@
-"""Live HTTPS application/runtime-image acceptance; no routed responses or DOM stubs."""
+"""Real HTTPS application acceptance: native playback and prepared export jobs.
+No application functions, media events or HTTP response bodies are replaced.
+"""
 import argparse
 import asyncio
 import hashlib
 import json
 import os
 import subprocess
-from pathlib import Path
 from collections import deque
-from urllib.parse import urlencode, urlsplit
+from pathlib import Path
+from urllib.parse import urlsplit
 from playwright.async_api import async_playwright, Error as PlaywrightError
 from browser_ci_diagnostics import BrowserNetworkEvidence, observe_login_post
+from prepared_export_protocol import create_ready, release
 
 BASE = "2026-11-10T12:00:"
 CAMERA = "id_browser"
 
 
-def export_path(start, end):
-    return "/api/download?" + urlencode({"camera_id": CAMERA, "start_time": start, "end_time": end})
+def media_metadata(path):
+    subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-xerror", "-i", str(path), "-f", "null", "-"], check=True, timeout=30, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    result = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,codec_name,duration:format=duration", "-of", "json", str(path)], check=True, timeout=10, capture_output=True)
+    return json.loads(result.stdout)
+
+
+def duration(metadata):
+    videos = [stream for stream in metadata["streams"] if stream["codec_type"] == "video"]
+    assert len(videos) == 1 and videos[0]["codec_name"] == "h264", metadata
+    return float(videos[0].get("duration", metadata["format"]["duration"]))
 
 
 def decode(path):
-    subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", str(path), "-f", "null", "-"], check=True, timeout=30, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    result = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", str(path)], check=True, timeout=10, capture_output=True)
-    return float(json.loads(result.stdout)["format"]["duration"])
+    # Preserve the baseline helper's float-returning interface for edge suites.
+    return duration(media_metadata(path))
+
+
+def packet_hashes(path):
+    result = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_packets", "-show_data_hash", "sha256", "-show_entries", "packet=data_hash", "-of", "json", str(path)], check=True, timeout=15, capture_output=True)
+    packets = json.loads(result.stdout)["packets"]
+    assert packets and all(p.get("data_hash", "").startswith("SHA256:") for p in packets)
+    return [p["data_hash"] for p in packets]
 
 
 def ffmpeg_pids(container):
@@ -79,7 +96,6 @@ async def private_media_preflight(context, origin):
 
 async def submit_login_once(page, origin, report, network_events):
     root = origin + "/"
-    # Observe the real form POST; never resubmit credentials on a network error.
     response = await observe_login_post(page, origin, report)
     location = response.headers.get("location", "")
     report["login_response"] = {"status": response.status, "redirect_path": urlsplit(location).path}
@@ -91,18 +107,16 @@ async def submit_login_once(page, origin, report, network_events):
         changed = any(event.get("event") == "requestfailed" and event.get("path") == "/" and event.get("method") == "GET" and event.get("resource_type") == "document" and event.get("failure") == "net::ERR_NETWORK_CHANGED" for event in network_events)
         if not changed:
             raise
-        # Only this observed error, after a proven successful POST, gets one
-        # GET recovery. A second failure propagates; there is no retry loop.
         report["login_navigation_recovery"] = {"method": "GET", "path": "/", "attempt": 1, "reason": "net::ERR_NETWORK_CHANGED", "completed": False}
         recovered = await page.goto(root, wait_until="load")
-        assert recovered is not None and recovered.status == 200 and page.url == root, "Login GET recovery did not return the authenticated root document"
+        assert recovered is not None and recovered.status == 200 and page.url == root
         report["login_navigation_recovery"]["completed"] = True
     roots = [event for event in network_events if event.get("event") == "response" and event.get("path") == "/" and event.get("method") == "GET" and event.get("resource_type") == "document"]
-    assert page.url == root and roots and roots[-1]["status"] == 200, "Authenticated root navigation did not complete successfully"
+    assert page.url == root and roots and roots[-1]["status"] == 200
 
 
 async def application_ready(page, origin):
-    assert page.url == origin + "/", "Application readiness requires the authenticated root document"
+    assert page.url == origin + "/"
     await page.wait_for_function("typeof allCameras !== 'undefined' && allCameras.some(c => c.id === 'id_browser')")
     picker = page.locator("#timeline-date-picker")
     await picker.fill("2026-11-10")
@@ -112,36 +126,173 @@ async def application_ready(page, origin):
     assert await page.locator("#video-grid video").count() == 1
 
 
-async def prepare_ui(page, start, end):
+async def prepare_ui(page, start, end, mode="accurate"):
     if await page.locator("#download-modal").is_visible():
         await page.locator("#download-modal .close").click()
     await page.locator("#download-btn").click()
-    # There are no short-range text inputs in this UI. Select a deterministic
-    # range through its real application state, without replacing functions.
-    await page.evaluate("([start,end]) => {downloadCameras=['id_browser']; downloadStartTime=new Date(start); downloadEndTime=new Date(end);}", [start, end])
+    await page.evaluate("([start,end]) => {downloadCameras=['id_browser'];downloadStartTime=new Date(start);downloadEndTime=new Date(end);updateDownloadTimeDisplay();}", [start, end])
+    await page.locator("#download-export-mode").select_option(mode)
     await page.locator("#export-start-btn").click()
+
+
+async def native_playback(page, report):
+    checks = report["checks_passed"]
+    report["before_first_seek"] = await playback_snapshot(page)
+    await page.evaluate("() => {videoPlayers[0].muted=true;seekToTime(new Date('2026-11-10T12:00:01Z'));}")
+    await page.wait_for_function("videoPlayers[0]?.error || (videoPlayers[0]?.readyState >= 2 && videoPlayers[0].currentTime > 1.3 && !videoPlayers[0].paused)")
+    state = await playback_snapshot(page)
+    report["first_playback"] = state
+    video = state["players"][0]
+    assert video["error"] is None and video["readyState"] >= 2 and video["currentTime"] > 1.3 and not video["paused"], state
+    frames = await page.evaluate("() => new Promise((resolve,reject) => {const timer=setTimeout(()=>reject(new Error('No native decoded-frame callback within 5 seconds')),5000);videoPlayers[0].requestVideoFrameCallback((_,m) => {clearTimeout(timer);resolve({frames:m.presentedFrames,width:m.width,height:m.height});});})")
+    assert frames["frames"] > 0 and frames["width"] == 256 and frames["height"] == 144
+    report["native_frame_witness"] = frames
+    checks.append("native-h264-playback-decoded-frames")
+    await page.evaluate("togglePlayPause()")
+    paused = await page.evaluate("videoPlayers[0].currentTime")
+    await page.wait_for_timeout(400)
+    assert await page.evaluate("videoPlayers[0].paused && !isPlaying")
+    assert abs(await page.evaluate("videoPlayers[0].currentTime") - paused) < 0.1
+    await page.evaluate("togglePlayPause()")
+    await page.wait_for_function("before => !videoPlayers[0].paused && videoPlayers[0].currentTime > before + 0.2", arg=paused)
+    checks.append("application-pause-resume-with-native-clock")
+    await page.evaluate("() => {videoPlayers[0].currentTime=7.6;}")
+    await page.wait_for_function("videoPlayers[0]?.currentSrc.includes('20261110_120008') && videoPlayers[0].currentTime > 0.1 && !videoPlayers[0].paused")
+    checks.append("native-ended-contiguous-clip-transition")
+    await page.evaluate("() => {videoPlayers[0].src='/recordings/id_browser/missing.mp4';}")
+    await page.wait_for_function("!isPlaying && videoPlayers[0].error !== null")
+    await page.evaluate("seekToTime(new Date('2026-11-10T12:00:01Z'))")
+    await page.wait_for_function("videoPlayers[0]?.readyState >= 2 && !videoPlayers[0].paused && videoPlayers[0].currentTime > 1.2 && !videoPlayers[0].error")
+    checks.append("native-404-media-failure-and-application-retry")
+    await page.evaluate("togglePlayPause()")
+
+
+async def exports(page, context, p, args, report):
+    checks, request = report["checks_passed"], context.request
+    selection = {"camera_id": CAMERA, "start_time": BASE + "00Z", "end_time": BASE + "16Z", "mode": "copy"}
+    anonymous = await p.request.new_context(ignore_https_errors=True)
+    try:
+        for path in ("/api/exports/status?id=" + "a"*64, "/api/exports/download?id=" + "a"*64, "/recordings/id_browser/20261110_120000_fixture.mp4"):
+            response = await anonymous.get(args.origin + path)
+            assert response.status == 401
+            assert response.headers.get("content-type", "").split(";")[0] != "video/mp4"
+        for path, body in (("/api/exports/create", selection), ("/api/exports/cancel", {"id": "a"*64})):
+            assert (await anonymous.post(args.origin + path, data=body)).status == 401
+    finally:
+        await anonymous.dispose()
+    checks.append("unauthenticated-prepared-routes-and-private-media-refused")
+
+    whole = await create_ready(request, args.origin, selection)
+    response = await request.get(args.origin + whole["download_url"])
+    assert response.status == 200 and response.headers["content-type"].split(";")[0] == "video/mp4"
+    raw = await response.body()
+    assert len(raw) == whole["bytes"]
+    saved = args.evidence / "runtime-whole-copy.mp4"
+    saved.write_bytes(raw)
+    assert abs(duration(await asyncio.to_thread(media_metadata, saved)) - 16) < 0.3
+    sources = []
+    for stamp in ("120000", "120008"):
+        source = args.evidence / (stamp + "-source.mp4")
+        fetched = await request.get(args.origin + f"/recordings/id_browser/20261110_{stamp}_fixture.mp4")
+        assert fetched.status == 200
+        source.write_bytes(await fetched.body())
+        sources.extend(await asyncio.to_thread(packet_hashes, source))
+    assert await asyncio.to_thread(packet_hashes, saved) == sources, "whole-copy video payload changed"
+    head = await request.head(args.origin + whole["download_url"])
+    assert head.status == 200 and int(head.headers["content-length"]) == len(raw)
+    part = await request.get(args.origin + whole["download_url"], headers={"Range": "bytes=0-11"})
+    assert part.status == 206 and await part.body() == raw[:12]
+    assert part.headers["content-range"] == f"bytes 0-11/{len(raw)}"
+    await release(request, args.origin, whole)
+    checks.append("prepared-copy-packet-hashes-decode-head-range-and-release")
+
+    response = await request.post(args.origin + "/api/exports/create", data={**selection, "start_time": BASE + "15Z", "end_time": BASE + "20Z"})
+    assert response.status == 409 and response.headers.get("x-export-plan-status") == "gap"
+    assert response.headers.get("content-type", "").split(";")[0] != "video/mp4"
+    checks.append("prepared-gap-refused-without-download")
+
+    audio = await create_ready(request, args.origin, {**selection, "mode": "accurate", "start_time": "2026-11-10T12:30:00.5Z", "end_time": "2026-11-10T12:30:03.5Z"})
+    response = await request.get(args.origin + audio["download_url"])
+    assert response.status == 200
+    audio_path = args.evidence / "accurate-audio.mp4"
+    audio_path.write_bytes(await response.body())
+    metadata = await asyncio.to_thread(media_metadata, audio_path)
+    assert abs(duration(metadata) - 3) < 0.3
+    tracks = [s for s in metadata["streams"] if s["codec_type"] == "audio"]
+    assert len(tracks) == 1 and tracks[0]["codec_name"] == "aac"
+    assert abs(float(tracks[0]["duration"]) - 3) < 0.25
+    await release(request, args.origin, audio)
+    checks.append("prepared-accurate-audio-track-duration-and-decode")
+
+    start, end = BASE + "00.5Z", BASE + "15.5Z"
+    await prepare_ui(page, start, end, "copy")
+    await page.wait_for_selector('.export-job[data-state="awaiting-consent"]', timeout=90000)
+    assert await page.evaluate("exportUiBatch.jobs[0].serverId === null && exportUiBatch.jobs[0].url === null")
+    assert "AAC packet" in await page.locator(".export-job").inner_text()
+    await page.locator(".export-job").get_by_role("button", name="Cancel", exact=True).click()
+    await page.wait_for_function("!exportUiBatch.running && exportUiBatch.jobs[0].state === 'canceled'")
+    checks.append("real-copy-proposal-cancel-before-job")
+
+    await prepare_ui(page, start, end, "copy")
+    await page.wait_for_selector('.export-job[data-state="awaiting-consent"]', timeout=90000)
+    async with page.expect_response(lambda r: urlsplit(r.url).path == "/api/exports/create" and r.status == 202) as accepted:
+        await page.get_by_role("button", name="Use proposed copy range", exact=True).click()
+    assert (await accepted.value).status == 202
+    await page.wait_for_selector('.export-job[data-state="ready"]', timeout=90000)
+    assert await page.evaluate("exportUiBatch.jobs[0].mode") == "copy"
+    await page.get_by_role("button", name="Release prepared file / continue", exact=True).click()
+    await page.wait_for_function("!exportUiBatch.running")
+    checks.append("real-copy-proposal-explicit-approval-and-release")
+
+    await prepare_ui(page, start, end, "accurate")
+    pids = await wait_pids(args.container, True)
+    await page.locator(".export-job").get_by_role("button", name="Cancel", exact=True).click()
+    await page.wait_for_selector('.export-job[data-state="canceled"]')
+    await page.wait_for_function("!exportUiBatch.running")
+    await wait_pids(args.container, False)
+    assert await page.evaluate("exportUiBatch.jobs[0].url") is None
+    report["canceled_runtime_ffmpeg_pids"] = pids
+    checks.append("ui-cancel-active-paced-runtime-render-and-child-reap")
+
+    await prepare_ui(page, start, end, "accurate")
+    await page.wait_for_selector('.export-job[data-state="ready"]', timeout=90000)
+    assert "re-encoded" in await page.locator(".export-job").inner_text()
+    url = await page.evaluate("exportUiBatch.jobs[0].url")
+    assert url.startswith("/api/exports/download?id=") and not url.startswith("blob:")
+    response = await request.get(args.origin + url)
+    assert response.status == 200
+    received_hash = hashlib.sha256(await response.body()).hexdigest()
+    async with page.expect_download() as pending:
+        await page.get_by_role("button", name="Download prepared video", exact=True).click()
+    download = await pending.value
+    assert await download.failure() is None
+    saved = args.evidence / "browser-saved-trim.mp4"
+    await download.save_as(saved)
+    assert hashlib.sha256(saved.read_bytes()).hexdigest() == received_hash
+    span = duration(await asyncio.to_thread(media_metadata, saved))
+    assert abs(span - 15) < 0.3, span
+    assert "not verified" in await page.locator(".export-job").inner_text()
+    await page.get_by_role("button", name="Release prepared file / continue", exact=True).click()
+    await page.wait_for_function("!exportUiBatch.running && exportUiBatch.jobs[0].url === null")
+    assert (await request.get(args.origin + url)).status == 404
+    await wait_pids(args.container, False)
+    checks.append("real-ui-save-hash-duration-decode-and-server-release")
+    report.update({"saved_trim_sha256": received_hash, "saved_trim_duration_seconds": span})
 
 
 async def run(args):
     args.evidence.mkdir(parents=True, exist_ok=True)
-    report = {"commit": args.commit, "image_id": args.image_id, "backend": "real HTTPS runtime container", "routed_responses": False, "checks_passed": [], "status": "failed", "limits": "Synthetic H264/AAC files, headless Chromium, test-directed seek/range selection. No live RTSP, OS save dialog, late transport truncation, metadata-delay or autoplay-denial acceptance."}
-    checks = report["checks_passed"]
-    password = os.environ["SIMPLENVR_E2E_PASSWORD"]
+    report = {"commit": args.commit, "image_id": args.image_id, "backend": "real HTTPS runtime container", "routed_responses": False, "checks_passed": [], "status": "failed", "runtime_qualified": False, "cleanup_authorized": False, "limits": "Synthetic non-reordered H264/AAC; headless Chrome; deterministic state-directed ranges. No live RTSP, OS save dialogs, multi-GiB or full-resolution camera qualification."}
     async with BrowserNetworkEvidence(args.evidence, args.origin) as diagnostics, async_playwright() as p:
         browser = await p.chromium.launch(channel="chrome", headless=True)
-        report["browser"] = browser.version
-        report["browser_channel"] = "chrome"
-        report["playwright_version"] = diagnostics.playwright_version
-        report["network_diagnostics"] = "browser-network-evidence.json"
+        report.update({"browser": browser.version, "browser_channel": "chrome", "playwright_version": diagnostics.playwright_version, "network_diagnostics": "browser-network-evidence.json"})
         context = await browser.new_context(ignore_https_errors=True, accept_downloads=True, timezone_id="UTC")
-        page = None
-        errors = []
-        media_network = deque(maxlen=100)
-        def remember_response(response):
+        page, errors, media_network = None, [], deque(maxlen=100)
+        def remember(response):
             path = urlsplit(response.url).path
             if path.startswith('/recordings/') or path in ('/api/timeline/recordings', '/auth/login', '/'):
                 media_network.append({"event":"response","path":path,"method":response.request.method,"status":response.status,"resource_type":response.request.resource_type})
-        def remember_failure(request):
+        def failed(request):
             path = urlsplit(request.url).path
             if path.startswith('/recordings/') or path in ('/api/timeline/recordings', '/auth/login', '/'):
                 media_network.append({"event":"requestfailed","path":path,"method":request.method,"resource_type":request.resource_type,"failure":request.failure})
@@ -149,117 +300,25 @@ async def run(args):
             context.set_default_timeout(30000)
             page = await context.new_page()
             await diagnostics.attach(context, page)
-            report["codec_support"] = await page.evaluate("""() => {
-                const video=document.createElement('video');
-                return {h264:video.canPlayType('video/mp4; codecs="avc1.64000a"'),aac:video.canPlayType('audio/mp4; codecs="mp4a.40.2"')};
-            }""")
-            assert report["codec_support"]["h264"], "Selected Chrome channel lacks required H264 support: " + json.dumps(report["codec_support"])
-            page.on("pageerror", lambda error: errors.append(str(error)[:1000]) if len(errors)<30 else None)
-            page.on("response", remember_response)
-            page.on("requestfailed", remember_failure)
+            report["codec_support"] = await page.evaluate("() => {const v=document.createElement('video');return {h264:v.canPlayType('video/mp4; codecs=\"avc1.64000a\"'),aac:v.canPlayType('audio/mp4; codecs=\"mp4a.40.2\"')};}")
+            assert report["codec_support"]["h264"]
+            page.on("pageerror", lambda e: errors.append(str(e)[:1000]) if len(errors) < 30 else None)
+            page.on("response", remember)
+            page.on("requestfailed", failed)
             await page.goto(args.origin + "/auth/login")
             await page.locator('[name="username"]').fill("ci-browser")
-            await page.locator('[name="password"]').fill(password)
+            await page.locator('[name="password"]').fill(os.environ["SIMPLENVR_E2E_PASSWORD"])
             await submit_login_once(page, args.origin, report, media_network)
-            checks.append("real-login-form-session")
+            report["checks_passed"].append("real-login-form-session")
             await application_ready(page, args.origin)
-            checks.append("real-camera-template-and-timeline")
+            report["checks_passed"].append("real-camera-template-and-timeline")
             report["private_media_preflight"] = await private_media_preflight(context, args.origin)
-            checks.append("authenticated-private-media-range-preflight")
-            report["before_first_seek"] = await playback_snapshot(page)
-
-            await page.evaluate("() => {videoPlayers[0].muted=true; seekToTime(new Date('2026-11-10T12:00:01Z'));}")
-            await page.wait_for_function("videoPlayers[0]?.error || (videoPlayers[0]?.readyState >= 2 && videoPlayers[0].currentTime > 1.3 && !videoPlayers[0].paused)")
-            state = await playback_snapshot(page)
-            report["first_playback"] = state
-            video = state["players"][0]
-            assert video["error"] is None and video["readyState"] >= 2 and video["currentTime"] > 1.3 and not video["paused"], state
-            frames = await page.evaluate("() => new Promise((resolve,reject) => {const timer=setTimeout(()=>reject(new Error('No native decoded-frame callback within 5 seconds')),5000);videoPlayers[0].requestVideoFrameCallback((_,m) => {clearTimeout(timer);resolve({frames:m.presentedFrames,width:m.width,height:m.height});});})")
-            assert frames["frames"] > 0 and frames["width"] == 256 and frames["height"] == 144
-            checks.append("native-h264-playback-decoded-frames")
-            await page.evaluate("togglePlayPause()")
-            paused = await page.evaluate("videoPlayers[0].currentTime")
-            await page.wait_for_timeout(400)
-            assert await page.evaluate("videoPlayers[0].paused && !isPlaying")
-            assert abs(await page.evaluate("videoPlayers[0].currentTime") - paused) < 0.1
-            await page.evaluate("togglePlayPause()")
-            await page.wait_for_function("before => !videoPlayers[0].paused && videoPlayers[0].currentTime > before + 0.2", arg=paused)
-            checks.append("application-pause-resume-with-native-clock")
-            await page.evaluate("() => {videoPlayers[0].currentTime=7.6;}")
-            await page.wait_for_function("videoPlayers[0]?.currentSrc.includes('20261110_120008') && videoPlayers[0].currentTime > 0.1 && !videoPlayers[0].paused")
-            checks.append("native-ended-contiguous-clip-transition")
-            # A real 404 and native media error, not a dispatched fake event.
-            await page.evaluate("() => {videoPlayers[0].src='/recordings/id_browser/missing.mp4';}")
-            await page.wait_for_function("!isPlaying && videoPlayers[0].error !== null")
-            await page.evaluate("seekToTime(new Date('2026-11-10T12:00:01Z'))")
-            await page.wait_for_function("videoPlayers[0]?.readyState >= 2 && !videoPlayers[0].paused && videoPlayers[0].currentTime > 1.2 && !videoPlayers[0].error")
-            checks.append("native-404-media-failure-and-application-retry")
-            await page.evaluate("togglePlayPause()")
-
-            anonymous = await p.request.new_context(ignore_https_errors=True)
-            try:
-                for path in [export_path(BASE + "00Z", BASE + "16Z"), "/recordings/id_browser/20261110_120000_fixture.mp4"]:
-                    response = await anonymous.get(args.origin + path)
-                    assert response.status == 401
-                    assert response.headers.get("content-type", "").split(";")[0] != "video/mp4"
-            finally:
-                await anonymous.dispose()
-            checks.append("unauthenticated-export-and-private-media-refused")
-
-            response = await context.request.get(args.origin + export_path(BASE + "00Z", BASE + "16Z"), timeout=90000)
-            assert response.status == 200, (response.status, await response.text())
-            assert response.headers.get("x-export-range-policy") == "whole-clips-untrimmed"
-            whole = args.evidence / "runtime-whole-copy.mp4"
-            whole.write_bytes(await response.body())
-            duration = await asyncio.to_thread(decode, whole)
-            assert abs(duration - 16) < 0.3, duration
-            checks.append("runtime-whole-clip-export-external-decode")
-
-            for start, end, status, header, value in [
-                (BASE + "15Z", BASE + "20Z", 409, "x-export-plan-status", "gap"),
-                ("2026-11-10T12:30:00.5Z", "2026-11-10T12:30:03.5Z", 422, "x-export-trim-status", "unsupported"),
-            ]:
-                response = await context.request.get(args.origin + export_path(start, end), timeout=30000)
-                assert response.status == status, (response.status, await response.text())
-                assert response.headers.get(header) == value
-                assert response.headers.get("content-type", "").split(";")[0] != "video/mp4"
-            checks.append("runtime-gap-and-audio-trim-refusals")
-
-            start, end = BASE + "00.5Z", BASE + "15.5Z"
-            await prepare_ui(page, start, end)
-            pids = await wait_pids(args.container, True)
-            await page.locator(".export-job").get_by_role("button", name="Cancel", exact=True).click()
-            await page.wait_for_selector('.export-job[data-state="canceled"]')
-            await page.wait_for_function("!exportUiBatch.running")
-            await wait_pids(args.container, False)
-            assert await page.evaluate("exportUiBatch.jobs[0].url") is None
-            report["canceled_runtime_ffmpeg_pids"] = pids
-            checks.append("ui-cancel-active-paced-runtime-render-and-child-reap")
-
-            await prepare_ui(page, start, end)
-            await page.wait_for_selector('.export-job[data-state="ready"]', timeout=90000)
-            assert "Frame-granular trim" in await page.locator(".export-job").inner_text()
-            url = await page.evaluate("exportUiBatch.jobs[0].url")
-            received_hash = await page.evaluate("async url => {const bytes=await (await fetch(url)).arrayBuffer();return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))).map(x=>x.toString(16).padStart(2,'0')).join('');}", url)
-            async with page.expect_download() as pending:
-                await page.get_by_role("button", name="Download prepared video", exact=True).click()
-            download = await pending.value
-            assert await download.failure() is None
-            saved = args.evidence / "browser-saved-trim.mp4"
-            await download.save_as(saved)
-            assert hashlib.sha256(saved.read_bytes()).hexdigest() == received_hash
-            duration = await asyncio.to_thread(decode, saved)
-            assert abs(duration - 15) < 0.3, duration
-            assert "not verified" in await page.locator(".export-job").inner_text()
-            await page.get_by_role("button", name="Release prepared file / continue", exact=True).click()
-            await page.wait_for_function("!exportUiBatch.running && exportUiBatch.jobs[0].url === null")
-            assert await page.evaluate("async url => {try{await fetch(url);return false;}catch(_){return true;}}", url)
-            await wait_pids(args.container, False)
-            checks.append("real-ui-trim-save-hash-duration-decode-and-object-url-release")
-            report.update({"saved_trim_sha256": received_hash, "saved_trim_duration_seconds": duration, "native_frame_witness": frames})
+            report["checks_passed"].append("authenticated-private-media-range-preflight")
+            await native_playback(page, report)
+            await exports(page, context, p, args, report)
             assert not errors, errors
             report["status"] = "passed-with-navigation-recovery" if report.get("login_navigation_recovery") else "passed"
-        except Exception as error:
+        except BaseException as error:
             report["failure"] = type(error).__name__ + ": " + str(error)[:2000]
             if page is not None:
                 try:
@@ -268,17 +327,16 @@ async def run(args):
                     report["diagnostic_failure"] = str(diagnostic_error)[:1000]
             raise
         finally:
-            report["page_errors"] = errors
-            report["media_network"] = list(media_network)
-            print(json.dumps({key:report[key] for key in ["status", "checks_passed", "browser", "browser_channel", "playwright_version", "network_diagnostics", "codec_support", "login_submission", "login_response", "login_navigation_failure", "login_navigation_recovery", "failure", "failure_playback_snapshot", "private_media_preflight", "page_errors", "media_network"] if key in report}, indent=2), flush=True)
+            report["page_errors"], report["media_network"] = errors, list(media_network)
             (args.evidence / "runtime-browser-report.json").write_text(json.dumps(report, indent=2) + "\n")
+            print(json.dumps(report, indent=2), flush=True)
             await context.close()
             await browser.close()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    for name in ["origin", "container", "commit", "image-id"]:
+    for name in ("origin", "container", "commit", "image-id"):
         parser.add_argument("--" + name, required=True)
     parser.add_argument("--evidence", type=Path, required=True)
     asyncio.run(run(parser.parse_args()))
