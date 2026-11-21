@@ -1,46 +1,38 @@
-# Large-media export implementation status
+# Large-media exports: work in progress
 
-This branch remains work in progress, not a completed or release-ready export redesign.
+Do not release this branch as the completed export redesign.
 
 ## Implemented
 
-- Bounded disk-backed prepared-output job store, owner checks, independent seekable readers, cancellation, expiry and shutdown joining.
-- Authenticated POST /api/exports/create and /api/exports/cancel.
-- Authenticated GET/HEAD /api/exports/status?id=ID and /api/exports/download?id=ID. Downloads use ServeContent and independent SectionReaders for HTTP Range requests, not browser Blobs.
-- Owners are derived from session identity, session token and credential version. Another login cannot inherit jobs. Event tokens cannot access these endpoints. Existing cross-origin protection applies to mutations.
-- Startup and shutdown lifecycle integration. Active requests are canceled and drained, then output leases and background preparations are joined.
-- The current renderer is reused with pinned-input revalidation, safe generic job failures and prepared-output duration probing. Its input restrictions remain unchanged.
+- Bounded disk-backed job store, random IDs, owner checks, independent seekable readers, cancellation, expiry and shutdown joining.
+- Authenticated POST /api/exports/create and /api/exports/cancel, plus GET/HEAD /api/exports/status?id=ID and /api/exports/download?id=ID. Event tokens cannot access these routes; jobs are bound to session and credential version.
+- Startup and shutdown integration. Download responses use ServeContent with Range support.
+- Browser UI creates jobs, polls state, and offers a normal same-origin download. Page JavaScript does not fetch/buffer video or impose the old 64 MiB cap. Control responses are bounded to 8 KiB.
+- Range controls are retained. Cameras are processed sequentially; the next job starts after release or expiry of the prepared file.
+- Cancel/release requires server acknowledgement; failures remain visible with a retry control. Lost creation responses are not retried automatically. Navigation leaves jobs to server expiry rather than canceling a download during handoff.
 
-## Opt-in configuration
+## Configuration
 
-Set NVR_EXPORT_SCRATCH_DIR to an existing absolute directory on a dedicated trusted scratch mount, e.g. /exports. Mount adequate disk space there; do not use a tmpfs or the container writable layer for large exports. The directory must be outside /recordings and must not overlap camera directories or resolve through symlinks. The service makes a private temporary subdirectory. With the variable unset, only the new endpoints are disabled (503); existing downloads continue unchanged. Invalid configured limits or unavailable configured storage prevent startup.
+Mount trusted disk-backed scratch storage outside /recordings and camera directories (for example /exports) and set NVR_EXPORT_SCRATCH_DIR=/exports. It must exist and must not resolve through symlinks. Without it the new endpoints return 503; the job UI reports that configuration is required and does not fall back to the old Blob path. Invalid configured limits/storage fail startup. Do not put GiB exports in a tmpfs or container writable layer.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| NVR_EXPORT_MAX_BYTES | 8589934592 | Maximum prepared output per job (8 GiB) |
+| NVR_EXPORT_MAX_BYTES | 8589934592 | Per-job prepared output (8 GiB) |
 | NVR_EXPORT_TOTAL_BYTES | 17179869184 | Aggregate job-output reservation (16 GiB) |
-| NVR_EXPORT_MAX_JOBS | 8 | Maximum retained job records |
+| NVR_EXPORT_MAX_JOBS | 8 | Retained records |
 | NVR_EXPORT_PARALLEL | 1 | Concurrent preparations |
-| NVR_EXPORT_TTL | 30m | Queue/processing expiry; retention resets on completion |
+| NVR_EXPORT_TTL | 30m | Processing expiry; retention resets on completion |
 | NVR_EXPORT_PREPARE_TIMEOUT | 30m | Preparation deadline including queue wait |
 
-Each job reserves its maximum output allowance, so defaults admit at most two reservations. Active expired downloads remain charged until release. Intermediate files used by the legacy trim renderer retain their existing separate bounds; this reservation is not a physical disk reservation or a bound on every filesystem allocation. Monitor free space. No originals are modified by the export path. Jobs are in memory and do not survive restart.
+Each admitted job reserves its maximum output; defaults allow at most two reservations. Active expired downloads remain charged until their leases end. Legacy trim intermediates retain separate existing bounds. Reservations are not physical disk reservations or a bound on all filesystem allocations. Monitor free space. Jobs do not survive restart.
 
-## API
+POST create JSON contains camera_id, start_time and end_time (ordered RFC3339 timestamps). A 202 response has id, state, message, bytes, expires_at and a Location status URL. Ready status adds download_url. POST cancel uses {"id":"JOB_ID"} and confirms with 204. Subsequent requests require the creating session. Cancellation/expiry prevent new leases; already-started responses may continue. Logout and credential changes block subsequent requests, not necessarily existing responses.
 
-POST create with application/json:
+## Still required before release
 
-```json
-{"camera_id":"CAMERA_ID","start_time":"2026-11-21T00:00:00Z","end_time":"2026-11-21T00:01:00Z"}
-```
+- Original-file delivery, compatible audio/video stream-copy assembly, and consent for adjusted keyframe ranges. The current renderer and its audio/pixel-format/frame-rate restrictions are unchanged.
+- Optional accurate audio-preserving trimming and representative media validation.
+- Migrate the real Chrome and routed browser acceptance harnesses from Blob URLs to job create/status/download/release semantics; enable scratch mounts in runtime fixtures. Existing browser harnesses still contain old assumptions and are not expected to pass this intermediate branch. Do not delete their media, hash, duration, playback or cancellation checks.
+- Real large-file, slow-client, media, Range, authenticated-session and shutdown runtime checks.
 
-A 202 response contains id, state, message, bytes and expires_at, with a Location status URL. Poll status; only ready jobs expose download_url. Download that same-origin URL with the same authenticated session. POST cancel with {"id":"JOB_ID"}; success is 204. Cancellation and expiry prevent new downloads; already acquired download leases are released when their requests finish. Logout/credential changes block subsequent requests but do not promise immediate revocation of an existing response.
-
-## Remaining
-
-- Original-file delivery, compatible audio/video stream-copy assembly and explicit consent for keyframe-adjusted ranges.
-- Optional accurate audio-preserving trimming, full-range input handling and representative media validation.
-- Browser job UI replacing the 64 MiB Blob workflow and corresponding real-browser acceptance updates.
-- Full HTTP/media/large-transfer/slow-client/shutdown and runtime acceptance validation.
-
-Tests added for authentication, token scope, CSRF, strict request validation, session isolation, logout/credential changes, Range/HEAD downloads, cancellation and shutdown. Go tests have not been run in the assistant environment.
+JavaScript syntax and the updated Node export UI/range regressions passed locally in UTC and America/Chicago. The 5 GiB test uses reported size metadata, not an actual 5 GiB transfer. Go and real-browser tests have not been run here.
