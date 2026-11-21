@@ -47,11 +47,25 @@ func (e *continuousRecordingError) Unwrap() []error {return e.causes}
 
 var describeFailure = regexp.MustCompile(`(?m)method DESCRIBE failed: ([1-5][0-9]{2})(?:[ (]|$)`)
 
+// continuousAttemptResult classifies using the contexts' current state. Callers
+// that validate or publish after capture must use continuousAttemptOutcome with
+// the capture error observed when the capture process returned.
 func continuousAttemptResult(parent,segment context.Context,runErr,publicationErr error,tempPath string,stderr []byte) error {
- if parent.Err()!=nil {return parent.Err()}
- if runErr==nil && segment.Err()==nil && publicationErr==nil {return nil}
+ return continuousAttemptOutcome(parent.Err(),segment.Err(),runErr,publicationErr,tempPath,stderr)
+}
+
+// captureErr is the capture context error observed immediately after FFmpeg
+// returned. A deadline that expires later, during validation or publication,
+// must not turn a completed capture into a capture timeout.
+func continuousAttemptOutcome(parentErr,captureErr,runErr,publicationErr error,tempPath string,stderr []byte) error {
+ if parentErr!=nil {return parentErr}
+ if runErr==nil && captureErr==nil && publicationErr==nil {return nil}
  notice:=continuousRecordingNotice{Code:"recorder_failed",Message:"Recording failed. Check the camera or stream server."}
- if runErr!=nil {
+ if errors.Is(captureErr,context.DeadlineExceeded) {
+  // The capture deadline killed or outlasted FFmpeg, whether or not it
+  // reported a process error.
+  notice.Code="recording_timeout";notice.Message="Recording exceeded its capture deadline."
+ } else if runErr!=nil {
   if match:=describeFailure.FindSubmatch(stderr);len(match)>1 {
    notice.Code="upstream_rtsp_unavailable"
    notice.Message="Couldn't open the upstream RTSP stream. Check the camera or stream server. If this stream comes from go2rtc, check its configuration and camera source."
@@ -60,7 +74,7 @@ func continuousAttemptResult(parent,segment context.Context,runErr,publicationEr
    var exit *exec.ExitError
    if errors.As(runErr,&exit) && exit.ExitCode()>=0 {notice.Detail=fmt.Sprintf("FFmpeg exit %d",exit.ExitCode())}
   }
- } else if segment.Err()!=nil {
+ } else if captureErr!=nil {
   notice.Code="recording_timeout";notice.Message="Recording exceeded its capture deadline."
  }
  if publicationErr!=nil {
@@ -72,13 +86,13 @@ func continuousAttemptResult(parent,segment context.Context,runErr,publicationEr
   absent:=errors.As(publicationErr,&pe) && pe.Op=="lstat" && pe.Path==tempPath && errors.Is(pe.Err,os.ErrNotExist)
   parentInfo,parentErr:=os.Stat(filepath.Dir(tempPath))
   absent=absent && parentErr==nil && parentInfo.IsDir()
-  if absent && runErr==nil && segment.Err()==nil {
+  if absent && runErr==nil && captureErr==nil {
    notice.Code="recording_output_missing";notice.Message="Recorder finished without creating its output file."
-  } else if !absent || (runErr==nil && segment.Err()==nil) {
-   if runErr==nil && segment.Err()==nil {notice.Code="recording_publication_failed";notice.Message="Recording could not be validated or published. Check recording storage."} else {notice.PublicationMessage="Recording storage or publication also failed; check recording storage."}
+  } else if !absent || (runErr==nil && captureErr==nil) {
+   if runErr==nil && captureErr==nil {notice.Code="recording_publication_failed";notice.Message="Recording could not be validated or published. Check recording storage."} else {notice.PublicationMessage="Recording storage or publication also failed; check recording storage."}
   }
  }
- return &continuousRecordingError{notice:notice,causes:[]error{runErr,segment.Err(),publicationErr}}
+ return &continuousRecordingError{notice:notice,causes:[]error{runErr,captureErr,publicationErr}}
 }
 
 type continuousHealthWorker struct {ctx context.Context;notice continuousRecordingNotice}
