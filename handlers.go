@@ -90,6 +90,7 @@ func camerasHandler(w http.ResponseWriter,r *http.Request) {
   RetentionDisplay int
   ModeDisplay string
   DiskUsage string
+  RecordingHealth continuousRecordingNotice
  }
  nvr.mu.RLock()
  cameras:=make([]CameraView,0,len(nvr.cameraOrder))
@@ -98,7 +99,9 @@ func camerasHandler(w http.ResponseWriter,r *http.Request) {
   if cam==nil {continue}
   days:=cam.RetentionDays;if days==0 {days=7}
   mode:="Continuous";if cam.RecordingMode==ModeEventBased {mode="Event Based"} else if cam.RecordingMode==ModeNoRecording {mode="No Recording"}
-  cameras=append(cameras,CameraView{ID:cam.ID,Name:cam.Name,RTSPUrl:cam.RTSPUrl,RecordDir:cam.RecordDir,IsRecording:cam.IsRecording,RecordingMode:cam.RecordingMode,RetentionDisplay:days,ModeDisplay:mode})
+  health:=continuousRecordingNotice{}
+  if cam.IsRecording && cam.RecordingMode==ModeContinuous {health=snapshotContinuousHealth(cam)}
+  cameras=append(cameras,CameraView{ID:cam.ID,Name:cam.Name,RTSPUrl:cam.RTSPUrl,RecordDir:cam.RecordDir,IsRecording:cam.IsRecording,RecordingMode:cam.RecordingMode,RetentionDisplay:days,ModeDisplay:mode,RecordingHealth:health})
  }
  nvr.mu.RUnlock()
  for i:=range cameras {cameras[i].DiskUsage=calculateDiskUsage(cameras[i].RecordDir)}
