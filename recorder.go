@@ -272,11 +272,14 @@ func recordSegment(ctx context.Context,cam *Camera,durationSeconds int) error {
  stderr:=&recordingStderrTail{}
  cmd.Stderr=stderr
  runErr:=cmd.Run()
- if runErr!=nil || segmentCtx.Err()!=nil {filePath=partialRecordingName(filePath)}
+ // Freeze the capture outcome as FFmpeg returns. Validation and publication run
+ // under their own finalize deadline and must not rewrite a completed capture.
+ captureErr:=segmentCtx.Err()
+ if runErr!=nil || captureErr!=nil {filePath=partialRecordingName(filePath)}
  finalizeCtx,finalizeCancel:=context.WithTimeout(context.WithoutCancel(ctx),recordingFinalizeGrace);defer finalizeCancel()
  publicationErr:=publishRecording(finalizeCtx,tempPath,filePath)
  if publicationErr!=nil {removeEmptyRecording(tempPath)}
- return continuousAttemptResult(ctx,segmentCtx,runErr,publicationErr,tempPath,stderr.data)
+ return continuousAttemptOutcome(ctx.Err(),captureErr,runErr,publicationErr,tempPath,stderr.data)
 }
 
 func sanitizeFilename(name string) string {
