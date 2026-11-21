@@ -1,11 +1,37 @@
 # Prepared export verification
 
-Both prepared-export workflows trigger on pushes to fix/large-media-exports, pull requests and manual dispatch. A push runs the full Go build/race/vet workflow and two independent Chrome acceptance attempts against the same event commit. Require both workflows to pass on that exact commit before completion is claimed. No tests were replaced by an export-only Go subset.
+## Recorded CI result
 
-The live HTTPS browser harness now uses create/status/download/cancel endpoints. It checks anonymous access refusal, whole-copy compressed video packet hashes, external decode/duration, HEAD and Range, missing-coverage refusal, accurate AAC output and duration, copy proposal cancellation and explicit approval, active accurate-render cancellation and child reaping, browser-saved SHA-256/duration/decode, and HTTP 404 after server release. It no longer expects Blob URL revocation or fetches video into page JavaScript for hashing. Test-directed range/seek state is retained; application functions and response bodies are not replaced.
+[Pull request #8](https://github.com/mouldybread/SimpleNVR/pull/8) was checked after the recording-status fix from PR #7 was brought into the export branch. On its head commit `b8a6178136f620d88f82099ddc7a3a91cdd5cff7`, GitHub reported all 11 check runs completed successfully:
 
-The container has a private scratch bind mount at /exports, outside /recordings, with explicit small test quotas. Non-reordered fixtures exercise supported subsection copy; reordered inputs remain covered by Go refusal tests. Native playback, real login/navigation diagnostics and the expanded playback-edge suite are retained. Reports include the commit, image identity, browser version, media and network evidence. Passing synthetic acceptance is not production-camera or multi-GiB qualification.
+- Full Go build, race-enabled suite and `go vet` (push and pull-request runs).
+- Prepared jobs/native playback Chrome attempts 1 and 2 (push and pull-request runs).
+- Safety verification: core build/race/storage/lifecycle, both isolated Chrome runs, bounded synthetic resource measurements, and the required-checks gate.
 
-Local checks: Python/shell/YAML syntax; all 30 embedded browser-JavaScript expressions parsed by Node; media helper check copied 160 video packets without hash changes and externally decoded a 16-second fixture. The earlier six protocol regressions passed. These are not a live-backend or browser pass. Go and Docker are unavailable locally; actual Go/Chrome/container results must come from CI after this commit is pushed.
+This records those specific check results, not a new test run on later commits. The count includes duplicate push/pull-request executions, not 11 independent test suites. See the [PR check results](https://github.com/mouldybread/SimpleNVR/pull/8) and its linked Actions runs.
 
-The older routed-response tests/browser-export-acceptance.py is a separate legacy harness, not the real-runtime acceptance entrypoint. It has not been migrated or reported as passing here. Do not confuse that script with the migrated tests/runtime-browser-acceptance.py executed by both browser workflows.
+## Automated scope
+
+The prepared-export workflows trigger on pushes to `fix/large-media-exports`, pull requests and manual dispatch. The Go workflow uses the complete race-enabled suite, not an export-only subset. The browser workflow makes two independent Chrome attempts against a runtime container built from the exact checkout.
+
+The live HTTPS browser harness checks:
+
+- Anonymous requests to prepared-job routes and private media are refused.
+- Whole-copy compressed video packet hashes, external decode and duration, plus HEAD and Range behaviour.
+- Missing-coverage refusal without a download.
+- Accurate export with one AAC track and the expected audio/video durations.
+- Copy proposal cancellation before a job, and explicit approval before preparation.
+- Active accurate-render cancellation and FFmpeg child reaping.
+- Browser-saved SHA-256 matching, external decode/duration, and HTTP 404 for new requests after server release.
+
+Native playback, real login/navigation diagnostics and the expanded playback-edge suite are retained. The container mounts private export scratch at `/exports`, outside `/recordings`, with small test quotas. Non-reordered fixtures exercise supported subsection copy; Go tests cover reordered-video refusal.
+
+## Local preparation checks
+
+Before the browser migration was committed, Python/shell/YAML syntax checks and parsing of 30 embedded JavaScript expressions passed. A separate media-helper check preserved 160 compressed video packet hashes and externally decoded a 16-second fixture. Six protocol regressions also passed. Those local checks were not live-backend/browser execution; the CI result above supplies the recorded Go/container/Chrome execution evidence.
+
+## Limits
+
+Passing synthetic acceptance is not production-camera, full-resolution, multi-GiB-transfer, colour-fidelity or heavy-load qualification. The metadata-only large-file UI regression is not an actual multi-GiB transfer.
+
+`tests/browser-export-acceptance.py` is an older routed-response harness. It remains unmigrated and is not the live-runtime entrypoint invoked by these browser workflows. Do not report it as migrated or passing based on the live-runtime results. The migrated entrypoint is `tests/runtime-browser-acceptance.py`, invoked through the expanded playback runner.
