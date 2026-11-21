@@ -43,9 +43,7 @@ func newBufferManager(ctx context.Context,cam *Camera) *BufferManager {
 
 func recordCamera(ctx context.Context,cam *Camera) {
  defer cam.recordWG.Done()
- for ctx.Err()==nil {
-  if err:=recordSegment(ctx,cam,600);err!=nil && ctx.Err()==nil {log.Printf("Recording error for camera %s: %v",cam.ID,err);if !waitRecordingRetry(ctx) {return}}
- }
+ runContinuousRecorder(ctx,cam,recordSegment,waitRecordingRetry)
 }
 
 func waitRecordingRetry(ctx context.Context) bool {
@@ -234,6 +232,7 @@ func (bm *BufferManager) concatenateEventRecording(job *bufferEvent,eventFile st
  job.keepStaging=true
  if err:=job.recoveryCheckpoint("assembling","");err!=nil {return ""}
  execution.requireCheckpoint(job,"assembling")
+ job.keepStaging=true
  if err:=job.writeEventConcat(bm.ctx,eventFile);err!=nil {return ""}
  name:=fmt.Sprintf("%s_%s_%s.mp4",job.preStart.UTC().Format("20060102_150405"),sanitizeFilename(job.event.Label),sanitizeFilename(job.event.ID))
  final:=filepath.Join(bm.camera.RecordDir,name);temp:=final+".tmp"
@@ -270,16 +269,14 @@ func recordSegment(ctx context.Context,cam *Camera,durationSeconds int) error {
  filePath:=filepath.Join(cam.RecordDir,filename);tempPath:=filePath+".tmp"
  segmentCtx,cancel:=context.WithTimeout(ctx,time.Duration(durationSeconds)*time.Second+5*time.Second);defer cancel()
  cmd:=ffmpegCommand(segmentCtx,"-hide_banner","-loglevel","error","-nostats","-rtsp_transport","tcp","-fflags","+genpts+igndts+ignidx+discardcorrupt","-i",cam.RTSPUrl,"-t",strconv.Itoa(durationSeconds),"-c","copy","-movflags","faststart","-f","mp4","-y",tempPath)
+ stderr:=&recordingStderrTail{}
+ cmd.Stderr=stderr
  runErr:=cmd.Run()
  if runErr!=nil || segmentCtx.Err()!=nil {filePath=partialRecordingName(filePath)}
  finalizeCtx,finalizeCancel:=context.WithTimeout(context.WithoutCancel(ctx),recordingFinalizeGrace);defer finalizeCancel()
- if err:=publishRecording(finalizeCtx,tempPath,filePath);err!=nil {
-  removeEmptyRecording(tempPath)
-  return errors.Join(runErr,segmentCtx.Err(),err)
- }
- if ctx.Err()!=nil {return ctx.Err()}
- if segmentCtx.Err()!=nil {return segmentCtx.Err()}
- return runErr
+ publicationErr:=publishRecording(finalizeCtx,tempPath,filePath)
+ if publicationErr!=nil {removeEmptyRecording(tempPath)}
+ return continuousAttemptResult(ctx,segmentCtx,runErr,publicationErr,tempPath,stderr.data)
 }
 
 func sanitizeFilename(name string) string {

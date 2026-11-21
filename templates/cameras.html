@@ -9,6 +9,9 @@
             <span class="camera-disk-usage">Disk Usage: {{ .DiskUsage }}</span>
             <span class="camera-status">Status: <span class="{{ if .IsRecording }}status-recording{{ else }}status-idle{{ end }}">{{ if .IsRecording }}Recording enabled{{ else }}Recording stopped{{ end }}</span></span>
             <span class="camera-status-explanation">Recording state reflects intent, not camera connectivity or successful footage capture.</span>
+            {{ if .RecordingHealth.Code }}
+            <span class="camera-recording-error" role="status" data-error-code="{{ .RecordingHealth.Code }}">{{ .RecordingHealth.Message }}{{ if .RecordingHealth.Detail }} ({{ .RecordingHealth.Detail }}){{ end }}{{ if .RecordingHealth.PublicationMessage }} {{ .RecordingHealth.PublicationMessage }}{{ end }}{{ if .RecordingHealth.Retrying }} Retrying…{{ end }}</span>
+            {{ end }}
             <span class="recording-mode">Recording Mode: <span>{{ .ModeDisplay }}</span></span>
         </div>
         <div class="camera-retention">
