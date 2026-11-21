@@ -128,3 +128,29 @@ func TestContinuousWorkerRecoveryCancellationAndReplacement(t *testing.T) {
  err:=continuousAttemptResult(ctx,ctx,failure,os.ErrNotExist,"unused",nil)
  if !errors.Is(err,context.Canceled) {t.Fatal("intentional cancellation became failure")}
 }
+
+func TestContinuousTimeoutOnlyReportsCaptureDeadline(t *testing.T) {
+ temp:=filepath.Join(t.TempDir(),"output.mp4.tmp")
+ if err:=continuousAttemptOutcome(nil,nil,nil,nil,temp,nil);err!=nil {t.Fatalf("completed capture and publication reported %v",err)}
+ for _,runErr:=range []error{nil,errors.New("signal: killed")} {
+  err:=continuousAttemptOutcome(nil,context.DeadlineExceeded,runErr,nil,temp,[]byte(upstreamFixture))
+  if got:=noticeFrom(t,err);got.Code!="recording_timeout" {t.Fatalf("deadline during capture misclassified: %+v",got)}
+  if !errors.Is(err,context.DeadlineExceeded) {t.Fatal("deadline cause lost")}
+  noDiagnosticSecrets(t,err.Error())
+ }
+ err:=continuousAttemptOutcome(nil,nil,nil,os.ErrPermission,temp,nil)
+ if got:=noticeFrom(t,err);got.Code!="recording_publication_failed" {t.Fatalf("publication failure after completed capture misclassified: %+v",got)}
+ err=continuousAttemptOutcome(context.Canceled,context.DeadlineExceeded,errors.New("signal: killed"),nil,temp,nil)
+ if !errors.Is(err,context.Canceled) {t.Fatal("intentional cancellation became failure")}
+}
+
+func TestRecordSegmentFreezesCaptureOutcomeBeforePublication(t *testing.T) {
+ raw,err:=os.ReadFile("recorder.go");if err!=nil {t.Fatal(err)}
+ source:=string(raw)
+ start,end:=strings.Index(source,"func recordSegment("),strings.Index(source,"func sanitizeFilename(")
+ if start<0 || end<=start {t.Fatal("recordSegment not found")}
+ body:=source[start:end]
+ if strings.Count(body,"segmentCtx.Err()")!=1 {t.Fatal("capture context must be observed exactly once, when FFmpeg returns")}
+ if strings.Index(body,"captureErr:=segmentCtx.Err()")<0 || strings.Index(body,"captureErr:=segmentCtx.Err()")>strings.Index(body,"publishRecording(") {t.Fatal("capture outcome must be fixed before publication")}
+ if !strings.Contains(body,"continuousAttemptOutcome(ctx.Err(),captureErr,") || strings.Contains(body,"continuousAttemptResult(") {t.Fatal("recordSegment must classify with the frozen capture outcome")}
+}
