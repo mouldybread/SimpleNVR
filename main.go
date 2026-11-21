@@ -8,6 +8,7 @@ import (
  "crypto/x509/pkix"
  "encoding/hex"
  "encoding/pem"
+ "errors"
  "html/template"
  "log"
  "math/big"
@@ -111,6 +112,8 @@ func main() {
  certPath,keyPath:=filepath.Join("/certs","cert.pem"),filepath.Join("/certs","key.pem")
  if err=ensureTLSCertificates(certPath,keyPath);err!=nil {log.Fatal("Failed to initialize TLS certificates: ",err)}
  if appCtx.Err()!=nil {return}
+ exports,err:=configuredExportJobHTTP(auth,nvr);if err!=nil {log.Fatal("Failed to initialize prepared exports: ",err)}
+ if exports.store==nil {log.Println("Prepared export jobs disabled: NVR_EXPORT_SCRATCH_DIR not configured")}
  http.HandleFunc("/api/cameras",camerasHandler)
  http.HandleFunc("/api/cameras/add",addCameraHandler)
  http.HandleFunc("/api/cameras/delete",deleteCameraHandler)
@@ -137,11 +140,14 @@ func main() {
  http.HandleFunc("/api/recordings/cleanup-orphaned",cleanupOrphanedRecordingsHandler)
  http.Handle("/static/",http.StripPrefix("/static/",http.FileServer(http.Dir("static"))))
  http.HandleFunc("/",indexHandler)
- gate:=newShutdownGate(themedLoginPage(auth.Handler(http.DefaultServeMux)))
+ gate:=newShutdownGate(themedLoginPage(auth.Handler(exports.Handler(http.DefaultServeMux))))
+ gate.startBackgroundJob(exports.runLifecycle)
  server:=&http.Server{Addr:":443",Handler:gate,ReadHeaderTimeout:10*time.Second,ReadTimeout:30*time.Second,IdleTimeout:60*time.Second,MaxHeaderBytes:32768}
  autoStartRecordings()
  gate.startBackgroundJob(func(ctx context.Context){cleanupRoutine(ctx,nvr)})
  log.Println("SimpleNVR starting authenticated HTTPS server on :443...")
- if err=runAuthenticatedServer(appCtx,nvr,gate,server,certPath,keyPath);err!=nil {log.Fatal("Shutdown/server failure: ",err)}
+ serveErr:=runAuthenticatedServer(appCtx,nvr,gate,server,certPath,keyPath)
+ cleanupCtx,cancel:=context.WithTimeout(context.Background(),5*time.Second);defer cancel()
+ if err=errors.Join(serveErr,exports.Close(cleanupCtx));err!=nil {log.Fatal("Shutdown/server failure: ",err)}
  log.Println("Shutdown complete; recording intent persisted")
 }

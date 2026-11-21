@@ -1,235 +1,38 @@
-// Export dialog controls and bounded, monitored browser downloads.
-const EXPORT_UI_LIMIT = 64 * 1024 * 1024;
-const EXPORT_UI_TIMEOUT = 4 * 60 * 1000;
-let exportUiBatch = null;
-let exportInitialRange = null;
-const EXPORT_RANGE_STEPS = [1000,10000,60000,600000];
-
-function exportUiNode(tag,text='') {const node=document.createElement(tag);node.textContent=String(text);return node;}
-function exportRangeCandidate(start,end,boundary,delta) {
-  if(!Number.isFinite(start) || !Number.isFinite(end) || end<=start || !['start','end'].includes(boundary) || !Number.isFinite(delta))return null;
-  const value=(boundary==='start'?start:end)+delta;
-  if(!Number.isFinite(new Date(value).getTime()) || (boundary==='start'?value>=end:value<=start))return null;
-  return value;
+// Job-based exports: only bounded control JSON is fetched, never video.
+let exportUiBatch=null,exportInitialRange=null;
+const EXPORT_RANGE_STEPS=[1000,10000,60000,600000];
+function exportUiNode(tag,text=''){const e=document.createElement(tag);e.textContent=String(text);return e;}
+function exportRangeCandidate(a,b,which,delta){if(!Number.isFinite(a)||!Number.isFinite(b)||b<=a||!['start','end'].includes(which)||!Number.isFinite(delta))return null;const next=(which==='start'?a:b)+delta;return !Number.isFinite(new Date(next).getTime())||(which==='start'?next>=b:next<=a)?null:next;}
+function exportRangeStep(){const n=Number(document.getElementById('download-range-step')?.value);return EXPORT_RANGE_STEPS.includes(n)?n:60000;}
+function adjustDownloadBoundary(which,direction){if(exportUiBatch?.running||![-1,1].includes(direction))return false;const n=exportRangeCandidate(downloadStartTime?.getTime(),downloadEndTime?.getTime(),which,direction*exportRangeStep());if(n===null)return false;if(which==='start')downloadStartTime=new Date(n);else downloadEndTime=new Date(n);updateDownloadTimeDisplay();return true;}
+function exportBoundaryLabel(d){return d.toLocaleString(undefined,{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',timeZoneName:'short',hour12:false});}
+function installExportRangeControls(){
+ const prepare=document.getElementById('export-start-btn');if(prepare)prepare.textContent='Prepare exports on server';if(document.getElementById('download-range-step'))return;
+ const bar=document.getElementById('download-time-display')?.parentElement?.parentElement;if(!bar)return;const group=exportUiNode('div');group.style.cssText='display:flex;flex-direction:column;gap:10px;width:100%';
+ for(const which of ['start','end']){const row=exportUiNode('div',which==='start'?'Start: ':'End: ');for(const dir of [-1,1]){const b=exportUiNode('button',dir<0?'Earlier':'Later');b.type='button';b.id=`download-${which}-${dir<0?'earlier':'later'}`;b.setAttribute('aria-label',`Move ${which} ${dir<0?'earlier':'later'}`);b.addEventListener('click',()=>adjustDownloadBoundary(which,dir));row.appendChild(b);if(dir<0){const out=exportUiNode('output');out.id=`download-${which}-display`;row.appendChild(out);}}group.appendChild(row);}
+ const label=exportUiNode('label','Adjustment step: '),step=exportUiNode('select');step.id='download-range-step';['1 second','10 seconds','1 minute','10 minutes'].forEach((text,i)=>{const o=exportUiNode('option',text);o.value=String(EXPORT_RANGE_STEPS[i]);step.appendChild(o);});step.value='60000';step.addEventListener('change',updateDownloadTimeDisplay);label.appendChild(step);group.appendChild(label);
+ const modeLabel=exportUiNode('label','Export mode: '),mode=exportUiNode('select');mode.id='download-export-mode';for(const [value,text]of [['copy','Original quality / stream copy'],['accurate','Accurate cut — re-encode video and audio']]){const o=exportUiNode('option',text);o.value=value;mode.appendChild(o);}mode.value='copy';modeLabel.appendChild(mode);group.appendChild(modeLabel);
+ group.appendChild(exportUiNode('p','Copy preserves encoded media. A proposed subsection range and possible AAC packet overhang require approval before a job starts. Subsection copy with reordered video is refused; choose Accurate explicitly. Accurate cuts re-encode and may convert full-range colour to limited range. Timing is frame/packet granular, not calibrated camera wall-clock time.'));
+ const reset=exportUiNode('button','Reset to initial selection');reset.id='download-range-reset';reset.type='button';reset.addEventListener('click',resetDownloadTimeRange);group.appendChild(reset);for(const id of ['download-time-display','download-duration-display']){const e=exportUiNode('div');e.id=id;group.appendChild(e);}bar.replaceChildren(group);
 }
-function exportRangeStep() {const value=Number(document.getElementById('download-range-step')?.value);return EXPORT_RANGE_STEPS.includes(value)?value:60000;}
-function adjustDownloadBoundary(boundary,direction) {
-  if(exportUiBatch?.running || ![-1,1].includes(direction))return false;
-  const value=exportRangeCandidate(downloadStartTime?.getTime(),downloadEndTime?.getTime(),boundary,direction*exportRangeStep());
-  if(value===null)return false;
-  if(boundary==='start')downloadStartTime=new Date(value);else downloadEndTime=new Date(value);
-  updateDownloadTimeDisplay();return true;
-}
-// Replace the legacy expansion-only toolbar without changing playback controls.
-function installExportRangeControls() {
-  if(document.getElementById('download-range-step'))return;
-  const old=document.getElementById('download-time-display');
-  const toolbar=old?.parentElement?.parentElement;if(!toolbar)return;
-  const group=exportUiNode('div');group.style.cssText='display:flex;flex-direction:column;gap:12px;width:100%';
-  for(const boundary of ['start','end']) {
-    const row=exportUiNode('div');row.style.cssText='display:flex;align-items:center;gap:10px;flex-wrap:wrap';
-    row.appendChild(exportUiNode('span',boundary==='start'?'Start':'End'));
-    for(const direction of [-1,1]) {
-      const button=exportUiNode('button',direction<0?'Earlier':'Later');button.type='button';button.className='btn';
-      button.id=`download-${boundary}-${direction<0?'earlier':'later'}`;
-      button.setAttribute('aria-label',`Move ${boundary} ${direction<0?'earlier':'later'}`);
-      button.addEventListener('click',()=>adjustDownloadBoundary(boundary,direction));row.appendChild(button);
-      if(direction===-1){const time=exportUiNode('output');time.id=`download-${boundary}-display`;row.appendChild(time);}
-    }
-    group.appendChild(row);
-  }
-  const label=exportUiNode('label','Adjustment step: '),step=exportUiNode('select');step.id='download-range-step';
-  for(const [index,text] of ['1 second','10 seconds','1 minute','10 minutes'].entries()){
-    const option=exportUiNode('option',text);option.value=String(EXPORT_RANGE_STEPS[index]);step.appendChild(option);
-  }
-  step.value='60000';step.addEventListener('change',updateDownloadTimeDisplay);label.appendChild(step);group.appendChild(label);
-  const reset=exportUiNode('button','Reset to initial selection');reset.type='button';reset.className='btn';reset.id='download-range-reset';
-  reset.addEventListener('click',resetDownloadTimeRange);group.appendChild(reset);
-  for(const id of ['download-time-display','download-duration-display']){const node=exportUiNode('div');node.id=id;group.appendChild(node);}
-  group.appendChild(exportUiNode('p','Times are local with time-zone labels. Exports require complete, unambiguous coverage. Trimming currently requires supported video-only inputs. After receiving, click Download prepared video.'));
-  toolbar.replaceChildren(group);
-}
-function exportBoundaryLabel(time) {
-  return time.toLocaleString(undefined,{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',timeZoneName:'short',hour12:false});
-}
-// These dialog entry points supersede the legacy implementations in playback.js.
-function updateDownloadTimeDisplay() {
-  const start=downloadStartTime?.getTime(),end=downloadEndTime?.getTime(),valid=Number.isFinite(start)&&Number.isFinite(end)&&end>start;
-  const busy=!!exportUiBatch?.running;
-  for(const boundary of ['start','end']) {
-    const display=document.getElementById(`download-${boundary}-display`);
-    if(display)display.textContent=valid?exportBoundaryLabel(boundary==='start'?downloadStartTime:downloadEndTime):'Select a valid range';
-    for(const direction of [-1,1]) {
-      const button=document.getElementById(`download-${boundary}-${direction<0?'earlier':'later'}`);
-      if(button)button.disabled=busy || exportRangeCandidate(start,end,boundary,direction*exportRangeStep())===null;
-    }
-  }
-  const summary=document.getElementById('download-time-display');if(summary)summary.textContent=valid?'Selected interval; end is exclusive.':'';
-  const duration=document.getElementById('download-duration-display');
-  if(duration)duration.textContent=valid?`Duration: ${(end-start)/1000} seconds (${((end-start)/60000).toFixed(2)} minutes)`:'Invalid or empty interval';
-  const step=document.getElementById('download-range-step');if(step)step.disabled=busy;
-  const reset=document.getElementById('download-range-reset');if(reset)reset.disabled=busy || !exportInitialRange;
-}
-function openDownloadModal() {
-  const modal=document.getElementById('download-modal');if(!modal)return;
-  installExportRangeControls();
-  if(!exportUiBatch?.running){
-    if(!Number.isFinite(currentTimePosition)){if(typeof showError==='function')showError('Select a time on the timeline first');return;}
-    const start=currentTimePosition-600000,end=currentTimePosition+600000;
-    if(!Number.isFinite(new Date(start).getTime()) || !Number.isFinite(new Date(end).getTime()))return;
-    exportInitialRange={start,end};downloadStartTime=new Date(start);downloadEndTime=new Date(end);downloadCameras=[...selectedCameras];
-    renderDownloadCameraSelection();
-  }
-  updateDownloadTimeDisplay();modal.classList.add('active');modal.style.display='block';
-}
-function resetDownloadTimeRange() {
-  if(exportUiBatch?.running || !exportInitialRange)return;
-  downloadStartTime=new Date(exportInitialRange.start);downloadEndTime=new Date(exportInitialRange.end);updateDownloadTimeDisplay();
-}
-function exportUiError(kind,message) {const error=new Error(message);error.kind=kind;return error;}
-function exportUiAbortError() {const error=new Error('Export canceled');error.name='AbortError';return error;}
-function exportUiAwait(promise,signal) {
-  return new Promise((resolve,reject)=>{
-    let settled=false;
-    const finish=(fn,value)=>{if(settled)return;settled=true;signal.removeEventListener('abort',abort);fn(value);};
-    const abort=()=>finish(reject,exportUiAbortError());
-    Promise.resolve(promise).then(value=>finish(resolve,value),error=>finish(reject,error));
-    if(signal.aborted){abort();return;}signal.addEventListener('abort',abort,{once:true});
-  });
-}
-function exportUiState(job,state,text) {job.state=state;job.row.dataset.state=state;job.status.textContent=text;}
-function exportUiCancel(job) {
-  if(job.finished)return;
-  if(job.finishReady){job.finishReady(job.handed?'handed':'canceled',job.handed?'Browser download requested; prepared file released. Disk saving is not verified.':'Canceled; prepared file discarded.');return;}
-  job.reason='canceled';job.controller.abort();exportUiState(job,'canceled','Canceled; no browser download requested.');
-}
-function cancelExportDownloads() {if(exportUiBatch)exportUiBatch.jobs.forEach(exportUiCancel);}
-function exportUiCancelReader(reader) {try{Promise.resolve(reader.cancel()).catch(()=>{});}catch(_){} }
-async function exportUiErrorText(response,signal) {
-  if(!response.body || typeof response.body.getReader!=='function')return '';
-  const reader=response.body.getReader(),chunks=[];let size=0,done=false;
-  try{
-    while(size<2048){const part=await exportUiAwait(reader.read(),signal);if(part.done){done=true;break;}const chunk=part.value.slice(0,2048-size);chunks.push(chunk);size+=chunk.byteLength;}
-    const raw=new Uint8Array(size);let offset=0;for(const chunk of chunks){raw.set(chunk,offset);offset+=chunk.byteLength;}
-    return new TextDecoder().decode(raw).replace(/[\u0000-\u001f\u007f]/g,' ').slice(0,600);
-  }finally{if(!done)exportUiCancelReader(reader);try{reader.releaseLock();}catch(_){} }
-}
-function exportUiFailureMessage(response) {
-  const plan=response.headers.get('X-Export-Plan-Status'),trim=response.headers.get('X-Export-Trim-Status');
-  if(response.status===401 || response.status===403)return 'Authentication expired or access denied; sign in again.';
-  if(plan==='gap')return 'The selected interval includes missing recording coverage. Some footage may exist, but the full interval is not covered. Move Start later or End earlier as appropriate; no gaps were silently skipped.';
-  if(plan==='overlap')return 'The selected interval contains overlapping recordings. No automatic clip choice was made.';
-  if(trim==='unsupported' || response.status===422)return 'Footage may be playable but this subsection cannot be trimmed with the current input profile. Audio-containing or otherwise incompatible inputs are unsupported; audio was not silently removed and the interval was not widened.';
-  if(response.status===404)return 'Camera or recording coverage was not found for the selected interval.';
-  if(response.status===413)return 'Server export limit exceeded; shorten the interval or select fewer clips.';
-  if(response.status===504)return 'Server preparation or rendering timed out; no prepared download was received.';
-  if(response.status===503)return 'Recording metadata unavailable, changed, or server shutting down; retry after reviewing recording availability.';
-  return `Export request failed (HTTP ${response.status}).`;
-}
-function exportUiPolicy(response) {
-  const policy=response.headers.get('X-Export-Range-Policy');
-  if(policy==='whole-clips-untrimmed')return 'Whole-clip copy; timing is metadata-derived, not a calibrated camera clock.';
-  if(policy==='decoded-video-frame-window'){
-    const raw=response.headers.get('X-Export-Output-Duration-Seconds') || '';
-    const duration=/^\d+(?:\.\d{1,9})?$/.test(raw) && Number(raw)>0 && Number(raw)<86400?` Reported output: ${Number(raw)} seconds.`:'';
-    return 'Frame-granular trim; video-only inputs; not exact camera wall-clock boundaries.'+duration;
-  }
-  throw exportUiError('policy','Export policy missing or unrecognized; reload after updating the server.');
-}
-async function exportUiReceive(response,job) {
-  const length=response.headers.get('Content-Length');let expected=null;
-  if(length!==null){if(!/^\d+$/.test(length))throw exportUiError('length','Invalid response length.');expected=Number(length);if(!Number.isSafeInteger(expected) || expected>EXPORT_UI_LIMIT)throw exportUiError('limit','Response exceeds the 64 MiB monitored-browser limit; reduce the range.');}
-  if(!response.body || typeof response.body.getReader!=='function')throw exportUiError('reader','Streaming response reading is unavailable; no unbounded buffering fallback was used.');
-  const reader=response.body.getReader();let chunks=[],size=0,done=false;
-  try{
-    while(true){
-      const part=await exportUiAwait(reader.read(),job.controller.signal);if(part.done){done=true;break;}
-      if(part.value.byteLength>EXPORT_UI_LIMIT-size)throw exportUiError('limit','Response exceeds the 64 MiB monitored-browser limit; reduce the range.');
-      chunks.push(part.value);size+=part.value.byteLength;
-      exportUiState(job,'receiving',`Receiving ${(size/(1024*1024)).toFixed(1)} MiB${expected===null?'':` of ${(expected/(1024*1024)).toFixed(1)} MiB`}; not saved yet.`);
-    }
-    if(size===0 || (expected!==null && size!==expected))throw exportUiError('incomplete','Transfer ended with an empty or mismatched-length response; no file was offered.');
-    const prefix=new Uint8Array(Math.min(12,size));let copied=0;
-    for(const chunk of chunks){const count=Math.min(chunk.byteLength,prefix.length-copied);prefix.set(chunk.subarray(0,count),copied);copied+=count;if(copied===prefix.length)break;}
-    if(size<12 || prefix[4]!==102 || prefix[5]!==116 || prefix[6]!==121 || prefix[7]!==112)throw exportUiError('format','Response did not contain the expected MP4 header; no file was offered.');
-    const blob=new Blob(chunks,{type:'video/mp4'});chunks=[];return {blob,size};
-  }finally{if(!done)exportUiCancelReader(reader);try{reader.releaseLock();}catch(_){} }
-}
-function exportUiFilename(job) {
-  const name=job.name.replace(/[^A-Za-z0-9._-]/g,'_').slice(0,80) || 'camera';
-  const stamp=value=>value.replace(/[^A-Za-z0-9]/g,'');
-  return `${name}_${stamp(job.start)}_${stamp(job.end)}.mp4`;
-}
-function exportUiOffer(job,received) {
-  return new Promise((resolve,reject)=>{
-    try{job.url=URL.createObjectURL(received.blob);}catch(error){reject(error);return;}
-    let finished=false;
-    job.finishReady=(state,message)=>{
-      if(finished)return;finished=true;clearTimeout(job.readyTimer);
-      if(job.url){URL.revokeObjectURL(job.url);job.url=null;}
-      job.save.disabled=true;job.cancel.disabled=true;job.finishReady=null;exportUiState(job,state,message);resolve();
-    };
-    job.save=exportUiNode('button','Download prepared video');job.save.type='button';job.save.className='btn btn-primary';
-    job.save.addEventListener('click',()=>{
-      if(finished || job.handed)return;
-      const anchor=document.createElement('a');anchor.href=job.url;anchor.download=exportUiFilename(job);
-      try{document.body.appendChild(anchor);anchor.click();anchor.remove();}
-      catch(_){anchor.remove();job.finishReady('failed','Browser download request failed; no disk save was verified.');return;}
-      job.handed=true;job.save.disabled=true;job.cancel.textContent='Release prepared file / continue';
-      exportUiState(job,'handed','Browser download requested. Check your browser downloads; disk saving is not verified. Release after the browser accepts it, or wait 60 seconds.');
-      clearTimeout(job.readyTimer);job.readyTimer=setTimeout(()=>job.finishReady?.('handed','Browser download requested; prepared file released. Disk saving is not verified.'),60000);
-    });
-    job.row.appendChild(job.save);
-    job.readyTimer=setTimeout(()=>job.finishReady?.('expired','Prepared file expired after 2 minutes without a download request. Prepare the export again.'),120000);
-    exportUiState(job,'ready',`Ready to download: ${(received.size/(1024*1024)).toFixed(1)} MiB received. Click Download prepared video below within 2 minutes. Nothing has been saved yet; media completeness and disk saving are not verified.`);
-    job.save.focus?.();
-  });
-}
-async function exportUiRunJob(job) {
-  if(job.reason==='canceled'){job.finished=true;job.cancel.disabled=true;return;}
-  let response;job.transferring=true;
-  const timer=setTimeout(()=>{if(job.transferring && !job.finished){job.reason='timeout';job.controller.abort();}},EXPORT_UI_TIMEOUT);
-  try{
-    exportUiState(job,'preparing','Preparing export on server. After receiving it, click Download prepared video; preparing alone does not save a file.');
-    const query=`camera_id=${encodeURIComponent(job.id)}&start_time=${encodeURIComponent(job.start)}&end_time=${encodeURIComponent(job.end)}`;
-    response=await exportUiAwait(fetch(`/api/download?${query}`,{credentials:'same-origin',cache:'no-store',redirect:'error',signal:job.controller.signal}),job.controller.signal);
-    if(!response.ok || response.status!==200){const excerpt=await exportUiErrorText(response,job.controller.signal);throw exportUiError('http',exportUiFailureMessage(response)+(excerpt?' Server: '+excerpt:''));}
-    if(response.redirected || (response.headers.get('Content-Type') || '').split(';')[0].trim().toLowerCase()!=='video/mp4')throw exportUiError('type','Unexpected response, possibly a sign-in page; no file was offered.');
-    job.policy.textContent=exportUiPolicy(response);
-    const received=await exportUiReceive(response,job);
-    job.transferring=false;clearTimeout(timer);if(job.controller.signal.aborted)throw exportUiAbortError();
-    await exportUiOffer(job,received);
-  }catch(error){
-    job.controller.abort();
-    if(job.reason==='timeout')exportUiState(job,'failed','Browser export deadline exceeded; request canceled.');
-    else if(job.reason==='canceled')exportUiState(job,'canceled','Canceled; no browser download requested.');
-    else exportUiState(job,'failed',String(error.message || 'Export failed').slice(0,1000));
-    if(response?.body){try{Promise.resolve(response.body.cancel()).catch(()=>{});}catch(_){} }
-  }finally{clearTimeout(timer);job.transferring=false;job.finished=true;job.cancel.disabled=true;}
-}
-function startExportDownloads() {
-  if(exportUiBatch?.running)return exportUiBatch.promise;
-  const host=document.getElementById('download-status'),list=document.getElementById('download-progress-list');
-  if(!host || !list){console.error('Export status region missing; no request started');return Promise.resolve();}
-  host.style.display='block';list.replaceChildren();
-  const start=downloadStartTime?.getTime(),end=downloadEndTime?.getTime(),ids=[...new Set(downloadCameras)];
-  if(!Number.isFinite(start) || !Number.isFinite(end) || end<=start || ids.length<1 || ids.length>8){list.appendChild(exportUiNode('p','Choose a valid range and one to eight cameras. No request started.'));return Promise.resolve();}
-  const cameras=ids.map(id=>allCameras.find(camera=>camera.id===id));
-  if(cameras.some(camera=>!camera || typeof camera.id!=='string' || camera.id.length>256)){list.appendChild(exportUiNode('p','A selected camera is unavailable. Reload the camera list.'));return Promise.resolve();}
-  const stop=exportUiNode('button','Cancel all exports');stop.type='button';stop.addEventListener('click',cancelExportDownloads);list.appendChild(stop);
-  list.appendChild(exportUiNode('p','Two steps: prepare and receive, then click Download prepared video for each camera. Maximum 64 MiB per export, one at a time. The queue pauses for your download action and file release. Disk saving cannot be verified.'));
-  const jobs=cameras.map(camera=>{
-    const row=exportUiNode('div');row.className='export-job';row.dataset.cameraId=camera.id;
-    const name=String(camera.name ?? camera.id).slice(0,256),status=exportUiNode('p','Queued'),policy=exportUiNode('p');
-    status.setAttribute('aria-live','polite');row.appendChild(exportUiNode('h4',name));row.appendChild(status);row.appendChild(policy);
-    const cancel=exportUiNode('button','Cancel');cancel.type='button';row.appendChild(cancel);list.appendChild(row);
-    const job={id:camera.id,name,start:new Date(start).toISOString(),end:new Date(end).toISOString(),row,status,policy,cancel,controller:new AbortController(),reason:null,finished:false,handed:false,url:null};
-    cancel.addEventListener('click',()=>exportUiCancel(job));exportUiState(job,'queued','Queued');return job;
-  });
-  const batch={jobs,running:true,promise:null};exportUiBatch=batch;updateDownloadTimeDisplay();
-  const button=document.getElementById('export-start-btn');if(button)button.disabled=true;
-  batch.promise=(async()=>{try{for(const job of jobs)await exportUiRunJob(job);}finally{batch.running=false;stop.disabled=true;if(button)button.disabled=false;updateDownloadTimeDisplay();}})();
-  return batch.promise;
-}
-window.addEventListener('pagehide',cancelExportDownloads);
+function updateDownloadTimeDisplay(){const a=downloadStartTime?.getTime(),b=downloadEndTime?.getTime(),valid=Number.isFinite(a)&&Number.isFinite(b)&&b>a,busy=!!exportUiBatch?.running;for(const which of ['start','end']){const e=document.getElementById(`download-${which}-display`);if(e)e.textContent=valid?exportBoundaryLabel(which==='start'?downloadStartTime:downloadEndTime):'Invalid range';for(const dir of [-1,1]){const e=document.getElementById(`download-${which}-${dir<0?'earlier':'later'}`);if(e)e.disabled=busy||exportRangeCandidate(a,b,which,dir*exportRangeStep())===null;}}const summary=document.getElementById('download-time-display');if(summary)summary.textContent='End is exclusive.';const duration=document.getElementById('download-duration-display');if(duration)duration.textContent=valid?`Duration: ${(b-a)/1000} seconds`:'Invalid range';for(const id of ['download-range-step','download-range-reset','download-export-mode']){const e=document.getElementById(id);if(e)e.disabled=busy;}}
+function openDownloadModal(){const modal=document.getElementById('download-modal');if(!modal)return;installExportRangeControls();if(!exportUiBatch?.running){if(!Number.isFinite(currentTimePosition)){if(typeof showError==='function')showError('Select a time first');return;}exportInitialRange={start:currentTimePosition-600000,end:currentTimePosition+600000};downloadStartTime=new Date(exportInitialRange.start);downloadEndTime=new Date(exportInitialRange.end);downloadCameras=[...selectedCameras];renderDownloadCameraSelection();}updateDownloadTimeDisplay();modal.classList.add('active');modal.style.display='block';}
+function resetDownloadTimeRange(){if(exportUiBatch?.running||!exportInitialRange)return;downloadStartTime=new Date(exportInitialRange.start);downloadEndTime=new Date(exportInitialRange.end);updateDownloadTimeDisplay();}
+const EXPORT_JOB_POLL_MS=1500,EXPORT_JOB_REQUEST_MS=45000,EXPORT_JOB_WAIT_MS=7200000;
+function exportUiState(job,state,message){job.state=state;job.row.dataset.state=state;job.status.textContent=String(message).slice(0,1500);}
+function exportUiText(text){return String(text??'').replace(/[\u0000-\u001f\u007f]/g,' ').slice(0,600);}
+async function exportUiRead(response,signal){if(!response.body?.getReader)throw Error('Streaming JSON responses unavailable');const reader=response.body.getReader(),chunks=[];let size=0,done=false;const cancel=()=>{try{Promise.resolve(reader.cancel()).catch(()=>{});}catch(_){}};signal.addEventListener('abort',cancel,{once:true});try{while(true){if(signal.aborted)throw Error('Export control request timed out');const p=await reader.read();if(p.done){done=true;break;}if(p.value.byteLength>8192-size)throw Error('Export control response exceeded its size limit');size+=p.value.byteLength;chunks.push(p.value);}if(signal.aborted)throw Error('Export control request timed out');const bytes=new Uint8Array(size);let n=0;for(const c of chunks){bytes.set(c,n);n+=c.byteLength;}return new TextDecoder().decode(bytes);}finally{signal.removeEventListener('abort',cancel);if(!done)cancel();try{reader.releaseLock();}catch(_){}}}
+function exportUiHTTPMessage(r){if(r.status===401||r.status===403)return 'Authentication expired or access denied; sign in again.';if(r.status===503)return 'Prepared exports unavailable; check NVR_EXPORT_SCRATCH_DIR, recording metadata, or server restart.';if(r.status===429)return 'Server capacity is full; release exports or wait for expiry.';if(r.headers.get('X-Export-Plan-Status')==='gap')return 'The full interval is not covered; no gaps were silently skipped.';if(r.status===422)return 'Unsupported recording profile for this mode; choose Accurate explicitly if subsection copy is refused.';return `Export request failed (HTTP ${r.status}).`;}
+async function exportUiRequest(path,body){const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),EXPORT_JOB_REQUEST_MS);try{const options={credentials:'same-origin',cache:'no-store',redirect:'error',signal:controller.signal};if(body!==undefined){options.method='POST';options.headers={'Content-Type':'application/json'};options.body=JSON.stringify(body);}const r=await fetch(path,options);if(r.redirected)throw Error('Unexpected redirect; sign in again');if(r.status===204)return {status:204};const text=await exportUiRead(r,controller.signal),json=(r.headers.get('Content-Type')||'').split(';')[0].trim().toLowerCase()==='application/json';let value;if(json&&[200,202,409].includes(r.status)){try{value=JSON.parse(text);}catch(_){if(r.status===200||r.status===202)throw Error('Invalid export JSON');}}if(r.status===409&&json&&value?.code==='copy_range_approval_required')return {status:409,value};if(r.status!==200&&r.status!==202)throw Error(exportUiHTTPMessage(r)+(text?' Server: '+exportUiText(text):''));if(!json)throw Error('Expected export JSON, not video or a login page');return {status:r.status,value};}finally{clearTimeout(timer);}}
+function exportUiView(v,id){if(!v||typeof v!=='object'||Array.isArray(v)||!/^[0-9a-f]{64}$/.test(v.id||'')||(id&&v.id!==id)||!['queued','preparing','ready','failed','canceled','expired'].includes(v.state)||typeof v.message!=='string'||!Number.isSafeInteger(v.bytes)||v.bytes<0||!Number.isFinite(Date.parse(v.expires_at)))throw Error('Invalid export status response');if(v.state==='ready'&&(!v.bytes||v.download_url!==`/api/exports/download?id=${v.id}`))throw Error('Invalid prepared download response');return v;}
+function exportUiRemoveDownload(j){if(j.save){j.save.disabled=true;j.save.remove();j.save=null;}j.url=null;clearTimeout(j.expiryTimer);}
+function exportUiFinish(j,state,text){exportUiRemoveDownload(j);j.finished=true;exportUiState(j,state,text);j.resolveConsent?.(false);if(j.finishReady){const done=j.finishReady;j.finishReady=null;done();}}
+function exportUiWait(j){return new Promise(resolve=>{j.wake=()=>{clearTimeout(j.pollTimer);j.wake=null;resolve();};j.pollTimer=setTimeout(j.wake,EXPORT_JOB_POLL_MS);});}
+async function exportUiCancel(j){if(j.canceling||['canceled','expired','released'].includes(j.state))return;j.reason='canceled';j.wake?.();if(!j.serverId){if(j.creating){exportUiState(j,'canceling','Waiting for creation response to identify the job to cancel.');return;}exportUiFinish(j,'canceled','Canceled before a job was created.');j.cancel.disabled=true;return;}j.canceling=true;j.cancel.disabled=true;exportUiRemoveDownload(j);try{const r=await exportUiRequest('/api/exports/cancel',{id:j.serverId});if(r.status!==204)throw Error('Unexpected release response');exportUiFinish(j,j.handed?'released':'canceled','Server confirmed cancellation/release. Existing transfers may continue; disk saving is not verified.');j.cancel.disabled=true;}catch(e){exportUiFinish(j,'release-failed',`Cancellation could not be confirmed. ${e.message} The job may remain until expiry.`);j.cancel.textContent='Retry cancellation/release';j.cancel.disabled=false;}finally{j.canceling=false;}}
+function cancelExportDownloads(){return exportUiBatch?Promise.all(exportUiBatch.jobs.map(exportUiCancel)):Promise.resolve();}
+function exportUiConsent(j,p){const a=Date.parse(p.export_start),b=Date.parse(p.export_end);if(j.mode!=='copy'||Date.parse(p.requested_start)!==Date.parse(j.start)||Date.parse(p.requested_end)!==Date.parse(j.end)||!Number.isFinite(a)||!Number.isFinite(b)||a>Date.parse(j.start)||b<Date.parse(j.end)||b<=a||!Number.isSafeInteger(p.audio_allowance_ms)||p.audio_allowance_ms<0||p.audio_allowance_ms>128)throw Error('Invalid copy range proposal');return new Promise(resolve=>{const box=exportUiNode('div'),button=exportUiNode('button','Use proposed copy range');button.type='button';box.appendChild(exportUiNode('p',`Requested: ${exportBoundaryLabel(new Date(j.start))} to ${exportBoundaryLabel(new Date(j.end))}. Proposed video interval: ${exportBoundaryLabel(new Date(a))} to ${exportBoundaryLabel(new Date(b))}. AAC packet boundaries may include up to ${p.audio_allowance_ms} ms outside that video interval. Copy does not re-encode. Approve this interval, or Cancel and choose Accurate.`));box.appendChild(button);j.row.appendChild(box);exportUiState(j,'awaiting-consent','Approval required; no server job has been created.');j.resolveConsent=accept=>{box.remove();j.resolveConsent=null;resolve(accept);};button.addEventListener('click',()=>j.resolveConsent?.(true));});}
+function exportUiOffer(j,v){return new Promise(resolve=>{j.finishReady=resolve;j.url=`/api/exports/download?id=${j.serverId}`;const expires=Date.parse(v.expires_at),remaining=expires-Date.now();if(remaining<=0){exportUiFinish(j,'expired','Prepared export expired');return;}j.save=exportUiNode('button','Download prepared video');j.save.type='button';j.save.className='btn btn-primary';j.save.addEventListener('click',()=>{if(j.finished||j.canceling||j.handed)return;if(Date.now()>=expires){exportUiFinish(j,'expired','Prepared export expired');return;}const link=exportUiNode('a');link.href=j.url;link.download=`export-${j.serverId}.mp4`;try{document.body.appendChild(link);link.click();}catch(_){exportUiState(j,'ready','Browser download request failed; retry before expiry');return;}finally{link.remove();}j.handed=true;j.save.disabled=true;exportUiState(j,'handed','Browser download requested; disk saving is not verified. Release after the browser accepts it.');});j.row.appendChild(j.save);j.cancel.textContent='Release prepared file / continue';j.cancel.disabled=false;const span=j.approved?`Approved video interval: ${exportBoundaryLabel(new Date(j.approved.export_start))} to ${exportBoundaryLabel(new Date(j.approved.export_end))}. `:'';exportUiState(j,'ready',`${j.mode==='copy'?'Original quality / copy':'Accurate cut / re-encoded'}: Ready on server, ${(v.bytes/1048576).toFixed(1)} MiB. ${span}Download before ${new Date(expires).toLocaleString()}. Nothing saved by this page; disk saving is not verified.`);j.expiryTimer=setTimeout(()=>{exportUiFinish(j,'expired','Prepared export reached expiry; an already-started transfer may continue.');j.cancel.disabled=true;},Math.min(remaining,2147483647));});}
+async function exportUiRunJob(j){if(j.reason==='canceled')return;try{let result,accepted={};for(let attempt=0;attempt<4;attempt++){j.creating=true;exportUiState(j,'preparing','Requesting server preparation');try{result=await exportUiRequest('/api/exports/create',{camera_id:j.id,start_time:j.start,end_time:j.end,mode:j.mode,...accepted});}finally{j.creating=false;}if(result.status!==409)break;if(j.reason==='canceled'){exportUiFinish(j,'canceled','Canceled before a server job was created');j.cancel.disabled=true;return;}if(attempt===3)throw Error('Source boundaries keep changing; no automatic approval was made');if(!await exportUiConsent(j,result.value))return;if(j.reason==='canceled')return;j.approved=result.value;accepted={accepted_start:result.value.export_start,accepted_end:result.value.export_end};}if(result.status!==202)throw Error('Expected job acceptance');let v=exportUiView(result.value);j.serverId=v.id;if(j.reason==='canceled'){await exportUiCancel(j);return;}const deadline=Date.now()+EXPORT_JOB_WAIT_MS;while(true){if(j.reason==='canceled')return;if(v.state==='ready'){await exportUiOffer(j,v);return;}if(['failed','canceled','expired'].includes(v.state)){exportUiFinish(j,v.state,exportUiText(v.message));j.cancel.disabled=true;return;}exportUiState(j,v.state,v.state==='queued'?'Queued on server':'Preparing on server');if(Date.now()>=deadline)throw Error('Stopped waiting after two hours; the server job may still exist');await exportUiWait(j);if(j.reason==='canceled')return;result=await exportUiRequest(`/api/exports/status?id=${j.serverId}`);if(j.reason==='canceled')return;if(result.status!==200)throw Error('Unexpected status response');v=exportUiView(result.value,j.serverId);}}catch(e){if(j.reason==='canceled'&&j.serverId){await exportUiCancel(j);return;}exportUiFinish(j,'failed',`${e.message} ${j.serverId?'Use cancellation below or wait for expiry.':'Creation may be unknown if the response was lost; no automatic retry.'}`);j.cancel.disabled=!j.serverId;if(j.serverId)j.cancel.textContent='Cancel server job';}}
+function startExportDownloads(){if(exportUiBatch?.running)return exportUiBatch.promise;const host=document.getElementById('download-status'),list=document.getElementById('download-progress-list');if(!host||!list)return Promise.resolve();if(exportUiBatch?.jobs.some(j=>j.state==='release-failed'||(j.serverId&&j.state==='failed'&&!j.cancel.disabled)))return exportUiBatch.promise;host.style.display='block';list.replaceChildren();const a=downloadStartTime?.getTime(),b=downloadEndTime?.getTime(),ids=[...new Set(downloadCameras)],mode=document.getElementById('download-export-mode')?.value||'copy';if(!Number.isFinite(a)||!Number.isFinite(b)||b<=a||ids.length<1||ids.length>8||!['copy','accurate'].includes(mode)){list.appendChild(exportUiNode('p','Choose a valid range and one to eight cameras'));return Promise.resolve();}const cameras=ids.map(id=>allCameras.find(c=>c.id===id));if(cameras.some(c=>!c||typeof c.id!=='string'||c.id.length>256)){list.appendChild(exportUiNode('p','Selected camera unavailable'));return Promise.resolve();}const stop=exportUiNode('button','Cancel all exports');stop.type='button';stop.addEventListener('click',()=>{void cancelExportDownloads();});list.appendChild(stop);list.appendChild(exportUiNode('p','Files are prepared on server storage, not buffered in this page. Server size limits apply. The next camera starts after release or expiry. Copy never silently becomes a re-encode.'));const jobs=cameras.map(c=>{const row=exportUiNode('div');row.className='export-job';row.dataset.cameraId=c.id;const status=exportUiNode('p','Queued'),cancel=exportUiNode('button','Cancel');cancel.type='button';status.setAttribute('aria-live','polite');row.appendChild(exportUiNode('h4',String(c.name??c.id).slice(0,256)));row.appendChild(status);row.appendChild(cancel);list.appendChild(row);const j={id:c.id,start:new Date(a).toISOString(),end:new Date(b).toISOString(),mode,row,status,cancel,state:'queued',reason:null,serverId:null,creating:false,canceling:false,finished:false,handed:false,url:null,save:null,finishReady:null,wake:null,resolveConsent:null,approved:null};cancel.addEventListener('click',()=>{void exportUiCancel(j);});return j;});const batch={jobs,running:true,promise:null};exportUiBatch=batch;updateDownloadTimeDisplay();const button=document.getElementById('export-start-btn');if(button)button.disabled=true;batch.promise=(async()=>{try{for(const j of jobs)await exportUiRunJob(j);}finally{batch.running=false;if(button)button.disabled=false;updateDownloadTimeDisplay();}})();return batch.promise;}
+// Keep handed-off downloads alive across page navigation; server TTL cleans jobs.
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',installExportRangeControls);else installExportRangeControls();

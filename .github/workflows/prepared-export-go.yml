@@ -1,0 +1,51 @@
+name: Prepared export Go verification
+
+on:
+  push:
+    branches: [fix/large-media-exports]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Full Go build, race suite and vet
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      GOFLAGS: -mod=readonly
+      SIMPLENVR_REQUIRE_FFMPEG: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: bash .github/scripts/ci-media-apt.sh update
+      - run: bash .github/scripts/ci-media-apt.sh install ffmpeg
+      - name: Prepared protocol regression tests
+        run: python3 -m unittest discover -s tests -p 'test_prepared_export_protocol.py' -v
+      - name: Verify dependencies and build the exact checkout
+        run: |
+          go mod download
+          go mod verify
+          git diff --exit-code -- go.mod go.sum
+          go build ./...
+      - name: Full race-enabled Go suite including Node and native media tests
+        run: bash tests/core-ci-evidence.sh "$RUNNER_TEMP/prepared-export-go"
+      - name: Static analysis
+        if: always()
+        run: go vet ./...
+      - name: Retain Go execution evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prepared-export-go-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/prepared-export-go
+          if-no-files-found: warn
+          retention-days: 14

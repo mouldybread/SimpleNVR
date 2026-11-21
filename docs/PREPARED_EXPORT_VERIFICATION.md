@@ -1,0 +1,11 @@
+# Prepared export verification
+
+Both prepared-export workflows trigger on pushes to fix/large-media-exports, pull requests and manual dispatch. A push runs the full Go build/race/vet workflow and two independent Chrome acceptance attempts against the same event commit. Require both workflows to pass on that exact commit before completion is claimed. No tests were replaced by an export-only Go subset.
+
+The live HTTPS browser harness now uses create/status/download/cancel endpoints. It checks anonymous access refusal, whole-copy compressed video packet hashes, external decode/duration, HEAD and Range, missing-coverage refusal, accurate AAC output and duration, copy proposal cancellation and explicit approval, active accurate-render cancellation and child reaping, browser-saved SHA-256/duration/decode, and HTTP 404 after server release. It no longer expects Blob URL revocation or fetches video into page JavaScript for hashing. Test-directed range/seek state is retained; application functions and response bodies are not replaced.
+
+The container has a private scratch bind mount at /exports, outside /recordings, with explicit small test quotas. Non-reordered fixtures exercise supported subsection copy; reordered inputs remain covered by Go refusal tests. Native playback, real login/navigation diagnostics and the expanded playback-edge suite are retained. Reports include the commit, image identity, browser version, media and network evidence. Passing synthetic acceptance is not production-camera or multi-GiB qualification.
+
+Local checks: Python/shell/YAML syntax; all 30 embedded browser-JavaScript expressions parsed by Node; media helper check copied 160 video packets without hash changes and externally decoded a 16-second fixture. The earlier six protocol regressions passed. These are not a live-backend or browser pass. Go and Docker are unavailable locally; actual Go/Chrome/container results must come from CI after this commit is pushed.
+
+The older routed-response tests/browser-export-acceptance.py is a separate legacy harness, not the real-runtime acceptance entrypoint. It has not been migrated or reported as passing here. Do not confuse that script with the migrated tests/runtime-browser-acceptance.py executed by both browser workflows.
