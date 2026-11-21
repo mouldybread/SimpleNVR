@@ -1,39 +1,46 @@
 # Large-media export implementation status
 
-This branch is work in progress. The first commit adds an isolated server-side export job store and tests only. It does NOT yet register HTTP routes, change the UI, remove the browser Blob limit, or broaden rendering compatibility. Do not release this commit as the completed export redesign.
+This branch remains work in progress, not a completed or release-ready export redesign.
 
-## Implemented foundation
+## Implemented
 
-- Bounded jobs and preparation concurrency, random job IDs, and explicit owner checks.
-- Private disk-backed output, immediately unlinked and retained by file descriptor; no recording cleanup or source modification.
-- Independent seekable download leases for eventual HTTP Range delivery, without page-level whole-file buffering.
-- Cancellation, expiry, disk-reservation accounting, bounded writes, and shutdown joining. Existing transfers retain their leases until released.
-- Safe public status messages; raw renderer errors are not exposed.
+- Bounded disk-backed prepared-output job store, owner checks, independent seekable readers, cancellation, expiry and shutdown joining.
+- Authenticated POST /api/exports/create and /api/exports/cancel.
+- Authenticated GET/HEAD /api/exports/status?id=ID and /api/exports/download?id=ID. Downloads use ServeContent and independent SectionReaders for HTTP Range requests, not browser Blobs.
+- Owners are derived from session identity, session token and credential version. Another login cannot inherit jobs. Event tokens cannot access these endpoints. Existing cross-origin protection applies to mutations.
+- Startup and shutdown lifecycle integration. Active requests are canceled and drained, then output leases and background preparations are joined.
+- The current renderer is reused with pinned-input revalidation, safe generic job failures and prepared-output duration probing. Its input restrictions remain unchanged.
 
-The renderer callback must validate the export and join its subprocesses before returning. The future HTTP integration must bind owners to authenticated sessions/credential versions, never caller-supplied owner strings. It must cancel and drain downloads before waiting for store shutdown.
+## Opt-in configuration
 
-## Planned startup configuration
-
-These settings are parsed by the new helper but are NOT wired into startup yet:
+Set NVR_EXPORT_SCRATCH_DIR to an existing absolute directory on a dedicated trusted scratch mount, e.g. /exports. Mount adequate disk space there; do not use a tmpfs or the container writable layer for large exports. The directory must be outside /recordings and must not overlap camera directories or resolve through symlinks. The service makes a private temporary subdirectory. With the variable unset, only the new endpoints are disabled (503); existing downloads continue unchanged. Invalid configured limits or unavailable configured storage prevent startup.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | NVR_EXPORT_MAX_BYTES | 8589934592 | Maximum prepared output per job (8 GiB) |
-| NVR_EXPORT_TOTAL_BYTES | 17179869184 | Aggregate reserved output capacity (16 GiB) |
+| NVR_EXPORT_TOTAL_BYTES | 17179869184 | Aggregate job-output reservation (16 GiB) |
 | NVR_EXPORT_MAX_JOBS | 8 | Maximum retained job records |
 | NVR_EXPORT_PARALLEL | 1 | Concurrent preparations |
 | NVR_EXPORT_TTL | 30m | Queue/processing expiry; retention resets on completion |
-| NVR_EXPORT_PREPARE_TIMEOUT | 30m | Deadline including queue admission wait |
+| NVR_EXPORT_PREPARE_TIMEOUT | 30m | Preparation deadline including queue wait |
 
-Each admitted job reserves its maximum output allowance; default aggregate capacity therefore admits at most two such reservations at once. Expired files held by active downloads remain charged. Invalid limits fail closed. Filesystem exhaustion can still fail a job; reservations do not reserve physical blocks or replace filesystem capacity monitoring. Use trusted private scratch storage with sufficient free space.
+Each job reserves its maximum output allowance, so defaults admit at most two reservations. Active expired downloads remain charged until release. Intermediate files used by the legacy trim renderer retain their existing separate bounds; this reservation is not a physical disk reservation or a bound on every filesystem allocation. Monitor free space. No originals are modified by the export path. Jobs are in memory and do not survive restart.
 
-## Remaining integration
+## API
 
-1. Authenticated POST creation/cancellation and GET status/download endpoints; no state-changing GET requests or bearer-token bypass.
-2. Startup, shutdown-gate and HTTP transfer cancellation wiring.
-3. Original-file delivery, compatible audio/video stream-copy assembly, and explicit preview/consent for keyframe-adjusted boundaries.
-4. Optional accurate trimming preserving audio timing and handling full-range input correctly; no silent audio removal or conversion fallback.
-5. Browser job UI without whole-file Blob buffering; update real-browser acceptance tests.
-6. Media, authentication, quota, expiry, cancellation, shutdown, large-transfer and source-preservation integration tests.
+POST create with application/json:
 
-The Go tests accompanying the first commit have not been executed in the assistant environment; Go is unavailable there.
+```json
+{"camera_id":"CAMERA_ID","start_time":"2026-11-21T00:00:00Z","end_time":"2026-11-21T00:01:00Z"}
+```
+
+A 202 response contains id, state, message, bytes and expires_at, with a Location status URL. Poll status; only ready jobs expose download_url. Download that same-origin URL with the same authenticated session. POST cancel with {"id":"JOB_ID"}; success is 204. Cancellation and expiry prevent new downloads; already acquired download leases are released when their requests finish. Logout/credential changes block subsequent requests but do not promise immediate revocation of an existing response.
+
+## Remaining
+
+- Original-file delivery, compatible audio/video stream-copy assembly and explicit consent for keyframe-adjusted ranges.
+- Optional accurate audio-preserving trimming, full-range input handling and representative media validation.
+- Browser job UI replacing the 64 MiB Blob workflow and corresponding real-browser acceptance updates.
+- Full HTTP/media/large-transfer/slow-client/shutdown and runtime acceptance validation.
+
+Tests added for authentication, token scope, CSRF, strict request validation, session isolation, logout/credential changes, Range/HEAD downloads, cancellation and shutdown. Go tests have not been run in the assistant environment.
