@@ -1,13 +1,21 @@
-# Export modes: integration and verification status
+# Export modes
 
-The HTTP planner and browser are wired to prepared copy/accurate exports. Copy is the default and never silently switches to re-encoding. Whole single-source copies preserve original bytes in prepared storage; compatible multiple sources preserve compressed A/V payloads when remuxed. This is not zero-copy original-file HTTP delivery.
+The HTTP planner and browser use prepared Copy and Accurate exports. Copy is the default and never silently changes to re-encoding. A single complete source is copied byte for byte into prepared storage. Compatible complete sources are remuxed with compressed audio/video payloads preserved. This is not zero-copy original-file delivery.
 
-Subsection copy supports non-reordered video with usable decoded keyframe timestamps. The server proposes video boundaries at keyframe/file boundaries, reinspects expanded coverage and returns copy_range_approval_required before admitting a job. The UI shows the requested/proposed intervals and AAC packet allowance and waits for explicit approval. Canceling a proposal creates no job. Approval retains the original selection and sends accepted_start/end for fresh server checks. Changed proposals require another click. Unsupported copy must be changed to Accurate explicitly.
+## Subsection copy and approval
 
-AAC packet edges may extend outside the video-aligned interval by the disclosed allowance. Timing is metadata/frame/packet granular, not calibrated camera-clock time. Candidate copy outputs are duration-probed and externally decoded before readiness; this is not a proof of every source frame/sample or colour value.
+Copy of part of a recording supports non-reordered video with usable keyframe timestamps. The server proposes video boundaries at keyframe or file boundaries and rechecks the expanded range for gaps/overlaps. It returns `copy_range_approval_required` before creating a job. The browser shows requested/proposed video intervals and the AAC packet allowance and waits for explicit approval. Cancelling the proposal creates no job.
 
-Accurate explicitly re-encodes video with libx264 CRF 18 and audio with AAC. Both tracks share the video/cut origin; supported audio offsets are preserved. Full-range input becomes limited-range yuv420p, so accurate exports are not lossless or byte-identical. Leading/trailing silence can maintain the selected window without stretching audio. Mixed audio configurations, extra tracks, rotation and higher bit depths remain unsupported.
+Approval retains the original selection and sends `accepted_start`/`accepted_end` for fresh server checks; changed video boundaries need another approval. Unsupported copy must be changed to Accurate explicitly. AAC packet edges may extend outside the video-aligned interval by the disclosed allowance.
 
-The live-container browser acceptance harness has been migrated to prepared jobs, real downloads and server release. Its container now mounts private export scratch. Branch-triggered Go and two-attempt Chrome workflows test the same pushed commit. See PREPARED_EXPORT_VERIFICATION.md for assertions and the distinction between local helper checks and actual CI results. The older routed-fixture browser script remains separate and unmigrated.
+## Accurate and timing
 
-Release readiness is NOT established until both workflows pass on the final commit and failures are resolved. Nothing in this change merges, deploys or certifies real-camera/full-resolution/multi-GiB operation. Scratch settings, quotas, session isolation and leases remain described in LARGE_MEDIA_EXPORTS.md.
+Accurate uses libx264 CRF 18 and AAC encoding, sharing the video/cut origin between tracks and preserving supported audio offsets. Full-range input becomes limited-range `yuv420p`, so the result is neither byte-identical nor lossless. Leading/trailing silence can maintain the selected window without stretching audio. Mixed audio configurations, extra tracks, rotation and higher bit depths are unsupported.
+
+Timing is frame/packet-granular, not calibrated camera-clock time. Duration probes and candidate copy decode do not prove completeness or fidelity of every frame/sample.
+
+## Setup and evidence
+
+The live-container browser harness now uses prepared jobs, normal downloads and server release with private export scratch configured. Go and Chrome checks passed on PR #8's recorded combined head; see [prepared export verification](PREPARED_EXPORT_VERIFICATION.md) for the exact result and scope. The older routed-fixture browser script remains separate and unmigrated.
+
+See [large-media exports](LARGE_MEDIA_EXPORTS.md) for scratch settings, quotas, session isolation, leases and request fields, and [export rendering](EXPORT_RENDERING.md) for implementation limits. Synthetic CI results do not qualify real-camera/full-resolution/multi-GiB or heavy-load operation. A new release or deployment still needs checks appropriate to its exact candidate and storage.

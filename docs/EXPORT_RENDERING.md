@@ -1,23 +1,33 @@
-# Prepared export rendering backend: implementation status
+# Export rendering
 
-This is a staged backend implementation, not a completed integration. export_media.go adds copy/accurate rendering primitives and export_media_test.go adds media integration tests. The HTTP planner still calls the legacy renderer and the browser does not yet send a mode choice. These paths are NOT yet selectable through the app. Do not release the branch as complete.
+Copy and Accurate are connected to the HTTP job planner and selectable in the browser. Neither mode silently falls back to the other. [Large-media exports](LARGE_MEDIA_EXPORTS.md) describes storage, limits, job lifetime and the API.
 
 ## Copy
 
-A single complete source is copied byte for byte into bounded prepared-output storage. It is not yet the planned zero-copy original-file HTTP delivery. Several complete sources are remuxed with explicit audio/video mapping, stream copy, and matching codec configuration/extradata checks. No nominal/average frame-rate equality test is used. Packet conversion is disabled for compatible concatenation, preserving compressed payloads. Additional tracks or incompatible configurations are refused, never silently selected/dropped or transcoded.
+A single complete source is copied byte for byte into bounded prepared-output storage. Multiple complete sources are remuxed with explicit video/audio mapping and matching codec configuration/extradata checks. Packet conversion is disabled for compatible concatenation, preserving compressed payloads. Nominal or average frame-rate equality is not used as a substitute for actual configuration compatibility. Extra tracks and incompatible configurations are refused, never silently selected, dropped or transcoded.
 
-Subsections in copy mode currently return a boundary error. Keyframe probing, actual-range preview and explicit consent are still required before adjusted-boundary copy is enabled. No intervals are widened automatically.
+### Part of a recording
+
+Subsection copy supports non-reordered video with usable decoded keyframe timestamps. The server plans an earlier video start and later video end at available keyframe or file boundaries and reinspects expanded coverage for gaps/overlaps. It returns a proposal before creating a job or reserving output storage. The browser displays the requested/proposed video intervals and AAC packet allowance and waits for explicit approval. Cancelling that proposal creates no job.
+
+Approval keeps the original requested selection and adds the accepted video boundaries. The server recomputes the plan and requires a new approval when those video boundaries change. Reordered video, missing keyframe information, incompatible tracks or undecodable candidate output are refused; the user must explicitly choose Accurate instead.
+
+AAC packet boundaries can extend outside the video-aligned interval by the disclosed allowance. Candidate copy output is duration-probed and externally decoded before readiness. A prepared copy is not zero-copy HTTP delivery of the original recording.
 
 ## Accurate
 
-Audio/video windows use the same video timestamp origin and cut reference, preserving relative audio offset rather than independently resetting tracks. AAC is retained by re-encoding in accurate mode; its sample rate/channel count are validated. Leading/trailing missing audio in an accepted input window is represented as silence to maintain the window duration, without stretching audio. Mixed audio presence or mismatched audio configurations across parts are currently refused.
+Audio/video windows share the video timestamp origin and cut reference, preserving supported relative audio offset rather than independently resetting each track. AAC is re-encoded; sample rate and channel count are validated. Missing leading/trailing audio within an accepted input window is represented as silence to keep its duration without stretching audio. Mixed audio presence or mismatched audio configurations across parts are refused.
 
-8-bit yuv420p and full-range yuvj420p are supported within existing dimension bounds. Accurate full-range input is explicitly converted to limited-range yuv420p output. Video is re-encoded with libx264 CRF 18; accurate exports are not byte-identical or lossless. Copy does not perform this conversion. Rotation and higher-bit-depth profiles remain unsupported. Frame-rate strings are not used as a proxy for valid timestamps. Video is frame-granular, not exact camera wall-clock timing.
+8-bit `yuv420p` and full-range `yuvj420p` are supported within the renderer's dimension bounds. Full-range input is explicitly converted to limited-range `yuv420p`. Video is encoded with libx264 CRF 18, so accurate output is not byte-identical or lossless. Copy does not perform that conversion. Extra tracks, rotation and higher bit depths remain unsupported.
 
-Fragmented MP4 accurate output uses delayed moov/edit-list handling with negative timestamps enabled for AAC encoder priming; this avoids treating encoder delay as source timing. Output must be a fresh empty regular file. Sources are pinned and revalidated, output writes are bounded, output tracks/durations are probed, and all subprocesses are joined before return. Checks do not by themselves certify every frame, colour value or audio sample.
+Video timing is frame-granular, not calibrated camera wall-clock time. Accurate fragmented MP4 uses delayed `moov`/edit-list handling and permits negative timestamps for AAC encoder priming so encoder delay is not treated as source timing.
 
-## Evidence and remaining work
+## Safeguards
 
-Local FFmpeg command experiments (not execution of the Go implementation) produced decodable H.264/AAC single/multi-part accurate output, preserved a deliberately delayed audio onset at approximately 250 ms, and preserved compressed video/AAC packet hashes when copying complete identical-profile clips. Go integration tests cover the camera metadata profile, original-byte copying, copied-packet hashes, multi-part accurate output, external A/V decode, delayed audio onset, source digests, cancellation and output limits. Go is unavailable in the assistant environment, so these Go tests have NOT been executed or compilation-verified.
+Output must be a fresh empty regular file, never an existing recording. Inputs are pinned and revalidated, output writes are bounded, track configuration/durations are probed, and subprocesses are joined before return. These checks do not certify every frame, colour value or audio sample.
 
-Still required: HTTP job renderer wiring; API and UI explicit mode selection; keyframe-adjusted copy planning/consent; original descriptor delivery; real-camera and fractional/B-frame boundary timing validation; colour-range validation; large-file and cancellation-under-load tests; migration and execution of the real Chrome acceptance suite.
+## Evidence and remaining qualification
+
+GitHub reported all 11 check runs successful on PR #8 head `b8a6178136f620d88f82099ddc7a3a91cdd5cff7`, including Go build/race/vet, the prepared-job Chrome runs and safety verification. The Go tests include original-byte copy, copied packet hashes, accurate audio offset, external decode, source immutability and resource/cancellation checks. The live-browser harness uses real authenticated HTTPS jobs and browser downloads. See [prepared export verification](PREPARED_EXPORT_VERIFICATION.md).
+
+That synthetic evidence is not full-resolution real-camera, multi-GiB, colour-fidelity or heavy-load qualification. Representative fractional/B-frame timing and real-camera colour behaviour still need deployment-specific validation. Original-file delivery without a prepared copy is not implemented. The older routed-fixture browser script remains separate from the migrated live-runtime harness.
