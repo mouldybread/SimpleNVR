@@ -66,7 +66,7 @@ async def run(repo, media, report):
                         assert await page.evaluate("async url => (await fetch(url)).ok", url)
                         if case == "saved-download":
                             async with page.expect_download() as pending:
-                                await page.get_by_role("button", name="Hand received file to browser", exact=True).click()
+                                await page.get_by_role("button", name="Download prepared video", exact=True).click()
                             download = await pending.value
                             assert await download.failure() is None
                             with tempfile.TemporaryDirectory() as destination:
