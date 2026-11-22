@@ -3,8 +3,6 @@ package main
 import (
  "bytes"
  "context"
- "encoding/binary"
- "encoding/json"
  "errors"
  "fmt"
  "io"
@@ -42,19 +40,9 @@ func (b *copyProbeOutput) Write(data []byte)(int,error){
  return b.Buffer.Write(data)
 }
 
-// nalHasIDR reports whether an H.264 sample with 4-byte NAL length prefixes
-// contains an IDR slice (NAL type 5). Malformed samples are never IDR.
-func nalHasIDR(sample []byte) bool {
- idr:=false
- for i:=0;i<len(sample);{
-  if len(sample)-i<4{return false}
-  size:=int(binary.BigEndian.Uint32(sample[i:i+4]));i+=4
-  if size<1 || size>len(sample)-i{return false}
-  if sample[i]&0x1f==5{idr=true}
-  i+=size
- }
- return idr
-}
+// Four-byte wrapper for existing unit tests. Production inspection uses the
+// stream's declared NAL length size, never this default.
+func nalHasIDR(sample []byte) bool { return nalHasIDRWithLength(sample,4) }
 
 func copyPacketFields(line string) map[string]string {
  line=strings.TrimSpace(line)
@@ -67,20 +55,17 @@ func copyPacketFields(line string) map[string]string {
  return fields
 }
 
-func copyVideoOrigin(ctx context.Context,file *os.File)(float64,error){
- cmd:=exec.CommandContext(ctx,"ffprobe","-v","error","-protocol_whitelist","file,pipe","-format_whitelist","mov","-f","mov","-i","/proc/self/fd/3","-select_streams","v:0","-show_entries","stream=codec_name,start_time","-of","json")
+func copyVideoOrigin(ctx context.Context,file *os.File)(float64,int,error){
+ cmd:=exec.CommandContext(ctx,"ffprobe","-v","error","-protocol_whitelist","file,pipe","-format_whitelist","mov","-f","mov","-i","/proc/self/fd/3","-select_streams","v:0","-show_entries","stream=codec_name,start_time,nal_length_size","-of","json")
  cmd.ExtraFiles=[]*os.File{file};cmd.WaitDelay=2*time.Second;var raw limitedProbeOutput;cmd.Stdout=&raw;cmd.Stderr=io.Discard
- if err:=cmd.Run();err!=nil{if ctx.Err()!=nil{return 0,ctx.Err()};return 0,errCopyUnsafeCut}
- var data struct{Streams []struct{Codec string `json:"codec_name"`;Start string `json:"start_time"`} `json:"streams"`}
- if json.Unmarshal(raw.Bytes(),&data)!=nil || len(data.Streams)!=1{return 0,errCopyUnsafeCut}
- if data.Streams[0].Codec!="h264"{return 0,errPreparedMediaProfile}
- return preparedMediaSeconds(data.Streams[0].Start)
+ if err:=cmd.Run();err!=nil{if ctx.Err()!=nil{return 0,0,ctx.Err()};return 0,0,errCopyUnsafeCut}
+ return decodeCopyVideoConfig(raw.Bytes())
 }
 
 func inspectCopyFrames(parent context.Context,file *os.File)(copyFrameIndex,error){
  ctx,cancel:=context.WithTimeout(parent,15*time.Second);defer cancel()
  select{case recordingDurations.slots<-struct{}{}:defer func(){<-recordingDurations.slots}();case <-ctx.Done():return copyFrameIndex{},ctx.Err()}
- origin,err:=copyVideoOrigin(ctx,file);if err!=nil{return copyFrameIndex{},err}
+ origin,nalLength,err:=copyVideoOrigin(ctx,file);if err!=nil{return copyFrameIndex{},err}
  cmd:=exec.CommandContext(ctx,"ffprobe","-v","error","-protocol_whitelist","file,pipe","-format_whitelist","mov","-f","mov","-i","/proc/self/fd/3","-select_streams","v:0","-show_entries","packet=pts_time,dts_time,size,pos,flags","-of","compact=p=0")
  cmd.ExtraFiles=[]*os.File{file};cmd.WaitDelay=2*time.Second;var raw copyProbeOutput;cmd.Stdout=&raw;cmd.Stderr=io.Discard
  if err:=cmd.Run();err!=nil{if ctx.Err()!=nil{return copyFrameIndex{},ctx.Err()};return copyFrameIndex{},errCopyUnsafeCut}
@@ -91,10 +76,10 @@ func inspectCopyFrames(parent context.Context,file *os.File)(copyFrameIndex,erro
   pts,err:=preparedMediaSeconds(fields["pts_time"]);if err!=nil{return index,errCopyUnsafeCut}
   dts,err:=preparedMediaSeconds(fields["dts_time"]);if err!=nil{return index,errCopyUnsafeCut}
   pos,posErr:=strconv.ParseInt(fields["pos"],10,64);size,sizeErr:=strconv.ParseInt(fields["size"],10,64)
-  if posErr!=nil || sizeErr!=nil || pos<0 || size<5 || size>copyKeyPacketLimit{return index,errCopyUnsafeCut}
+  if posErr!=nil || sizeErr!=nil || pos<0 || size<int64(nalLength+1) || size>copyKeyPacketLimit{return index,errCopyUnsafeCut}
   sample:=make([]byte,size)
   if _,err:=file.ReadAt(sample,pos);err!=nil{return index,errCopyUnsafeCut}
-  if !nalHasIDR(sample){continue}
+  if !nalHasIDRWithLength(sample,nalLength){continue}
   relative:=pts-origin
   if relative<0 || dts>pts{return index,errCopyUnsafeCut}
   value:=time.Duration(math.Round(relative*float64(time.Second)))
