@@ -51,6 +51,7 @@ func TestCopyAcrossTwoBFrameRecordingsWithAudio(t *testing.T) {
   for j,key := range index.keys { if key==part.In { startDTS=index.origin+index.ends[j].Seconds(); found=true; break } }
   if !found { t.Fatal("part does not begin at IDR") }
   endDTS := copyOutpoint(index,part)
+  t.Logf("part %d: origin=%.9f in=%.9f out=%.9f startDTS=%.9f endDTS=%.9f audioAllowance=%s",i,index.origin,part.In.Seconds(),part.Out.Seconds(),startDTS,endDTS,index.audioAllowance)
   for _,packet := range copyTestVideoPackets(t,ctx,part.Clip.Path) {
    dts,err := preparedMediaSeconds(packet.DTS); if err != nil { t.Fatal(err) }
    if dts>=startDTS-1e-7 && dts<endDTS-1e-7 { expected=append(expected,packet.Hash) }
@@ -87,11 +88,23 @@ func TestCopyAcrossTwoBFrameRecordingsWithAudio(t *testing.T) {
  // AAC packets span 64 ms at 16 kHz. Allow 150 ms at the outside edges,
  // but at most one AAC packet plus 5 ms of gap/overlap inside, including join.
  const edgeTolerance=0.15
- if math.Abs(audioPTS[0]-videoPTS[0])>edgeTolerance || math.Abs(audioEnd[len(audioEnd)-1]-(videoPTS[0]+4))>edgeTolerance { t.Fatal("audio does not cover video range within AAC boundary allowance") }
- for i:=1;i<len(audioPTS);i++ { if math.Abs(audioPTS[i]-audioEnd[i-1])>0.069 { t.Fatalf("audio gap or overlap near %.3fs",audioPTS[i]-videoPTS[0]) } }
- join:=videoPTS[0]+2
+ videoStart,videoEnd:=videoPTS[0],videoPTS[0]+4
+ startOffset,endOffset:=audioPTS[0]-videoStart,audioEnd[len(audioEnd)-1]-videoEnd
+ t.Logf("video packets=%d range=[%.9f,%.9f) audio packets=%d range=[%.9f,%.9f) startOffset=%.9f endOffset=%.9f",len(videoPTS),videoStart,videoEnd,len(audioPTS),audioPTS[0],audioEnd[len(audioEnd)-1],startOffset,endOffset)
+ if math.Abs(startOffset)>edgeTolerance || math.Abs(endOffset)>edgeTolerance {
+  t.Errorf("audio does not cover video range within AAC boundary allowance: startOffset=%.9fs endOffset=%.9fs tolerance=%.9fs",startOffset,endOffset,edgeTolerance)
+ }
+ join:=videoStart+2
+ for i,start:=range audioPTS {
+  if i<3 || i>=len(audioPTS)-3 || (start<=join+0.2 && audioEnd[i]>=join-0.2) {
+   t.Logf("audio packet %d: pts=%.9f end=%.9f relativeToJoin=%.9f",i,start,audioEnd[i],start-join)
+  }
+  if i>0 && math.Abs(start-audioEnd[i-1])>0.069 {
+   t.Errorf("audio gap or overlap at packet %d: pts=%.9f previousEnd=%.9f delta=%.9fs",i,start,audioEnd[i-1],start-audioEnd[i-1])
+  }
+ }
  covered:=false
  for i,start:=range audioPTS { if start<=join && audioEnd[i]>=join { covered=true;break } }
- if !covered { t.Fatal("audio packet coverage missing at recording join") }
+ if !covered { t.Errorf("audio packet coverage missing at recording join %.9f",join) }
  for i,path:=range sources { if preparedMediaDigest(t,path)!=before[i] { t.Fatal("source changed") } }
 }
