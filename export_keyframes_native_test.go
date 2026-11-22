@@ -52,8 +52,31 @@ func TestPreparedKeyframeCopyBFramesCutsAtIDR(t *testing.T) {
  actual,indices,err:=planKeyframeCopy(ctx,pins,requested);if err!=nil{t.Fatalf("B-frame subsection copy refused: %v",err)}
  base:=requested.MediaStart
  if !actual.Start.Equal(base.Add(time.Second)) || !actual.End.Equal(base.Add(4*time.Second)){t.Fatalf("not extended to IDR frames: %+v",actual)}
+ if len(actual.Parts)!=1 || len(indices)!=1{t.Fatal("expected a single-file copy plan")}
+ // Select the exact contiguous source run in decode order. B-frame PTS
+ // order is not packet order, so presentation-time filtering is incorrect.
+ part,index:=actual.Parts[0],indices[0]
+ startDTS:=0.0;found:=false
+ for j,key:=range index.keys{if key==part.In{startDTS=index.origin+index.ends[j].Seconds();found=true;break}}
+ if !found{t.Fatal("copy start is not an indexed IDR")}
+ endDTS:=copyOutpoint(index,part)
+ var expected []string
+ seen,ended:=false,false
+ for i,packet:=range copyTestVideoPackets(t,ctx,source){
+  dts,err:=preparedMediaSeconds(packet.DTS);if err!=nil{t.Fatalf("source packet %d DTS: %v",i,err)}
+  selected:=dts>=startDTS-1e-7 && dts<endDTS-1e-7
+  if selected{
+   if ended{t.Fatalf("selected source packets are not contiguous at packet %d",i)}
+   if packet.Hash==""{t.Fatalf("source packet %d has no payload hash",i)}
+   seen=true;expected=append(expected,packet.Hash)
+  }else if seen{ended=true}
+ }
+ if len(expected)!=60{t.Fatalf("selected %d source video packets, want 60; DTS interval [%.9f,%.9f)",len(expected),startDTS,endDTS)}
  output:=preparedMediaOutput(t)
  if err:=renderKeyframeCopy(ctx,pins,actual,indices,output,16<<20);err!=nil{t.Fatal(err)}
+ copied:=copyTestVideoPackets(t,ctx,output.Name())
+ if len(copied)!=len(expected){t.Fatalf("copied video packets: got %d want %d",len(copied),len(expected))}
+ for i,packet:=range copied{if packet.Hash!=expected[i]{t.Fatalf("copied video packet %d differs from selected source run: got %s want %s",i,packet.Hash,expected[i])}}
  decodePreparedMedia(t,ctx,output.Name())
  duration,err:=probeVideoDuration(ctx,output);if err!=nil{t.Fatal(err)}
  if delta:=duration-3*time.Second;delta < -100*time.Millisecond || delta > 100*time.Millisecond{t.Fatal("wrong duration",duration)}
