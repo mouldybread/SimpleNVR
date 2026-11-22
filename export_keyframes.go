@@ -21,8 +21,12 @@ import (
 // resets the decoder, so H.264 with B-frames can be cut there without
 // re-encoding. Other keyframes (open GOP, recovery points) are ignored. A full
 // decode of the output before publication remains as a final safety check.
-// The error text is unchanged so the existing HTTP mapping keeps working.
-var errCopyReordered=errors.New("subsection copy cannot safely handle this video timestamp profile; explicitly choose accurate mode")
+var errCopyUnsafeCut=errors.New("original-quality copy cannot cut this range safely: no usable IDR keyframe boundary or the video timing could not be verified; select a different time range")
+
+// errCopyReordered is the former name of errCopyUnsafeCut. It stays only so
+// export_http.go keeps compiling and mapping the error to HTTP 422; remove it when
+// that file is updated with the approval and mode removal (issue #10).
+var errCopyReordered=errCopyUnsafeCut
 
 const copyProbeLimit=16<<20
 const copyKeyPacketLimit=16<<20
@@ -34,7 +38,7 @@ type copyFrameIndex struct {origin float64;keys []time.Duration;ends []time.Dura
 
 type copyProbeOutput struct{bytes.Buffer}
 func (b *copyProbeOutput) Write(data []byte)(int,error){
- if b.Len()+len(data)>copyProbeLimit{return 0,errCopyReordered}
+ if b.Len()+len(data)>copyProbeLimit{return 0,errCopyUnsafeCut}
  return b.Buffer.Write(data)
 }
 
@@ -66,9 +70,9 @@ func copyPacketFields(line string) map[string]string {
 func copyVideoOrigin(ctx context.Context,file *os.File)(float64,error){
  cmd:=exec.CommandContext(ctx,"ffprobe","-v","error","-protocol_whitelist","file,pipe","-format_whitelist","mov","-f","mov","-i","/proc/self/fd/3","-select_streams","v:0","-show_entries","stream=codec_name,start_time","-of","json")
  cmd.ExtraFiles=[]*os.File{file};cmd.WaitDelay=2*time.Second;var raw limitedProbeOutput;cmd.Stdout=&raw;cmd.Stderr=io.Discard
- if err:=cmd.Run();err!=nil{if ctx.Err()!=nil{return 0,ctx.Err()};return 0,errCopyReordered}
+ if err:=cmd.Run();err!=nil{if ctx.Err()!=nil{return 0,ctx.Err()};return 0,errCopyUnsafeCut}
  var data struct{Streams []struct{Codec string `json:"codec_name"`;Start string `json:"start_time"`} `json:"streams"`}
- if json.Unmarshal(raw.Bytes(),&data)!=nil || len(data.Streams)!=1{return 0,errCopyReordered}
+ if json.Unmarshal(raw.Bytes(),&data)!=nil || len(data.Streams)!=1{return 0,errCopyUnsafeCut}
  if data.Streams[0].Codec!="h264"{return 0,errPreparedMediaProfile}
  return preparedMediaSeconds(data.Streams[0].Start)
 }
@@ -79,26 +83,26 @@ func inspectCopyFrames(parent context.Context,file *os.File)(copyFrameIndex,erro
  origin,err:=copyVideoOrigin(ctx,file);if err!=nil{return copyFrameIndex{},err}
  cmd:=exec.CommandContext(ctx,"ffprobe","-v","error","-protocol_whitelist","file,pipe","-format_whitelist","mov","-f","mov","-i","/proc/self/fd/3","-select_streams","v:0","-show_entries","packet=pts_time,dts_time,size,pos,flags","-of","compact=p=0")
  cmd.ExtraFiles=[]*os.File{file};cmd.WaitDelay=2*time.Second;var raw copyProbeOutput;cmd.Stdout=&raw;cmd.Stderr=io.Discard
- if err:=cmd.Run();err!=nil{if ctx.Err()!=nil{return copyFrameIndex{},ctx.Err()};return copyFrameIndex{},errCopyReordered}
+ if err:=cmd.Run();err!=nil{if ctx.Err()!=nil{return copyFrameIndex{},ctx.Err()};return copyFrameIndex{},errCopyUnsafeCut}
  index:=copyFrameIndex{origin:origin}
  for _,line:=range strings.Split(raw.String(),"\n"){
   fields:=copyPacketFields(line)
   if fields==nil || !strings.Contains(fields["flags"],"K"){continue}
-  pts,err:=preparedMediaSeconds(fields["pts_time"]);if err!=nil{return index,errCopyReordered}
-  dts,err:=preparedMediaSeconds(fields["dts_time"]);if err!=nil{return index,errCopyReordered}
+  pts,err:=preparedMediaSeconds(fields["pts_time"]);if err!=nil{return index,errCopyUnsafeCut}
+  dts,err:=preparedMediaSeconds(fields["dts_time"]);if err!=nil{return index,errCopyUnsafeCut}
   pos,posErr:=strconv.ParseInt(fields["pos"],10,64);size,sizeErr:=strconv.ParseInt(fields["size"],10,64)
-  if posErr!=nil || sizeErr!=nil || pos<0 || size<5 || size>copyKeyPacketLimit{return index,errCopyReordered}
+  if posErr!=nil || sizeErr!=nil || pos<0 || size<5 || size>copyKeyPacketLimit{return index,errCopyUnsafeCut}
   sample:=make([]byte,size)
-  if _,err:=file.ReadAt(sample,pos);err!=nil{return index,errCopyReordered}
+  if _,err:=file.ReadAt(sample,pos);err!=nil{return index,errCopyUnsafeCut}
   if !nalHasIDR(sample){continue}
   relative:=pts-origin
-  if relative<0 || dts>pts{return index,errCopyReordered}
+  if relative<0 || dts>pts{return index,errCopyUnsafeCut}
   value:=time.Duration(math.Round(relative*float64(time.Second)))
-  if len(index.keys)>0 && value<=index.keys[len(index.keys)-1]{return index,errCopyReordered}
+  if len(index.keys)>0 && value<=index.keys[len(index.keys)-1]{return index,errCopyUnsafeCut}
   index.keys=append(index.keys,value)
   index.ends=append(index.ends,time.Duration(math.Round((dts-origin)*float64(time.Second))))
  }
- if len(index.keys)==0{return index,errCopyReordered}
+ if len(index.keys)==0{return index,errCopyUnsafeCut}
  return index,nil
 }
 func copyBoundary(keys []time.Duration,target,limit time.Duration,later bool)(time.Duration,error){
@@ -107,7 +111,7 @@ func copyBoundary(keys []time.Duration,target,limit time.Duration,later bool)(ti
  pos:=sort.Search(len(keys),func(i int)bool{return keys[i]>=target})
  if pos<len(keys) && keys[pos]==target{return target,nil}
  if later{if pos<len(keys) && keys[pos]<=limit{return keys[pos],nil};return limit,nil}
- if pos==0{return 0,errCopyReordered};return keys[pos-1],nil
+ if pos==0{return 0,errCopyUnsafeCut};return keys[pos-1],nil
 }
 
 // copyOutpoint is the media time where the concat demuxer stops reading a part.
@@ -131,8 +135,8 @@ func planKeyframeCopy(ctx context.Context,pins *pinnedExport,requested exportPla
   duration:=part.Clip.End.Sub(part.Clip.Start)
   in,err:=copyBoundary(index.keys,part.In,duration,false);if err!=nil{return exportPlan{},nil,err}
   out,err:=copyBoundary(index.keys,part.Out,duration,true);if err!=nil{return exportPlan{},nil,err}
-  if i==0{start=part.Clip.Start.Add(in)}else if in!=0{return exportPlan{},nil,errCopyReordered}
-  if i==len(indices)-1{end=part.Clip.Start.Add(out)}else if out!=duration{return exportPlan{},nil,errCopyReordered}
+  if i==0{start=part.Clip.Start.Add(in)}else if in!=0{return exportPlan{},nil,errCopyUnsafeCut}
+  if i==len(indices)-1{end=part.Clip.Start.Add(out)}else if out!=duration{return exportPlan{},nil,errCopyUnsafeCut}
   indices[i]=index
  }
  plan,err:=buildExportPlan(parts,timelineWindow{Start:start,End:end});if err!=nil{return plan,nil,err}
@@ -157,11 +161,11 @@ func renderKeyframeCopy(ctx context.Context,pins *pinnedExport,plan exportPlan,i
  cmd:=ffmpegCommand(ctx,args...);cmd.ExtraFiles=append([]*os.File{manifest},pins.files...);cmd.Stdout=writer;cmd.Stderr=io.Discard
  err=cmd.Run();if writer.exceeded{return errExportJobSize};if ctx.Err()!=nil{return ctx.Err()};if err!=nil{return err}
  produced,err:=inspectPreparedMediaProfile(ctx,output);if err!=nil{return err};if len(produced.Streams)!=len(profiles[0].Streams){return errPreparedMediaProfile}
- duration,err:=probeVideoDuration(ctx,output);if err!=nil{return err};delta:=duration-plan.End.Sub(plan.Start);if delta<0{delta=-delta};if delta>100*time.Millisecond{return errCopyReordered}
+ duration,err:=probeVideoDuration(ctx,output);if err!=nil{return err};delta:=duration-plan.End.Sub(plan.Start);if delta<0{delta=-delta};if delta>100*time.Millisecond{return errCopyUnsafeCut}
  // Decode the candidate without changing it. No undecodable random-access
  // start is advertised as a ready download. Time/resource limits still apply.
  validate:=ffmpegCommand(ctx,"-hide_banner","-loglevel","error","-nostdin","-xerror","-protocol_whitelist","file,pipe","-format_whitelist","mov","-f","mov","-i","/proc/self/fd/3","-map","0:v:0","-map","0:a:0?","-f","null","-")
  validate.ExtraFiles=[]*os.File{output};validate.Stdout=io.Discard;validate.Stderr=io.Discard
- if err:=validate.Run();err!=nil{if ctx.Err()!=nil{return ctx.Err()};return errCopyReordered}
+ if err:=validate.Run();err!=nil{if ctx.Err()!=nil{return ctx.Err()};return errCopyUnsafeCut}
  return pins.validate(ctx)
 }

@@ -12,7 +12,11 @@ import (
 func TestCopyKeyframeBoundaries(t *testing.T){
  keys:=[]time.Duration{0,time.Second,2*time.Second,3*time.Second}
  for _,tc:=range []struct{target time.Duration;later bool;want time.Duration}{{1500*time.Millisecond,false,time.Second},{1500*time.Millisecond,true,2*time.Second},{time.Second,false,time.Second},{3500*time.Millisecond,true,4*time.Second},{4*time.Second,true,4*time.Second}}{got,err:=copyBoundary(keys,tc.target,4*time.Second,tc.later);if err!=nil || got!=tc.want{t.Fatalf("%+v: %v %v",tc,got,err)}}
- if _,err:=copyBoundary([]time.Duration{time.Second},500*time.Millisecond,4*time.Second,false);!errors.Is(err,errCopyReordered){t.Fatal("missing safe start accepted")}
+ if _,err:=copyBoundary([]time.Duration{time.Second},500*time.Millisecond,4*time.Second,false);!errors.Is(err,errCopyUnsafeCut){t.Fatal("missing safe start accepted")}
+}
+func TestCopyUnsafeCutError(t *testing.T){
+ if !errors.Is(errCopyReordered,errCopyUnsafeCut){t.Fatal("legacy error name no longer matches")}
+ if strings.Contains(strings.ToLower(errCopyUnsafeCut.Error()),"accurate"){t.Fatal("message refers to a mode that is being removed")}
 }
 func TestNalHasIDR(t *testing.T){
  sample:=func(kinds ...byte)[]byte{var out []byte;for _,kind:=range kinds{out=append(out,0,0,0,2,kind,0x80)};return out}
