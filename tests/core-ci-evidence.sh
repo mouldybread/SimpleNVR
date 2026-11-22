@@ -25,7 +25,12 @@ for file in "$media"/media-*.mp4; do
   [ -f "$file" ] || continue
   ffprobe -v trace -show_streams -show_packets -show_data_hash sha256 -of json "$file" > "$file.probe.json" 2> "$file.trace.log" || probe_exit=1
 done
-{ go version; ffmpeg -version; } > "$evidence/media-environment.txt" 2>&1
+# Version diagnostics must not prevent tests or execution metadata collection.
+# This also preserves evidence when regression tests deliberately stub go to fail.
+{
+  go version || printf 'go version unavailable (exit %s)\n' "$?"
+  ffmpeg -version || printf 'ffmpeg version unavailable (exit %s)\n' "$?"
+} > "$evidence/media-environment.txt" 2>&1
 set +e
 go test -json -race -count=1 -timeout=240s ./... 2>&1 | tee "$evidence/go-test.jsonl"
 statuses=("${PIPESTATUS[@]}")
