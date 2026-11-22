@@ -139,8 +139,15 @@ func renderKeyframeCopy(ctx context.Context,pins *pinnedExport,plan exportPlan,i
  if _,err:=io.WriteString(manifest,"ffconcat version 1.0\n");err!=nil{return err}
  for i,part:=range plan.Parts{if _,err:=fmt.Fprintf(manifest,"file '/proc/self/fd/%d'\ninpoint %.9f\noutpoint %.9f\nduration %s\n",i+4,indices[i].origin+part.In.Seconds(),copyOutpoint(indices[i],part),trimSeconds(part.End.Sub(part.Start)));err!=nil{return err}}
  if _,err:=manifest.Seek(0,io.SeekStart);err!=nil{return err}
- args:=[]string{"-hide_banner","-loglevel","error","-nostdin","-protocol_whitelist","file,pipe","-format_whitelist","concat,mov","-f","concat","-safe","0","-auto_convert","0","-i","/proc/self/fd/3","-map","0:v:0"}
- if len(profiles[0].Streams)==2{args=append(args,"-map","0:a:0")}
+ // Keep concat's presentation origin at zero rather than rebasing to an
+ // earlier seek-preroll packet. Negative video DTS is required for B-frames.
+ args:=[]string{"-hide_banner","-loglevel","error","-nostdin","-copyts","-protocol_whitelist","file,pipe","-format_whitelist","concat,mov","-f","concat","-safe","0","-auto_convert","0","-i","/proc/self/fd/3","-map","0:v:0"}
+ if len(profiles[0].Streams)==2{
+  // Drop only audio packets presented before the selected interval. The
+  // noise bitstream filter is used solely as a packet selector: amount=0
+  // preserves every retained AAC payload, with no decoding or re-encoding.
+  args=append(args,"-map","0:a:0","-bsf:a","noise=amount=0:drop='lt(pts,0)'")
+ }
  // The concat inpoints/outpoints select the packet range. Do not apply a
  // second output-duration cutoff to the reordered, concatenated timestamps.
  args=append(args,"-c","copy","-avoid_negative_ts","disabled","-use_editlist","1","-f","mp4","-movflags","frag_keyframe+delay_moov","pipe:1")
