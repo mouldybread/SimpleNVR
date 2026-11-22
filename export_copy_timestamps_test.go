@@ -4,6 +4,7 @@ import (
  "context"
  "encoding/json"
  "fmt"
+ "math"
  "os"
  "os/exec"
  "strings"
@@ -80,6 +81,24 @@ func TestKeyframeCopyVideoPacketTiming(t *testing.T) {
   raw,err:=exec.CommandContext(ctx,"ffprobe","-v","error","-select_streams","v:0","-show_packets","-show_entries","packet=pts,dts,flags","-of","json",output.Name()).Output();if err!=nil{t.Fatal(err)}
   var data struct{Packets []copyTimingPacket `json:"packets"`}
   if err:=json.Unmarshal(raw,&data);err!=nil{t.Fatal(err)}
-  if err:=validateCopyVideoTiming(data.Packets);err!=nil{t.Fatal(err)}
+  if err:=validateCopyVideoTiming(data.Packets);err!=nil{t.Error(err)}
+  // Compare presentation starts in seconds, not raw ticks from different
+  // stream time bases. Earliest PTS accounts for B-frame packet reordering.
+  raw,err=exec.CommandContext(ctx,"ffprobe","-v","error","-show_packets","-show_entries","packet=codec_type,pts_time","-of","json",output.Name()).Output();if err!=nil{t.Fatal(err)}
+  var timing struct{Packets []struct{Kind string `json:"codec_type"`;PTS string `json:"pts_time"`} `json:"packets"`}
+  if err:=json.Unmarshal(raw,&timing);err!=nil{t.Fatal(err)}
+  starts:=map[string]float64{}
+  for i,p:=range timing.Packets{
+   if p.Kind!="video" && p.Kind!="audio"{continue}
+   pts,err:=preparedMediaSeconds(p.PTS)
+   if err!=nil || math.IsNaN(pts) || math.IsInf(pts,0){t.Fatalf("%s packet %d has invalid PTS %q",p.Kind,i,p.PTS)}
+   if previous,ok:=starts[p.Kind];!ok || pts<previous{starts[p.Kind]=pts}
+  }
+  video,hasVideo:=starts["video"];audio,hasAudio:=starts["audio"]
+  if !hasVideo || !hasAudio{t.Fatalf("missing packet timestamps: video=%v audio=%v",hasVideo,hasAudio)}
+  const tolerance=0.15 // Same AAC edge allowance as the existing join test.
+  offset:=audio-video
+  t.Logf("presentation starts: video=%.9fs audio=%.9fs audioMinusVideo=%.9fs",video,audio,offset)
+  if math.Abs(offset)>tolerance{t.Errorf("audio start misaligned: video=%.9fs audio=%.9fs offset=%.9fs tolerance=%.9fs",video,audio,offset,tolerance)}
  })}
 }
