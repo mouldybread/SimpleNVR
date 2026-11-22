@@ -1,7 +1,9 @@
 package main
 
 import (
+ "bytes"
  "context"
+ "encoding/binary"
  "encoding/json"
  "errors"
  "fmt"
@@ -10,24 +12,93 @@ import (
  "os"
  "os/exec"
  "sort"
+ "strconv"
+ "strings"
  "time"
 )
 
-// Subsection stream copy is deliberately limited to non-reordered video. Open
-// or undecodable GOPs are rejected by full output decode before publication.
+// Subsection stream copy starts and ends only at IDR frames. An IDR frame
+// resets the decoder, so H.264 with B-frames can be cut there without
+// re-encoding. Other keyframes (open GOP, recovery points) are ignored. A full
+// decode of the output before publication remains as a final safety check.
+// The error text is unchanged so the existing HTTP mapping keeps working.
 var errCopyReordered=errors.New("subsection copy cannot safely handle this video timestamp profile; explicitly choose accurate mode")
-type copyFrameIndex struct {origin float64;keys []time.Duration;audioAllowance time.Duration}
-func inspectCopyFrames(parent context.Context,file *os.File)(copyFrameIndex,error){
- ctx,cancel:=context.WithTimeout(parent,10*time.Second);defer cancel()
- select{case recordingDurations.slots<-struct{}{}:defer func(){<-recordingDurations.slots}();case <-ctx.Done():return copyFrameIndex{},ctx.Err()}
- cmd:=exec.CommandContext(ctx,"ffprobe","-v","error","-protocol_whitelist","file,pipe","-format_whitelist","mov","-f","mov","-i","/proc/self/fd/3","-select_streams","v:0","-skip_frame","nokey","-show_frames","-show_streams","-show_entries","stream=start_time,has_b_frames:frame=best_effort_timestamp_time","-of","json")
+
+const copyProbeLimit=16<<20
+const copyKeyPacketLimit=16<<20
+
+// keys are the presentation times of IDR frames and ends are their decode times,
+// both relative to origin. A cut that ends on an IDR frame must stop at its decode
+// time, which is earlier than its presentation time when the stream has B-frames.
+type copyFrameIndex struct {origin float64;keys []time.Duration;ends []time.Duration;audioAllowance time.Duration}
+
+type copyProbeOutput struct{bytes.Buffer}
+func (b *copyProbeOutput) Write(data []byte)(int,error){
+ if b.Len()+len(data)>copyProbeLimit{return 0,errCopyReordered}
+ return b.Buffer.Write(data)
+}
+
+// nalHasIDR reports whether an H.264 sample with 4-byte NAL length prefixes
+// contains an IDR slice (NAL type 5). Malformed samples are never IDR.
+func nalHasIDR(sample []byte) bool {
+ idr:=false
+ for i:=0;i<len(sample);{
+  if len(sample)-i<4{return false}
+  size:=int(binary.BigEndian.Uint32(sample[i:i+4]));i+=4
+  if size<1 || size>len(sample)-i{return false}
+  if sample[i]&0x1f==5{idr=true}
+  i+=size
+ }
+ return idr
+}
+
+func copyPacketFields(line string) map[string]string {
+ line=strings.TrimSpace(line)
+ if line==""{return nil}
+ fields:=make(map[string]string,5)
+ for _,part:=range strings.Split(line,"|"){
+  key,value,ok:=strings.Cut(part,"=")
+  if ok{fields[key]=value}
+ }
+ return fields
+}
+
+func copyVideoOrigin(ctx context.Context,file *os.File)(float64,error){
+ cmd:=exec.CommandContext(ctx,"ffprobe","-v","error","-protocol_whitelist","file,pipe","-format_whitelist","mov","-f","mov","-i","/proc/self/fd/3","-select_streams","v:0","-show_entries","stream=codec_name,start_time","-of","json")
  cmd.ExtraFiles=[]*os.File{file};cmd.WaitDelay=2*time.Second;var raw limitedProbeOutput;cmd.Stdout=&raw;cmd.Stderr=io.Discard
+ if err:=cmd.Run();err!=nil{if ctx.Err()!=nil{return 0,ctx.Err()};return 0,errCopyReordered}
+ var data struct{Streams []struct{Codec string `json:"codec_name"`;Start string `json:"start_time"`} `json:"streams"`}
+ if json.Unmarshal(raw.Bytes(),&data)!=nil || len(data.Streams)!=1{return 0,errCopyReordered}
+ if data.Streams[0].Codec!="h264"{return 0,errPreparedMediaProfile}
+ return preparedMediaSeconds(data.Streams[0].Start)
+}
+
+func inspectCopyFrames(parent context.Context,file *os.File)(copyFrameIndex,error){
+ ctx,cancel:=context.WithTimeout(parent,15*time.Second);defer cancel()
+ select{case recordingDurations.slots<-struct{}{}:defer func(){<-recordingDurations.slots}();case <-ctx.Done():return copyFrameIndex{},ctx.Err()}
+ origin,err:=copyVideoOrigin(ctx,file);if err!=nil{return copyFrameIndex{},err}
+ cmd:=exec.CommandContext(ctx,"ffprobe","-v","error","-protocol_whitelist","file,pipe","-format_whitelist","mov","-f","mov","-i","/proc/self/fd/3","-select_streams","v:0","-show_entries","packet=pts_time,dts_time,size,pos,flags","-of","compact=p=0")
+ cmd.ExtraFiles=[]*os.File{file};cmd.WaitDelay=2*time.Second;var raw copyProbeOutput;cmd.Stdout=&raw;cmd.Stderr=io.Discard
  if err:=cmd.Run();err!=nil{if ctx.Err()!=nil{return copyFrameIndex{},ctx.Err()};return copyFrameIndex{},errCopyReordered}
- var data struct{Streams []struct{Start string `json:"start_time"`;Reordered *int `json:"has_b_frames"`} `json:"streams"`;Frames []struct{PTS string `json:"best_effort_timestamp_time"`} `json:"frames"`}
- if json.Unmarshal(raw.Bytes(),&data)!=nil || len(data.Streams)!=1 || (data.Streams[0].Reordered==nil || *data.Streams[0].Reordered!=0) || len(data.Frames)==0{return copyFrameIndex{},errCopyReordered}
- origin,err:=preparedMediaSeconds(data.Streams[0].Start);if err!=nil{return copyFrameIndex{},err}
  index:=copyFrameIndex{origin:origin}
- for _,frame:=range data.Frames{pts,err:=preparedMediaSeconds(frame.PTS);if err!=nil{return index,err};relative:=pts-origin;if relative<0{return index,errCopyReordered};value:=time.Duration(math.Round(relative*float64(time.Second)));if len(index.keys)>0 && value<=index.keys[len(index.keys)-1]{return index,errCopyReordered};index.keys=append(index.keys,value)}
+ for _,line:=range strings.Split(raw.String(),"\n"){
+  fields:=copyPacketFields(line)
+  if fields==nil || !strings.Contains(fields["flags"],"K"){continue}
+  pts,err:=preparedMediaSeconds(fields["pts_time"]);if err!=nil{return index,errCopyReordered}
+  dts,err:=preparedMediaSeconds(fields["dts_time"]);if err!=nil{return index,errCopyReordered}
+  pos,posErr:=strconv.ParseInt(fields["pos"],10,64);size,sizeErr:=strconv.ParseInt(fields["size"],10,64)
+  if posErr!=nil || sizeErr!=nil || pos<0 || size<5 || size>copyKeyPacketLimit{return index,errCopyReordered}
+  sample:=make([]byte,size)
+  if _,err:=file.ReadAt(sample,pos);err!=nil{return index,errCopyReordered}
+  if !nalHasIDR(sample){continue}
+  relative:=pts-origin
+  if relative<0 || dts>pts{return index,errCopyReordered}
+  value:=time.Duration(math.Round(relative*float64(time.Second)))
+  if len(index.keys)>0 && value<=index.keys[len(index.keys)-1]{return index,errCopyReordered}
+  index.keys=append(index.keys,value)
+  index.ends=append(index.ends,time.Duration(math.Round((dts-origin)*float64(time.Second))))
+ }
+ if len(index.keys)==0{return index,errCopyReordered}
  return index,nil
 }
 func copyBoundary(keys []time.Duration,target,limit time.Duration,later bool)(time.Duration,error){
@@ -37,6 +108,17 @@ func copyBoundary(keys []time.Duration,target,limit time.Duration,later bool)(ti
  if pos<len(keys) && keys[pos]==target{return target,nil}
  if later{if pos<len(keys) && keys[pos]<=limit{return keys[pos],nil};return limit,nil}
  if pos==0{return 0,errCopyReordered};return keys[pos-1],nil
+}
+
+// copyOutpoint is the media time where the concat demuxer stops reading a part.
+// When the cut ends on an IDR frame, that is the frame's decode time, so the IDR
+// frame and the frames after it are not included. Otherwise the end of the part.
+func copyOutpoint(index copyFrameIndex,part exportPlanPart)float64{
+ if part.Out<part.Clip.End.Sub(part.Clip.Start){
+  pos:=sort.Search(len(index.keys),func(i int)bool{return index.keys[i]>=part.Out})
+  if pos<len(index.keys) && index.keys[pos]==part.Out && pos<len(index.ends){return index.origin+index.ends[pos].Seconds()}
+ }
+ return index.origin+part.Out.Seconds()
 }
 func planKeyframeCopy(ctx context.Context,pins *pinnedExport,requested exportPlan)(exportPlan,[]copyFrameIndex,error){
  if err:=pins.validate(ctx);err!=nil{return exportPlan{},nil,err}
@@ -65,7 +147,7 @@ func renderKeyframeCopy(ctx context.Context,pins *pinnedExport,plan exportPlan,i
  manifest,err:=os.CreateTemp("","simplenvr-keycopy-*.ffconcat");if err!=nil{return err};defer manifest.Close();defer os.Remove(manifest.Name())
  if err:=os.Remove(manifest.Name());err!=nil{return err}
  if _,err:=io.WriteString(manifest,"ffconcat version 1.0\n");err!=nil{return err}
- for i,part:=range plan.Parts{if _,err:=fmt.Fprintf(manifest,"file '/proc/self/fd/%d'\ninpoint %.9f\noutpoint %.9f\nduration %s\n",i+4,indices[i].origin+part.In.Seconds(),indices[i].origin+part.Out.Seconds(),trimSeconds(part.End.Sub(part.Start)));err!=nil{return err}}
+ for i,part:=range plan.Parts{if _,err:=fmt.Fprintf(manifest,"file '/proc/self/fd/%d'\ninpoint %.9f\noutpoint %.9f\nduration %s\n",i+4,indices[i].origin+part.In.Seconds(),copyOutpoint(indices[i],part),trimSeconds(part.End.Sub(part.Start)));err!=nil{return err}}
  if _,err:=manifest.Seek(0,io.SeekStart);err!=nil{return err}
  args:=[]string{"-hide_banner","-loglevel","error","-nostdin","-protocol_whitelist","file,pipe","-format_whitelist","concat,mov","-f","concat","-safe","0","-auto_convert","0","-i","/proc/self/fd/3","-map","0:v:0"}
  if len(profiles[0].Streams)==2{args=append(args,"-map","0:a:0")}
