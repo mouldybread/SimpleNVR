@@ -125,7 +125,7 @@ func planKeyframeCopy(ctx context.Context,pins *pinnedExport,requested exportPla
   indices[i]=index
  }
  plan,err:=buildExportPlan(parts,timelineWindow{Start:start,End:end});if err!=nil{return plan,nil,err}
- if err:=validateCopyExtension(requested,plan);err!=nil{return exportPlan{},nil,err}
+ if err:=validateCopyExtension(requested,plan);err!=nil{return plan,nil,err}
  return plan,indices,pins.validate(ctx)
 }
 func renderKeyframeCopy(ctx context.Context,pins *pinnedExport,plan exportPlan,indices []copyFrameIndex,output *os.File,limit int64)error{
@@ -141,7 +141,9 @@ func renderKeyframeCopy(ctx context.Context,pins *pinnedExport,plan exportPlan,i
  if _,err:=manifest.Seek(0,io.SeekStart);err!=nil{return err}
  args:=[]string{"-hide_banner","-loglevel","error","-nostdin","-protocol_whitelist","file,pipe","-format_whitelist","concat,mov","-f","concat","-safe","0","-auto_convert","0","-i","/proc/self/fd/3","-map","0:v:0"}
  if len(profiles[0].Streams)==2{args=append(args,"-map","0:a:0")}
- args=append(args,"-c","copy","-t",trimSeconds(plan.End.Sub(plan.Start)),"-avoid_negative_ts","disabled","-use_editlist","1","-f","mp4","-movflags","frag_keyframe+delay_moov","pipe:1")
+ // The concat inpoints/outpoints select the packet range. Do not apply a
+ // second output-duration cutoff to the reordered, concatenated timestamps.
+ args=append(args,"-c","copy","-avoid_negative_ts","disabled","-use_editlist","1","-f","mp4","-movflags","frag_keyframe+delay_moov","pipe:1")
  writer:=&boundedExportJobWriter{ctx:ctx,file:output,limit:limit}
  cmd:=ffmpegCommand(ctx,args...);cmd.ExtraFiles=append([]*os.File{manifest},pins.files...);cmd.Stdout=writer;cmd.Stderr=io.Discard
  err=cmd.Run();if writer.exceeded{return errExportJobSize};if ctx.Err()!=nil{return ctx.Err()};if err!=nil{return err}
