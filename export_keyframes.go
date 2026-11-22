@@ -136,6 +136,7 @@ func planKeyframeCopy(ctx context.Context,pins *pinnedExport,requested exportPla
   indices[i]=index
  }
  plan,err:=buildExportPlan(parts,timelineWindow{Start:start,End:end});if err!=nil{return plan,nil,err}
+ if err:=validateCopyExtension(requested,plan);err!=nil{return exportPlan{},nil,err}
  return plan,indices,pins.validate(ctx)
 }
 func renderKeyframeCopy(ctx context.Context,pins *pinnedExport,plan exportPlan,indices []copyFrameIndex,output *os.File,limit int64)error{
