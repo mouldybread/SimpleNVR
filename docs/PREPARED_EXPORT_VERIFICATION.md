@@ -20,7 +20,7 @@ The live HTTPS browser harness checks:
 - Whole-copy compressed video packet hashes, external decode and duration, plus HEAD and Range behaviour.
 - Missing-coverage refusal without a download.
 - Accurate export with one AAC track and the expected audio/video durations.
-- Copy proposal cancellation before a job, and explicit approval before preparation.
+- Partial Copy accepted on the first request, with the saved range reported and within the 30-second extension limit.
 - Active accurate-render cancellation and FFmpeg child reaping.
 - Browser-saved SHA-256 matching, external decode/duration, and HTTP 404 for new requests after server release.
 

@@ -2,11 +2,11 @@
 
 The HTTP planner and browser use prepared Copy and Accurate exports. Copy is the default and never silently changes to re-encoding. A single complete source is copied byte for byte into prepared storage. Compatible complete sources are remuxed with compressed audio/video payloads preserved. This is not zero-copy original-file delivery.
 
-## Subsection copy and approval
+## Subsection copy and range extension
 
-Copy of part of a recording supports non-reordered video with usable keyframe timestamps. The server proposes video boundaries at keyframe or file boundaries and rechecks the expanded range for gaps/overlaps. It returns `copy_range_approval_required` before creating a job. The browser shows requested/proposed video intervals and the AAC packet allowance and waits for explicit approval. Cancelling the proposal creates no job.
+Copy of part of a recording supports non-reordered video with usable keyframe timestamps. The server moves the video start earlier and the end later to the nearest safe keyframe or file boundaries, by at most 30 seconds per end, and rechecks the expanded range for gaps/overlaps. There is no approval step: the first create request is accepted with `202`, and the job reports the range it will save as `saved_start` and `saved_end`. The browser shows that saved range and marks it when it is wider than the request.
 
-Approval retains the original selection and sends `accepted_start`/`accepted_end` for fresh server checks; changed video boundaries need another approval. Unsupported copy must be changed to Accurate explicitly. AAC packet edges may extend outside the video-aligned interval by the disclosed allowance.
+If the nearest safe cut is more than 30 seconds away, the request is refused with `422`; choose a wider range or Accurate. Unsupported copy must be changed to Accurate explicitly. AAC packet edges may extend slightly outside the video-aligned interval, by up to one AAC frame.
 
 ## Accurate and timing
 

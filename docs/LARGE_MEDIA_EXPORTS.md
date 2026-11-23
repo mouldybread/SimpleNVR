@@ -47,22 +47,21 @@ All routes require the creating authenticated dashboard session; event tokens ca
 - `GET` or `HEAD /api/exports/download?id=JOB_ID`
 - `POST /api/exports/cancel`
 
-POST requests use `Content-Type: application/json`. Create accepts these fields; unknown fields are rejected:
+POST requests use `Content-Type: application/json`. Create accepts these fields; unknown fields (including the former `accepted_start` and `accepted_end`) are rejected:
 
 | Field | Meaning |
 | --- | --- |
 | `camera_id` | Camera to export |
 | `start_time`, `end_time` | Ordered RFC 3339 timestamps; end is exclusive |
 | `mode` | `copy` (default) or `accurate` |
-| `accepted_start`, `accepted_end` | Copy only: the proposed video interval explicitly approved by the user |
 
-A `202` response returns `id`, `state`, `message`, `bytes`, and `expires_at`, with a `Location` header pointing to status. Ready status adds `download_url`. Wait for ready before downloading; a queued or failed job has no ready download.
+A `202` response returns `id`, `state`, `message`, `bytes`, `expires_at`, `saved_start` and `saved_end`, with a `Location` header pointing to status. `saved_start` and `saved_end` (RFC 3339, UTC) are the range the job will save; status responses repeat them. Ready status adds `download_url`. Wait for ready before downloading; a queued or failed job has no ready download.
 
-### Copy range approval
+### Copy range extension
 
-Subsection copy returns `409` JSON with `code: copy_range_approval_required` before job admission or output reservation. It contains `requested_start`, `requested_end`, `export_start`, `export_end`, and `audio_allowance_ms`. Show the proposed video interval and possible AAC packet overhang to the user, even when the video boundaries already match keyframes.
+Subsection copy does not need approval. The server extends the requested range outward to the nearest safe video cut, by at most 30 seconds at each end, and creates the job from that range. The first create request is accepted with `202`, and `saved_start`/`saved_end` report the extended range, which can be wider than `start_time`/`end_time` but never narrower. Clients should show the saved range to the user. AAC packet boundaries can reach slightly outside the video interval, by up to one AAC frame.
 
-After explicit approval, repeat the original camera, start/end and mode with `accepted_start` and `accepted_end` set to the proposed `export_start` and `export_end`. Do not replace the original requested start/end. The server recomputes the proposal and refuses stale video boundaries; a changed proposal needs fresh approval.
+If the nearest safe cut is more than 30 seconds beyond the request, or no safe cut exists, create returns `422` and no job or output reservation is made. Choose a wider range or Accurate. Accurate reports the requested range as the saved range.
 
 Other common outcomes include `409` with `X-Export-Plan-Status: gap` or `overlap` for missing/ambiguous coverage, `413` for too many clips, `422` for an unsupported mode/profile combination, `429` for exhausted job capacity, and `503` for unavailable export service or metadata. No gap is silently skipped or overlapping source selected automatically.
 

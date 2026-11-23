@@ -69,7 +69,7 @@ The idle timeout must be between 1 minute and 24 hours, and the maximum session 
 
 In Downloads, choose cameras, adjust the start and end times, and choose a mode:
 
-- Copy (default) preserves the encoded media without re-encoding. A single complete recording is copied byte for byte; compatible complete recordings can be joined without re-encoding. For part of a recording, SimpleNVR shows the proposed video range and audio packet allowance and waits for approval before creating a job. An unsupported copy is refused, never silently converted to Accurate.
+- Copy (default) preserves the encoded media without re-encoding. A single complete recording is copied byte for byte; compatible complete recordings can be joined without re-encoding. For part of a recording, SimpleNVR extends the range outward to the nearest safe cut (at most 30 seconds at each end) without asking, and shows the saved range once the job is created. Audio packet boundaries can reach slightly past the video range. If no safe cut is available within 30 seconds, or the video cannot be copied safely, the export is refused and you can choose Accurate instead. An unsupported copy is refused, never silently converted to Accurate.
 - Accurate re-encodes supported video and audio to cut within frame and packet limits at the selected times. It is not lossless and can require more processing.
 
 Choose Prepare exports on server. SimpleNVR prepares one camera's file at a time. When ready, choose Download prepared video. Once your browser has accepted the download, release the prepared file to continue to the next camera; an already-started transfer may continue. The page cannot verify that your browser saved the file to disk.
