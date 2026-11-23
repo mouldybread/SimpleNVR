@@ -225,24 +225,24 @@ async def exports(page, context, p, args, report):
     checks.append("prepared-accurate-audio-track-duration-and-decode")
 
     start, end = BASE + "00.5Z", BASE + "15.5Z"
-    await prepare_ui(page, start, end, "copy")
-    await page.wait_for_selector('.export-job[data-state="awaiting-consent"]', timeout=90000)
-    assert await page.evaluate("exportUiBatch.jobs[0].serverId === null && exportUiBatch.jobs[0].url === null")
-    assert "AAC packet" in await page.locator(".export-job").inner_text()
-    await page.locator(".export-job").get_by_role("button", name="Cancel", exact=True).click()
-    await page.wait_for_function("!exportUiBatch.running && exportUiBatch.jobs[0].state === 'canceled'")
-    checks.append("real-copy-proposal-cancel-before-job")
-
-    await prepare_ui(page, start, end, "copy")
-    await page.wait_for_selector('.export-job[data-state="awaiting-consent"]', timeout=90000)
-    async with page.expect_response(lambda r: urlsplit(r.url).path == "/api/exports/create" and r.status == 202) as accepted:
-        await page.get_by_role("button", name="Use proposed copy range", exact=True).click()
-    assert (await accepted.value).status == 202
+    # Copy extends the range to safe cuts without any approval step: the first
+    # create request is accepted and the job reports the range it will save.
+    async with page.expect_response(lambda r: urlsplit(r.url).path == "/api/exports/create") as created:
+        await prepare_ui(page, start, end, "copy")
+    accepted = await created.value
+    assert accepted.status == 202, accepted.status
+    body = await accepted.json()
+    assert body.get("saved_start") and body.get("saved_end"), body
+    assert "accepted_" not in (accepted.request.post_data or "")
     await page.wait_for_selector('.export-job[data-state="ready"]', timeout=90000)
     assert await page.evaluate("exportUiBatch.jobs[0].mode") == "copy"
+    assert await page.evaluate("exportUiBatch.jobs[0].serverId !== null")
+    covered = await page.evaluate("() => {const j=exportUiBatch.jobs[0];return !!j.saved && Date.parse(j.saved.start)<=Date.parse(j.start) && Date.parse(j.saved.end)>=Date.parse(j.end) && Date.parse(j.saved.start)>=Date.parse(j.start)-30000 && Date.parse(j.saved.end)<=Date.parse(j.end)+30000;}")
+    assert covered, body
+    assert "Saved range" in await page.locator(".export-job").inner_text()
     await page.get_by_role("button", name="Release prepared file / continue", exact=True).click()
     await page.wait_for_function("!exportUiBatch.running")
-    checks.append("real-copy-proposal-explicit-approval-and-release")
+    checks.append("real-copy-range-extension-saved-range-and-release")
 
     await prepare_ui(page, start, end, "accurate")
     pids = await wait_pids(args.container, True)
