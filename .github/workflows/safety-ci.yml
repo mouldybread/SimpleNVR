@@ -1,14 +1,20 @@
 name: Safety verification
 
 on:
-  push:
-    branches: [main, fix/recording-safety-audit, fix/session-expiry-redirect]
-  pull_request:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      checkpoint_sha:
+        description: Immutable commit selected by the checkpoint caller
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
+
+env:
+  CHECKPOINT_SHA: ${{ inputs.checkpoint_sha || github.sha }}
 
 jobs:
   core:
@@ -20,6 +26,9 @@ jobs:
       SIMPLENVR_REQUIRE_FFMPEG: '1'
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CHECKPOINT_SHA }}
+          persist-credentials: false
       - name: Browser CI diagnostic helper regression tests
         run: |
           python3 -m unittest discover -s tests -p 'test_browser_ci_diagnostics.py' -v
@@ -45,12 +54,12 @@ jobs:
         run: python3 -m unittest discover -s tests -p 'test_core_ci_evidence.py' -v
       - name: Race-enabled tests including media and shutdown lifecycle
         shell: bash
-        run: bash tests/core-ci-evidence.sh "$RUNNER_TEMP/simplenvr-core-evidence"
+        run: GITHUB_SHA="$CHECKPOINT_SHA" bash tests/core-ci-evidence.sh "$RUNNER_TEMP/simplenvr-core-evidence"
       - name: Retain core test execution evidence even on failure
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: core-test-execution-${{ github.sha }}-${{ github.run_attempt }}
+          name: core-test-execution-${{ env.CHECKPOINT_SHA }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/simplenvr-core-evidence
           if-no-files-found: error
           retention-days: 14
@@ -91,7 +100,7 @@ jobs:
         run: docker build -t simplenvr-safety-test .
       - name: Active runtime-container recording, SIGTERM and restart intent
         shell: bash
-        run: bash tests/active-container-storage.sh simplenvr-safety-test
+        run: GITHUB_SHA="$CHECKPOINT_SHA" bash tests/active-container-storage.sh simplenvr-safety-test
       - name: Runtime container SIGTERM smoke test
         shell: bash
         run: |
@@ -117,12 +126,12 @@ jobs:
       - name: Runtime export backpressure, disconnect, SIGTERM and restart
         timeout-minutes: 6
         shell: bash
-        run: bash tests/runtime-export-acceptance.sh simplenvr-safety-test "$RUNNER_TEMP/simplenvr-export-evidence"
+        run: GITHUB_SHA="$CHECKPOINT_SHA" bash tests/runtime-export-acceptance.sh simplenvr-safety-test "$RUNNER_TEMP/simplenvr-export-evidence"
       - name: Retain runtime-export evidence even on failure
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: runtime-export-acceptance-${{ github.sha }}-${{ github.run_attempt }}
+          name: runtime-export-acceptance-${{ env.CHECKPOINT_SHA }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/simplenvr-export-evidence
           if-no-files-found: error
           retention-days: 14
@@ -137,6 +146,9 @@ jobs:
         attempt: [1, 2]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CHECKPOINT_SHA }}
+          persist-credentials: false
       - name: Refresh Ubuntu package indexes
         timeout-minutes: 5
         run: bash .github/scripts/ci-media-apt.sh update
@@ -161,12 +173,12 @@ jobs:
         run: |
           set -euo pipefail
           . "$RUNNER_TEMP/simplenvr-browser-venv/bin/activate"
-          bash tests/runtime-browser-acceptance.sh simplenvr-safety-test "$RUNNER_TEMP/simplenvr-browser-evidence"
+          GITHUB_SHA="$CHECKPOINT_SHA" bash tests/runtime-browser-acceptance.sh simplenvr-safety-test "$RUNNER_TEMP/simplenvr-browser-evidence"
       - name: Retain runtime-browser acceptance evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: runtime-browser-acceptance-${{ github.sha }}-${{ github.run_attempt }}-${{ matrix.attempt }}
+          name: runtime-browser-acceptance-${{ env.CHECKPOINT_SHA }}-${{ github.run_attempt }}-${{ matrix.attempt }}
           path: ${{ runner.temp }}/simplenvr-browser-evidence
           if-no-files-found: warn
           retention-days: 14
@@ -180,6 +192,9 @@ jobs:
       SIMPLENVR_CORRESPONDENCE_RESOURCE: '1'
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CHECKPOINT_SHA }}
+          persist-credentials: false
       - name: Prepare evidence directory
         run: |
           set -euo pipefail
@@ -199,7 +214,7 @@ jobs:
         run: |
           set -euo pipefail
           {
-            printf 'head=%s run_attempt=%s\n' "$GITHUB_SHA" "$GITHUB_RUN_ATTEMPT"
+            printf 'head=%s run_attempt=%s\n' "$CHECKPOINT_SHA" "$GITHUB_RUN_ATTEMPT"
             uname -a
             go version
             ffmpeg -version
@@ -230,7 +245,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 tests/correspondence_assessment.py "$RUNNER_TEMP/correspondence-resources" \
-            --expected-head "$GITHUB_SHA" \
+            --expected-head "$CHECKPOINT_SHA" \
             --output "$RUNNER_TEMP/correspondence-resources/assessment.json" \
             --summary "$RUNNER_TEMP/correspondence-resources/assessment.md"
       - name: Publish evidence assessment summary
@@ -240,7 +255,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: correspondence-resources-${{ github.sha }}-${{ github.run_attempt }}
+          name: correspondence-resources-${{ env.CHECKPOINT_SHA }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/correspondence-resources
           if-no-files-found: error
           retention-days: 14
