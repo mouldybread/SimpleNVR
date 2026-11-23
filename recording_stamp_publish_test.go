@@ -25,6 +25,11 @@ func TestStampedFinalPathBuildsDayFolderAndRejectsBadInput(t *testing.T) {
  fraction:=time.Date(2026,11,10,12,0,0,900000000,time.UTC)
  got,err=stampedFinalPath(camera,fraction,fraction.Add(10*time.Minute),"x",false)
  if want:="/recordings/cam_a/20261110/20261110_120000_E20261110_121001_x.mp4";err!=nil || got!=want {t.Fatal("rounding",got,err)}
+ got,err=stampedFinalPath(camera,start,start.Add(time.Nanosecond),"x",false)
+ if want:="/recordings/cam_a/20261110/20261110_235500_E20261110_235501_x.mp4";err!=nil || got!=want {t.Fatal("positive sub-second span rounds up to one second",got,err)}
+ within:=time.Date(2026,11,10,12,0,0,200000000,time.UTC)
+ got,err=stampedFinalPath(camera,within,within.Add(700*time.Millisecond),"x",false)
+ if want:="/recordings/cam_a/20261110/20261110_120000_E20261110_120001_x.mp4";err!=nil || got!=want {t.Fatal("sub-second span inside one second",got,err)}
  if _,err:=stampedFinalPath(camera,start,start.Add(maxStampedSpan),"x",false);err!=nil {t.Fatal("exactly 24h rejected",err)}
  bad:=[]struct{name,dir string;start,end time.Time;label string}{
   {"relative dir","cam",start,start.Add(time.Minute),"x"},
@@ -36,8 +41,9 @@ func TestStampedFinalPathBuildsDayFolderAndRejectsBadInput(t *testing.T) {
   {"non-ascii label",camera,start,start.Add(time.Minute),"caf\u00e9"},
   {"long label",camera,start,start.Add(time.Minute),strings.Repeat("a",161)},
   {"zero span",camera,start,start,"x"},
+  {"zero span at a fractional second",camera,fraction,fraction,"x"},
   {"end before start",camera,start,start.Add(-time.Second),"x"},
-  {"sub-second span",camera,start,start.Add(time.Nanosecond),"x"},
+  {"end one nanosecond before start",camera,start,start.Add(-time.Nanosecond),"x"},
   {"over 24h",camera,start,start.Add(maxStampedSpan+time.Second),"x"},
  }
  for _,c:=range bad {

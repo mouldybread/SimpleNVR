@@ -25,9 +25,12 @@ func stampedCeilSecond(t time.Time) time.Time {
 }
 
 // The start is truncated and the end rounded up to whole seconds, so the name never
-// understates a recording. The day folder is the UTC day of the (truncated) start.
+// understates a recording. A span that is empty or negative before rounding is refused;
+// a positive sub-second span becomes one second. The day folder is the UTC day of the
+// (truncated) start.
 func stampedFinalPath(cameraDir string,start,end time.Time,label string,partial bool) (string,error) {
  if !filepath.IsAbs(cameraDir) || filepath.Clean(cameraDir)!=cameraDir || cameraDir==string(filepath.Separator) || !stampedLabelValid(label) {return "",errStampedName}
+ if !end.After(start) {return "",errStampedName}
  start=start.UTC().Truncate(time.Second);end=stampedCeilSecond(end)
  if !end.After(start) || end.Sub(start)>maxStampedSpan {return "",errStampedName}
  name:=stampedFileName(start,end,label)
