@@ -2,6 +2,7 @@ package main
 
 import (
  "context"
+ "encoding/json"
  "errors"
  "io"
  "math"
@@ -38,26 +39,28 @@ func TestCopyOutpointUsesDecodeTimeAtIDR(t *testing.T){
   if got:=copyOutpoint(index,exportPlanPart{Clip:clip,Out:tc.out});math.Abs(got-tc.want)>1e-9{t.Fatalf("out %v: got %v want %v",tc.out,got,tc.want)}
  }
 }
-func TestCopyApprovalBeforeJobAdmission(t *testing.T){
+func TestCopyRangeExtensionSavedWithoutApproval(t *testing.T){
  _,service,h,cookie:=exportHTTPFixture(t)
+ savedStart,savedEnd:=time.Date(2026,11,20,23,59,59,0,time.UTC),time.Date(2026,11,21,0,0,11,0,time.UTC)
  calls:=0
- service.plan=func(ctx context.Context,req exportCreateRequest)(exportJobRenderer,error){calls++;if req.AcceptedStart==""{return nil,&exportCopyProposal{Code:"copy_range_approval_required",RequestedStart:req.Start,RequestedEnd:req.End,ExportStart:"2026-11-21T00:00:00Z",ExportEnd:"2026-11-21T00:00:11Z",AudioAllowanceMS:64}};return func(ctx context.Context,w io.Writer)error{_,err:=io.WriteString(w,"video");return err},nil}
- first:=exportHTTPRequest(h,cookie,"POST",exportCreatePath,exportHTTPCreateBody)
- if first.Code!=409 || !strings.Contains(first.Body.String(),"copy_range_approval_required"){t.Fatal(first.Code,first.Body.String())}
- service.store.mu.Lock();count:=len(service.store.jobs);reserved:=service.store.reserved;service.store.mu.Unlock()
- if count!=0 || reserved!=0{t.Fatal("proposal reserved a job or output storage")}
- approved:=strings.TrimSuffix(exportHTTPCreateBody,"}")+`,"accepted_start":"2026-11-21T00:00:00Z","accepted_end":"2026-11-21T00:00:11Z"}`
- next:=exportHTTPRequest(h,cookie,"POST",exportCreatePath,approved);if next.Code!=202 || calls!=2{t.Fatal(next.Code,next.Body.String(),calls)}
- wrong:=strings.TrimSuffix(exportHTTPCreateBody,"}")+`,"mode":"accurate","accepted_start":"2026-11-21T00:00:00Z","accepted_end":"2026-11-21T00:00:11Z"}`
- if got:=exportHTTPRequest(h,cookie,"POST",exportCreatePath,wrong).Code;got!=400{t.Fatal("accurate mode accepted copy approval",got)}
+ service.plan=func(ctx context.Context,req exportCreateRequest)(exportJobRenderer,error){
+  calls++
+  sink,ok:=ctx.Value(exportSavedRangeKey{}).(*exportSavedRange)
+  if !ok{return nil,errors.New("planner has no saved-range sink")}
+  sink.Start,sink.End=savedStart,savedEnd
+  return func(ctx context.Context,w io.Writer)error{_,err:=io.WriteString(w,"video");return err},nil
+ }
+ created:=exportHTTPRequest(h,cookie,"POST",exportCreatePath,exportHTTPCreateBody)
+ if created.Code!=202 || calls!=1{t.Fatal(created.Code,created.Body.String(),calls)}
+ if strings.Contains(created.Body.String(),"approval"){t.Fatal("approval vocabulary remains in the create response")}
+ var view exportHTTPView;if err:=json.Unmarshal(created.Body.Bytes(),&view);err!=nil{t.Fatal(err)}
+ if view.SavedStart!="2026-11-20T23:59:59Z" || view.SavedEnd!="2026-11-21T00:00:11Z"{t.Fatalf("saved range not reported: %+v",view)}
+ status:=exportHTTPRequest(h,cookie,"GET",exportStatusPath+"?id="+view.ID,"")
+ var polled exportHTTPView
+ if status.Code!=200 || json.Unmarshal(status.Body.Bytes(),&polled)!=nil || polled.SavedStart!=view.SavedStart || polled.SavedEnd!=view.SavedEnd{t.Fatal(status.Code,status.Body.String())}
 }
-func TestCopyStaleApprovalRequiresNewConsent(t *testing.T){
- start:=time.Date(2026,11,21,0,0,0,0,time.UTC)
- requested:=exportPlan{Start:start.Add(1500*time.Millisecond),End:start.Add(2500*time.Millisecond)}
- actual:=exportPlan{Start:start.Add(time.Second),End:start.Add(3*time.Second)}
- req:=exportCreateRequest{Start:requested.Start.Format(time.RFC3339Nano),End:requested.End.Format(time.RFC3339Nano),Mode:"copy",AcceptedStart:start.Format(time.RFC3339Nano),AcceptedEnd:actual.End.Format(time.RFC3339Nano)}
- var proposal *exportCopyProposal
- if err:=copyProposal(req,requested,actual,nil);!errors.As(err,&proposal){t.Fatal("stale interval was approved")}
- req.AcceptedStart=actual.Start.Format(time.RFC3339Nano)
- if err:=copyProposal(req,requested,actual,nil);err!=nil{t.Fatal(err)}
+func TestCopyApprovalFieldsRemoved(t *testing.T){
+ _,_,h,cookie:=exportHTTPFixture(t)
+ body:=strings.TrimSuffix(exportHTTPCreateBody,"}")+`,"accepted_start":"2026-11-21T00:00:00Z","accepted_end":"2026-11-21T00:00:11Z"}`
+ if got:=exportHTTPRequest(h,cookie,"POST",exportCreatePath,body).Code;got!=400{t.Fatal("legacy approval fields accepted",got)}
 }

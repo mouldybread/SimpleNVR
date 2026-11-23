@@ -1,11 +1,22 @@
 const assert=require('node:assert/strict');const {environment,view,response}=require('./export-ui-fixture.cjs');
-const proposal={code:'copy_range_approval_required',requested_start:'2026-11-21T00:00:00.000Z',requested_end:'2026-11-21T00:01:00.000Z',export_start:'2026-11-20T23:59:59Z',export_end:'2026-11-21T00:01:01Z',audio_allowance_ms:64};
-function approve(env){const search=e=>{if(e.tagName==='button'&&e.textContent==='Use proposed copy range')return e;for(const child of e.children){const found=search(child);if(found)return found;}return null;};const button=search(env.find('download-progress-list'));assert.ok(button);button.click();}
-(async()=>{let creates=0;const env=environment((url)=>Promise.resolve(url==='/api/exports/create'?(++creates===1?response(409,proposal):response(202,view('a'))):response(204)));
- env.run('installExportRangeControls()');assert.equal(env.find('download-export-mode').value,'copy');const batch=env.run('startExportDownloads()');await env.flush();assert.equal(env.jobs()[0].state,'awaiting-consent');assert.equal(creates,1);assert.equal(env.jobs()[0].serverId,null);assert.ok(env.find('download-progress-list').textContent.includes('64 ms'));assert.equal(env.find('download-export-mode').disabled,true);
- approve(env);await env.flush();assert.equal(creates,2);const body=JSON.parse(env.requests[1].options.body);assert.equal(body.mode,'copy');assert.equal(body.start_time,proposal.requested_start);assert.equal(body.accepted_start,proposal.export_start);assert.equal(body.accepted_end,proposal.export_end);assert.equal(env.jobs()[0].state,'ready');await env.run('cancelExportDownloads()');await batch;
- const canceled=environment(()=>Promise.resolve(response(409,proposal)));const canceledBatch=canceled.run('startExportDownloads()');await canceled.flush();await canceled.run('cancelExportDownloads()');await canceledBatch;assert.equal(canceled.requests.length,1);assert.equal(canceled.jobs()[0].state,'canceled');
- const accurate=environment(()=>Promise.resolve(response(202,view('b'))));accurate.run('installExportRangeControls()');accurate.find('download-export-mode').value='accurate';const accurateBatch=accurate.run('startExportDownloads()');await accurate.flush();assert.equal(JSON.parse(accurate.requests[0].options.body).mode,'accurate');assert.ok(accurate.jobs()[0].status.textContent.includes('re-encoded'));await accurate.run('cancelExportDownloads()');await accurateBatch;
- const bad=environment(()=>Promise.resolve(response(409,{...proposal,export_start:'2026-11-21T00:00:01Z'})));await bad.run('startExportDownloads()');assert.equal(bad.jobs()[0].state,'failed');assert.equal(bad.requests.length,1);assert.equal(bad.downloads.length,0);
- console.log('PASS explicit modes, immutable range approval, no pre-approval job, consent cancellation, invalid proposal refusal');
+const extended={saved_start:'2026-11-20T23:59:59Z',saved_end:'2026-11-21T00:01:01Z'};
+(async()=>{
+ let creates=0;
+ const env=environment(url=>Promise.resolve(url==='/api/exports/create'?(++creates,response(202,view('a','ready',extended))):response(204)));
+ env.run('installExportRangeControls()');assert.equal(env.find('download-export-mode').value,'copy');
+ const batch=env.run('startExportDownloads()');await env.flush();
+ assert.equal(creates,1);const body=JSON.parse(env.requests[0].options.body);
+ assert.deepEqual(Object.keys(body).sort(),['camera_id','end_time','mode','start_time']);
+ assert.equal(body.mode,'copy');assert.equal(body.start_time,'2026-11-21T00:00:00.000Z');assert.equal(body.end_time,'2026-11-21T00:01:00.000Z');
+ assert.equal(env.jobs()[0].state,'ready');
+ const text=env.find('download-progress-list').textContent;assert.ok(text.includes('Saved range'));assert.ok(text.includes('extended'));
+ assert.equal(env.run('exportUiBatch.jobs[0].saved.start'),extended.saved_start);assert.equal(env.run('exportUiBatch.jobs[0].saved.end'),extended.saved_end);
+ await env.run('cancelExportDownloads()');await batch;
+ const accurate=environment(()=>Promise.resolve(response(202,view('b'))));accurate.run('installExportRangeControls()');accurate.find('download-export-mode').value='accurate';const accurateBatch=accurate.run('startExportDownloads()');await accurate.flush();
+ assert.equal(JSON.parse(accurate.requests[0].options.body).mode,'accurate');assert.ok(accurate.jobs()[0].status.textContent.includes('re-encoded'));assert.equal(accurate.run('exportUiBatch.jobs[0].saved'),null);await accurate.run('cancelExportDownloads()');await accurateBatch;
+ const narrow=environment(()=>Promise.resolve(response(202,view('c','ready',{saved_start:'2026-11-21T00:00:01Z',saved_end:'2026-11-21T00:01:00Z'}))));await narrow.run('startExportDownloads()');
+ assert.equal(narrow.jobs()[0].state,'failed');assert.ok(narrow.jobs()[0].status.textContent.includes('Invalid saved range'));assert.equal(narrow.downloads.length,0);assert.equal(narrow.requests.length,1);
+ const legacy=environment(()=>Promise.resolve(response(409,{code:'copy_range_approval_required',requested_start:'2026-11-21T00:00:00.000Z',requested_end:'2026-11-21T00:01:00.000Z',export_start:'2026-11-20T23:59:59Z',export_end:'2026-11-21T00:01:01Z',audio_allowance_ms:64})));await legacy.run('startExportDownloads()');
+ assert.equal(legacy.jobs()[0].state,'failed');assert.equal(legacy.requests.length,1);assert.equal(legacy.downloads.length,0);
+ console.log('PASS explicit modes, automatic range extension without approval, saved range reporting, invalid saved range refusal, legacy proposal rejected');
 })().catch(e=>{console.error(e);process.exitCode=1;});
