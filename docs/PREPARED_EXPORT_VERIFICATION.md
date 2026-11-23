@@ -23,6 +23,8 @@ The live HTTPS browser harness checks:
 - Partial Copy accepted on the first request, with the saved range reported and within the 30-second extension limit.
 - Active accurate-render cancellation and FFmpeg child reaping.
 - Browser-saved SHA-256 matching, external decode/duration, and HTTP 404 for new requests after server release.
+- Export queue panel: Refresh lists the new job, the item's Download link points at the exact download URL and saves a decodable file whose SHA-256 matches the API download, and Clear all empties the queue, makes the download return 404 and leaves `GET /api/exports/list` empty.
+- Range bar over the real timeline: keyboard moves on the end handle, a real mouse drag of the start handle follows the timeline viewport, an overshoot clamps start to one second before end, and closing the panel hides the range bar.
 
 Native playback, real login/navigation diagnostics and the expanded playback-edge suite are retained. The container mounts private export scratch at `/exports`, outside `/recordings`, with small test quotas. Non-reordered fixtures exercise supported subsection copy; Go tests cover reordered-video refusal.
 
@@ -34,4 +36,6 @@ Before the browser migration was committed, Python/shell/YAML syntax checks and 
 
 Passing synthetic acceptance is not production-camera, full-resolution, multi-GiB-transfer, colour-fidelity or heavy-load qualification. The metadata-only large-file UI regression is not an actual multi-GiB transfer.
 
-`tests/browser-export-acceptance.py` is an older routed-response harness. It remains unmigrated and is not the live-runtime entrypoint invoked by these browser workflows. Do not report it as migrated or passing based on the live-runtime results. The migrated entrypoint is `tests/runtime-browser-acceptance.py`, invoked through the expanded playback runner.
+The live browser fixture has a single camera, so queuing several cameras in one request, the 8-camera limit and the server queue limit are covered by the Node UI tests and the Go tests, not by live Chrome.
+
+The older routed-response harness `tests/browser-export-acceptance.py` has been removed. It targeted the retired direct-download flow and was not run by any workflow. The live-runtime entrypoint is `tests/runtime-browser-acceptance.py`, invoked through the expanded playback runner.

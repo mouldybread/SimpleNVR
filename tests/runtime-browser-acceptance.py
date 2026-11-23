@@ -281,6 +281,82 @@ async def exports(page, context, p, args, report):
     await wait_pids(args.container, False)
     checks.append("real-ui-save-hash-duration-decode-and-server-release")
     report.update({"saved_trim_sha256": received_hash, "saved_trim_duration_seconds": span})
+    await export_queue_panel(page, context, args, report)
+    await export_range_handles(page, report)
+
+
+async def export_queue_panel(page, context, args, report):
+    # Session queue panel against the real server: list, download link and Clear all.
+    checks, request = report["checks_passed"], context.request
+    await prepare_ui(page, BASE + "00.5Z", BASE + "15.5Z", "copy")
+    await page.wait_for_selector('.export-job[data-state="ready"]', timeout=90000)
+    job_id = await page.evaluate("exportUiBatch.jobs[0].serverId")
+    assert job_id and len(job_id) == 64, job_id
+    await page.locator("#export-refresh-btn").click()
+    item = page.locator(f'#export-queue-list .export-queue-item[data-job-id="{job_id}"]')
+    await item.wait_for(timeout=30000)
+    assert await item.get_attribute("data-state") == "ready"
+    link = item.locator("a")
+    assert await link.count() == 1
+    assert await link.get_attribute("href") == "/api/exports/download?id=" + job_id
+    listing = await (await request.get(args.origin + "/api/exports/list")).json()
+    assert any(job["id"] == job_id and job["state"] == "ready" for job in listing["jobs"]), listing
+    expected = hashlib.sha256(await (await request.get(args.origin + "/api/exports/download?id=" + job_id)).body()).hexdigest()
+    async with page.expect_download() as pending:
+        await link.click()
+    download = await pending.value
+    assert await download.failure() is None
+    saved = args.evidence / "browser-queue-download.mp4"
+    await download.save_as(saved)
+    assert hashlib.sha256(saved.read_bytes()).hexdigest() == expected
+    assert duration(await asyncio.to_thread(media_metadata, saved)) >= 14.5
+    checks.append("real-queue-panel-list-and-download-link-saves-decodable-file")
+
+    await page.locator("#export-clear-btn").click()
+    await page.wait_for_function("document.getElementById('export-queue-list').textContent.includes('No exports in this session')")
+    assert (await request.get(args.origin + "/api/exports/download?id=" + job_id)).status == 404
+    listing = await (await request.get(args.origin + "/api/exports/list")).json()
+    assert listing["jobs"] == [], listing
+    assert "Clear all" in await page.locator(".export-job").inner_text()
+    await page.wait_for_function("!exportUiBatch.running")
+    checks.append("real-clear-all-removes-session-jobs-and-downloads")
+
+
+async def export_range_handles(page, report):
+    # Range bar over the real timeline canvas: keyboard, pointer drag, clamp and close.
+    checks = report["checks_passed"]
+    await page.evaluate("() => {downloadStartTime=new Date('2026-11-10T11:00:00Z');downloadEndTime=new Date('2026-11-10T13:00:00Z');updateDownloadTimeDisplay();}")
+    assert await page.locator("#timeline-range-overlay").is_visible()
+    await page.locator("#timeline-range-end-handle").focus()
+    before = await page.evaluate("downloadEndTime.getTime()")
+    await page.keyboard.press("ArrowRight")
+    assert await page.evaluate("downloadEndTime.getTime()") == before + 60000
+    await page.keyboard.press("ArrowLeft")
+    assert await page.evaluate("downloadEndTime.getTime()") == before
+    checks.append("real-range-handle-keyboard")
+
+    async def drag_start_handle(fraction):
+        canvas = await page.locator("#timeline-canvas").bounding_box()
+        handle = await page.locator("#timeline-range-start-handle").bounding_box()
+        y = handle["y"] + handle["height"] / 2
+        await page.mouse.move(handle["x"] + handle["width"] / 2, y)
+        await page.mouse.down()
+        await page.mouse.move(canvas["x"] + canvas["width"] * fraction, y, steps=8)
+        await page.mouse.up()
+
+    await drag_start_handle(0.3)
+    expected = await page.evaluate("TimelineGeometry.timeAt(0.3, timelineViewport())")
+    actual = await page.evaluate("downloadStartTime.getTime()")
+    assert abs(actual - expected) < 120000, (actual, expected)
+    await drag_start_handle(0.9)
+    assert await page.evaluate("downloadStartTime.getTime()") == await page.evaluate("downloadEndTime.getTime() - 1000")
+    checks.append("real-range-handle-pointer-drag-and-clamp")
+
+    await page.get_by_role("button", name="Close export panel", exact=True).click()
+    assert not await page.locator("#timeline-range-overlay").is_visible()
+    assert not await page.locator("#export-panel").is_visible()
+    assert await page.locator("#download-btn").get_attribute("aria-expanded") == "false"
+    checks.append("real-export-panel-close-hides-range-bar")
 
 
 async def run(args):
