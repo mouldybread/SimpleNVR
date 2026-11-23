@@ -16,7 +16,6 @@ func TestCopyKeyframeBoundaries(t *testing.T){
  if _,err:=copyBoundary([]time.Duration{time.Second},500*time.Millisecond,4*time.Second,false);!errors.Is(err,errCopyUnsafeCut){t.Fatal("missing safe start accepted")}
 }
 func TestCopyUnsafeCutError(t *testing.T){
- if !errors.Is(errCopyReordered,errCopyUnsafeCut){t.Fatal("legacy error name no longer matches")}
  if strings.Contains(strings.ToLower(errCopyUnsafeCut.Error()),"accurate"){t.Fatal("message refers to a mode that is being removed")}
 }
 func TestNalHasIDR(t *testing.T){

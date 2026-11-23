@@ -41,7 +41,7 @@ type exportJobLimits struct {
 }
 
 func defaultExportJobLimits() exportJobLimits {
- return exportJobLimits{MaxBytes:8<<30, TotalBytes:16<<30, MaxJobs:8, MaxQueued:4, Parallel:1, Lifetime:30*time.Minute, Preparation:30*time.Minute}
+ return exportJobLimits{MaxBytes:8<<30, TotalBytes:16<<30, MaxJobs:8, MaxQueued:8, Parallel:1, Lifetime:30*time.Minute, Preparation:30*time.Minute}
 }
 
 // queueLimit is the number of jobs that may wait to start. Zero (an unset field in

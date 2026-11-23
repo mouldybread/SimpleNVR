@@ -21,11 +21,6 @@ import (
 // decode of the output before publication remains as a final safety check.
 var errCopyUnsafeCut=errors.New("original-quality copy cannot cut this range safely: no usable IDR keyframe boundary or the video timing could not be verified; select a different time range")
 
-// errCopyReordered is the former name of errCopyUnsafeCut. It stays only so
-// export_http.go keeps compiling and mapping the error to HTTP 422; remove it when
-// that file is updated with the approval and mode removal (issue #10).
-var errCopyReordered=errCopyUnsafeCut
-
 const copyProbeLimit=16<<20
 const copyKeyPacketLimit=16<<20
 

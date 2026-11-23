@@ -33,7 +33,7 @@ func awaitExportJob(t *testing.T,s *exportJobStore,id,state string) exportJobVie
 }
 
 func TestExportJobLimits(t *testing.T) {
- defaults,err:=loadExportJobLimits(func(string)string{return ""});if err!=nil || defaults.MaxBytes!=8<<30 || defaults.TotalBytes!=16<<30 || defaults.MaxQueued!=4 {t.Fatalf("%+v %v",defaults,err)}
+ defaults,err:=loadExportJobLimits(func(string)string{return ""});if err!=nil || defaults.MaxBytes!=8<<30 || defaults.TotalBytes!=16<<30 || defaults.MaxQueued!=8 {t.Fatalf("%+v %v",defaults,err)}
  for _,values:=range []map[string]string{
   {"NVR_EXPORT_MAX_BYTES":"0"},
   {"NVR_EXPORT_MAX_BYTES":"no"},
