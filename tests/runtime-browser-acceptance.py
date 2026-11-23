@@ -283,6 +283,7 @@ async def exports(page, context, p, args, report):
     report.update({"saved_trim_sha256": received_hash, "saved_trim_duration_seconds": span})
     await export_queue_panel(page, context, args, report)
     await export_range_handles(page, report)
+    await export_capacity_limit(context, args, report)
 
 
 async def export_queue_panel(page, context, args, report):
@@ -357,6 +358,40 @@ async def export_range_handles(page, report):
     assert not await page.locator("#export-panel").is_visible()
     assert await page.locator("#download-btn").get_attribute("aria-expanded") == "false"
     checks.append("real-export-panel-close-hides-range-bar")
+
+
+async def export_capacity_limit(context, args, report):
+    # Server capacity over real HTTP: eight paced Accurate jobs fit (one preparing, the rest
+    # queued), the ninth is refused with 429 and Retry-After, and Clear all frees the slots.
+    checks, request = report["checks_passed"], context.request
+    create, clear = args.origin + "/api/exports/create", args.origin + "/api/exports/clear"
+    slow = {"camera_id": CAMERA, "start_time": BASE + "00.5Z", "end_time": BASE + "15.5Z", "mode": "accurate"}
+    try:
+        ids = []
+        for index in range(8):
+            response = await request.post(create, data=slow)
+            assert response.status == 202, (index, response.status, (await response.text())[:300])
+            ids.append((await response.json())["id"])
+        refused = await request.post(create, data=slow)
+        assert refused.status == 429, refused.status
+        assert refused.headers.get("retry-after") == "5"
+        assert refused.headers.get("content-type", "").split(";")[0] != "video/mp4"
+        assert "capacity" in (await refused.text()).lower()
+        listing = await (await request.get(args.origin + "/api/exports/list")).json()
+        jobs = listing["jobs"]
+        assert sorted(job["id"] for job in jobs) == sorted(ids), listing
+        assert all(job["state"] in ("queued", "preparing", "ready") for job in jobs), listing
+        queued = sorted(job["queue_position"] for job in jobs if job["state"] == "queued")
+        assert len(queued) >= 5 and queued == list(range(1, len(queued) + 1)), listing
+        cleared = await request.post(clear, data={})
+        assert cleared.status == 200 and (await cleared.json())["cleared"] == 8, cleared.status
+        await wait_pids(args.container, False)
+        again = await request.post(create, data={**slow, "start_time": BASE + "00Z", "end_time": BASE + "16Z", "mode": "copy"})
+        assert again.status == 202, again.status
+    finally:
+        await request.post(clear, data={})
+    await wait_pids(args.container, False)
+    checks.append("real-capacity-limit-429-retry-after-and-clear-all-recovery")
 
 
 async def run(args):
