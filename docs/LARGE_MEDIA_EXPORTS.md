@@ -8,7 +8,7 @@ SimpleNVR prepares exports on the server and serves finished files through authe
 - Jobs that cannot start yet wait in a bounded server queue (state `queued`) and start in order as capacity frees up.
 - The browser creates a job, polls its status, then offers a normal same-origin download with HTTP Range support. Control responses are bounded to 8 KiB, and the queue list to 64 KiB.
 - The UI queues one job per camera selected for playback, in selection order. The server prepares them in order, as many at a time as `NVR_EXPORT_PARALLEL` allows. A prepared file can be downloaded as soon as it is ready; it does not have to be released before the next one starts.
-- The Export queue panel lists the session's jobs (`GET /api/exports/list`) with state, queue position, estimated and actual size, saved range, a Download link for ready jobs, Cancel or Release, and Clear all. The list is read when the panel opens, on Refresh, and after create, cancel, release and clear actions; there is no background polling of the list.
+- The Export queue panel lists the session's jobs (`GET /api/exports/list`) with state, camera, mode, requested and saved range, queue position, estimated and actual size, a Download link for ready jobs, Cancel or Release, and Clear all. The camera, mode and requested range come from the server's own record of each job, so they are still shown after a page reload. The list is read when the panel opens, on Refresh, and after create, cancel, release and clear actions; there is no background polling of the list.
 - Cancel/release requires server acknowledgement. If it cannot be confirmed, the row stays visible with a Retry cancellation/release button. A failed or lost creation response is never retried automatically.
 - Navigation leaves jobs to expire rather than cancelling a download during browser handoff. Jobs do not survive restart.
 - Copy and Accurate are explicit choices. Copy never silently falls back to re-encoding. See [export rendering](EXPORT_RENDERING.md).
@@ -29,7 +29,7 @@ When the setting is absent, the application can start but prepared export endpoi
 | --- | --- | --- |
 | `NVR_EXPORT_MAX_BYTES` | 8589934592 | Maximum prepared output per job (8 GiB) |
 | `NVR_EXPORT_TOTAL_BYTES` | 17179869184 | Aggregate job-output reservation (16 GiB) |
-| `NVR_EXPORT_MAX_JOBS` | 8 | Maximum retained job records (queued, running and finished) |
+| `NVR_EXPORT_MAX_JOBS` | 8 | Maximum retained job records (queued, running, finished and expired) |
 | `NVR_EXPORT_MAX_QUEUED` | 8 | Maximum jobs waiting to start |
 | `NVR_EXPORT_PARALLEL` | 1 | Concurrent preparations |
 | `NVR_EXPORT_TTL` | 30m | How long a finished job is kept; the timer starts when the job completes |
@@ -44,6 +44,8 @@ A new job enters the queue. The oldest queued job starts when a parallel slot is
 When a job starts it reserves an estimate of its output size, worked out from the source recordings it reads, instead of the full per-job maximum. Copy reserves the share of each source file that the export uses plus 15% and 8 MiB. Accurate reserves four times that share, because re-encoded output can be much larger than a low-bitrate camera stream. Both are capped at `NVR_EXPORT_MAX_BYTES`, and if the sizes are unknown the full maximum is reserved. The reservation is also the job's output cap: a job that writes more than it reserved fails with a message saying so. When a job becomes ready its reservation shrinks to the actual size, which frees the rest for queued jobs.
 
 A queued or preparing job does not expire. The preparation timeout, which includes time spent queued, bounds it. The retention timer starts when the job completes, whether it became ready, failed or was canceled, and `expires_at` shows the preparation deadline until then.
+
+When the retention period ends, the prepared file is deleted and its reservation is released, but the job stays in the list as `expired` until the session clears it. Expired records count towards `NVR_EXPORT_MAX_JOBS`, so when that limit is reached a new job first evicts the oldest expired records, then is admitted. If no record has expired, create returns `429`.
 
 Expired or released outputs with active readers stay charged until their readers finish. Reservations are accounting limits, not preallocated physical disk space or a bound on every filesystem allocation. Monitor free space and underlying storage health.
 
@@ -78,6 +80,9 @@ Create, status and list return the same fields for a job.
 | `state` | `queued`, `preparing`, `ready`, `failed`, `canceled` or `expired` |
 | `message` | Short human-readable text; it never contains internal error details |
 | `reason` | Stable code explaining a `failed`, `canceled` or `expired` job (see below); absent otherwise |
+| `camera_id`, `camera_name` | Camera the job exports and its display name when the job was created |
+| `mode` | `copy` or `accurate`, as requested |
+| `requested_start`, `requested_end` | The range that was requested, as RFC 3339 UTC |
 | `bytes` | Actual output size once the job is ready, otherwise 0 |
 | `estimated_bytes` | Size the job reserves while it is `queued` or `preparing` |
 | `queue_position` | Place in the queue, starting at 1, while `queued` |
@@ -99,9 +104,9 @@ Create, status and list return the same fields for a job.
 
 ### List and clear
 
-`GET /api/exports/list` returns `{"jobs":[...]}` with the session's jobs, oldest first. Other sessions' jobs are never included. It takes no query parameters.
+`GET /api/exports/list` returns `{"jobs":[...]}` with the session's jobs, oldest first, including expired ones. Other sessions' jobs are never included. It takes no query parameters.
 
-`POST /api/exports/clear` (body `{}`) cancels and releases every job the session owns and returns `{"cleared":N}`. Cleared jobs disappear from list and status at once and no longer count towards `NVR_EXPORT_MAX_JOBS`. A job that is still preparing, or a download that is already in progress, finishes winding down in the background and is not interrupted mid-transfer.
+`POST /api/exports/clear` (body `{}`) cancels and releases every job the session owns, expired ones included, and returns `{"cleared":N}`. Cleared jobs disappear from list and status at once and no longer count towards `NVR_EXPORT_MAX_JOBS`. A job that is still preparing, or a download that is already in progress, finishes winding down in the background and is not interrupted mid-transfer.
 
 ### Copy range extension
 
@@ -113,7 +118,7 @@ Other common outcomes include `409` with `X-Export-Plan-Status: gap` or `overlap
 
 ### Cancel, release and expiry
 
-Cancel takes `{"id":"JOB_ID"}` and confirms with `204`. Cancellation/expiry prevents new download leases. An already-started response can continue until its lease ends. Logout and credential changes block subsequent requests, not necessarily already-started responses. A new sign-in session cannot inherit an older session's jobs.
+Cancel takes `{"id":"JOB_ID"}` and confirms with `204`. Canceling a job that already failed, was canceled or expired changes nothing, keeps its recorded reason and still returns `204`. Cancellation/expiry prevents new download leases. An already-started response can continue until its lease ends. Logout and credential changes block subsequent requests, not necessarily already-started responses. A new sign-in session cannot inherit an older session's jobs.
 
 ## Verification and limitations
 

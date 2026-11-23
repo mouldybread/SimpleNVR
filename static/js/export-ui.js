@@ -480,7 +480,7 @@ function startExportDownloads() {
   exportUiBatch = batch; updateDownloadTimeDisplay();
   batch.promise = (async () => {
     try {
-      // Create in selection order; the server queue runs them as capacity frees.
+      // Create in selection order; the server queue runs them as capacity frees up.
       const first = [];
       for (const j of jobs) first.push(await exportUiCreate(j));
       exportUiScheduleQueueRefresh();
@@ -502,21 +502,31 @@ function exportUiScheduleQueueRefresh() {
   void refreshExportQueue();
 }
 function exportUiBatchJob(serverId) { return exportUiBatch?.jobs.find(j => j.serverId === serverId) || null; }
-function exportUiQueueText(v, known) {
+// What a job was for. The server returns it with every job, so it survives a page reload;
+// jobs created by this page fall back to what this page remembers.
+function exportUiRequestedRange(v, known) {
+  const a = Date.parse(v.requested_start), b = Date.parse(v.requested_end);
+  if (typeof v.requested_start === 'string' && typeof v.requested_end === 'string' && Number.isFinite(a) && Number.isFinite(b) && b > a) return {start: v.requested_start, end: v.requested_end};
+  return known ? {start: known.start, end: known.end} : null;
+}
+function exportUiQueueText(v, requested) {
   const parts = [];
   if (v.state === 'queued' || v.state === 'preparing') parts.push(exportUiProgressText(v));
   else if (v.state === 'ready') parts.push(`Ready, ${exportUiSize(v.bytes)}. Download before ${new Date(v.expires_at).toLocaleString()}.`);
   else parts.push(`${v.state === 'failed' ? 'Failed' : v.state === 'canceled' ? 'Canceled' : 'Expired'}: ${exportUiReason(v.reason || (v.state === 'failed' ? '' : v.state))}`);
-  try { const span = exportUiSavedText(known, exportUiSaved(known, v)); if (span) parts.push(span); }
+  if (requested) parts.push(`Requested: ${exportBoundaryLabel(new Date(requested.start))} to ${exportBoundaryLabel(new Date(requested.end))}.`);
+  try { const span = exportUiSavedText(requested, exportUiSaved(requested, v)); if (span) parts.push(span); }
   catch (_) { parts.push('The server reported an invalid saved range for this job.'); }
   return parts.join(' ');
 }
 function exportUiQueueItem(v) {
-  const known = exportUiKnownJobs.get(v.id);
+  const known = exportUiKnownJobs.get(v.id), requested = exportUiRequestedRange(v, known);
   const row = exportUiNode('div'); row.className = 'export-queue-item'; row.dataset.state = v.state; row.dataset.jobId = v.id;
-  const title = known ? `${known.name} — ${exportUiModeLabel(known.mode)}` : `Export ${v.id.slice(0, 8)}`;
+  const name = exportUiText(typeof v.camera_name === 'string' ? v.camera_name : (known?.name ?? '')).slice(0, 80);
+  const mode = ['copy', 'accurate'].includes(v.mode) ? v.mode : known?.mode;
+  const title = name ? (mode ? `${name} — ${exportUiModeLabel(mode)}` : name) : `Export ${v.id.slice(0, 8)}`;
   row.appendChild(exportUiNode('h4', title));
-  const status = exportUiNode('p', exportUiQueueText(v, known)); row.appendChild(status);
+  const status = exportUiNode('p', exportUiQueueText(v, requested)); row.appendChild(status);
   if (v.state === 'ready') {
     if (v.bytes > 0 && v.download_url === exportUiDownloadURL(v.id)) {
       const link = exportUiNode('a', 'Download'); link.href = exportUiDownloadURL(v.id); link.download = `export-${v.id}.mp4`; link.className = 'btn btn-small btn-primary';
