@@ -15,8 +15,8 @@ import (
  "sync"
  "time"
 )
-const(exportCreatePath="/api/exports/create";exportCancelPath="/api/exports/cancel";exportStatusPath="/api/exports/status";exportDownloadPath="/api/exports/download")
-func init(){mutationPaths[exportCreatePath]=true;mutationPaths[exportCancelPath]=true}
+const(exportCreatePath="/api/exports/create";exportCancelPath="/api/exports/cancel";exportStatusPath="/api/exports/status";exportDownloadPath="/api/exports/download";exportListPath="/api/exports/list";exportClearPath="/api/exports/clear")
+func init(){mutationPaths[exportCreatePath]=true;mutationPaths[exportCancelPath]=true;mutationPaths[exportClearPath]=true}
 type exportCreateRequest struct{
  CameraID string `json:"camera_id"`
  Start string `json:"start_time"`
@@ -68,7 +68,7 @@ func configuredExportJobHTTP(a *authManager,n *NVR)(*exportJobHTTP,error){
  store,err:=newExportJobStore(context.Background(),directory,limits);if err!=nil{return nil,err};service:=newExportJobHTTP(a,store,nil)
  service.plan=func(ctx context.Context,req exportCreateRequest)(exportJobRenderer,error){return planExistingExportJob(ctx,n,store.directory,req)};return service,nil
 }
-func exportJobRoute(path string)bool{return path==exportCreatePath || path==exportCancelPath || path==exportStatusPath || path==exportDownloadPath}
+func exportJobRoute(path string)bool{return path==exportCreatePath || path==exportCancelPath || path==exportStatusPath || path==exportDownloadPath || path==exportListPath || path==exportClearPath}
 func(s *exportJobHTTP)owner(r *http.Request)(string,error){
  if s.auth==nil{return "",errExportJobMissing};cfg,stamp,err:=readAuthConfig(s.auth.path);if err!=nil{return "",err}
  user:=s.auth.sessions.GetString(r.Context(),"user");version:=s.auth.sessions.GetString(r.Context(),"credential_version");token:=s.auth.sessions.Token(r.Context())
@@ -78,7 +78,7 @@ func(s *exportJobHTTP)Handler(next http.Handler)http.Handler{return http.Handler
  if !exportJobRoute(r.URL.Path){next.ServeHTTP(w,r);return}
  w.Header().Set("Cache-Control","private, no-store");w.Header().Set("X-Content-Type-Options","nosniff");w.Header().Set("Referrer-Policy","no-referrer")
  owner,err:=s.owner(r);if err!=nil{http.Error(w,"Unauthorized",401);return}
- allowed:="GET, HEAD";if r.URL.Path==exportCreatePath || r.URL.Path==exportCancelPath{allowed="POST"}
+ allowed:="GET, HEAD";if r.URL.Path==exportCreatePath || r.URL.Path==exportCancelPath || r.URL.Path==exportClearPath{allowed="POST"}
  if (allowed=="POST" && r.Method!="POST") || (allowed!="POST" && r.Method!="GET" && r.Method!="HEAD"){w.Header().Set("Allow",allowed);http.Error(w,"Method not allowed",405);return}
  s.mu.Lock();if s.closing || s.store==nil{s.mu.Unlock();http.Error(w,"Prepared exports unavailable; configure export scratch storage or retry after restart",503);return};s.requests.Add(1);s.mu.Unlock();defer s.requests.Done()
  ctx,cancel:=context.WithCancel(r.Context());defer cancel();stopService:=context.AfterFunc(s.ctx,cancel);defer stopService();r=r.WithContext(ctx)
@@ -86,6 +86,8 @@ func(s *exportJobHTTP)Handler(next http.Handler)http.Handler{return http.Handler
  switch r.URL.Path{
  case exportCreatePath:s.create(w,r,owner)
  case exportCancelPath:s.cancelRequest(w,r,owner)
+ case exportClearPath:s.clearRequest(w,r,owner)
+ case exportListPath:s.listRequest(w,r,owner)
  case exportStatusPath:id,ok:=exportRequestID(w,r);if !ok{return};view,err:=s.store.status(owner,id);if err!=nil{writeExportJobHTTPError(w,err);return};writeExportJobView(w,r,200,view,s.savedFor(owner,id)...)
  case exportDownloadPath:id,ok:=exportRequestID(w,r);if !ok{return};reader,release,err:=s.store.acquire(owner,id);if err!=nil{writeExportJobHTTPError(w,err);return};defer release();w.Header().Set("Content-Type","video/mp4");w.Header().Set("Content-Disposition",`attachment; filename="export-`+id+`.mp4"`);http.ServeContent(w,r,"export-"+id+".mp4",time.Time{},reader)
  }
@@ -96,10 +98,28 @@ func decodeExportJobJSON(w http.ResponseWriter,r *http.Request,value interface{}
  if r.URL.RawQuery!=""{http.Error(w,"Query parameters not accepted",400);return false};kind,_,err:=mime.ParseMediaType(r.Header.Get("Content-Type"));if err!=nil || kind!="application/json"{http.Error(w,"Content-Type must be application/json",415);return false}
  d:=json.NewDecoder(http.MaxBytesReader(w,r.Body,4096));d.DisallowUnknownFields();if err:=d.Decode(value);err!=nil{http.Error(w,"Invalid export request",400);return false};if err:=d.Decode(&struct{}{});err!=io.EOF{http.Error(w,"One export JSON object is required",400);return false};return true
 }
-func writeExportJobView(w http.ResponseWriter,r *http.Request,status int,view exportJobView,saved ...exportSavedRange){
+func newExportHTTPView(view exportJobView,saved ...exportSavedRange)exportHTTPView{
  body:=exportHTTPView{exportJobView:view};if view.State=="ready"{body.DownloadURL=exportDownloadPath+"?id="+view.ID}
  if len(saved)>0 && saved[0].known(){body.SavedStart=saved[0].Start.UTC().Format(time.RFC3339Nano);body.SavedEnd=saved[0].End.UTC().Format(time.RFC3339Nano)}
+ return body
+}
+func writeExportJobView(w http.ResponseWriter,r *http.Request,status int,view exportJobView,saved ...exportSavedRange){
+ body:=newExportHTTPView(view,saved...)
  w.Header().Set("Content-Type","application/json");w.WriteHeader(status);if r.Method!="HEAD"{json.NewEncoder(w).Encode(body)}
+}
+// listRequest returns the session's jobs, oldest first, with the same fields as status.
+func(s *exportJobHTTP)listRequest(w http.ResponseWriter,r *http.Request,owner string){
+ if r.URL.RawQuery!=""{http.Error(w,"Query parameters not accepted",400);return}
+ views,err:=s.store.list(owner);if err!=nil{writeExportJobHTTPError(w,err);return}
+ body:=struct{Jobs []exportHTTPView `json:"jobs"`}{Jobs:make([]exportHTTPView,0,len(views))}
+ for _,view:=range views{body.Jobs=append(body.Jobs,newExportHTTPView(view,s.savedFor(owner,view.ID)...))}
+ w.Header().Set("Content-Type","application/json");w.WriteHeader(200);if r.Method!="HEAD"{json.NewEncoder(w).Encode(body)}
+}
+// clearRequest cancels and releases every job the session owns.
+func(s *exportJobHTTP)clearRequest(w http.ResponseWriter,r *http.Request,owner string){
+ var req struct{};if !decodeExportJobJSON(w,r,&req){return}
+ cleared,err:=s.store.clearOwner(owner);if err!=nil{writeExportJobHTTPError(w,err);return}
+ w.Header().Set("Content-Type","application/json");w.WriteHeader(200);json.NewEncoder(w).Encode(struct{Cleared int `json:"cleared"`}{cleared})
 }
 func writeExportJobHTTPError(w http.ResponseWriter,err error){status,message:=404,"Export unavailable, expired, or not ready";if errors.Is(err,errExportJobsBusy){status,message=429,"Export capacity exhausted; release prepared exports or wait for expiry";w.Header().Set("Retry-After","5")};if errors.Is(err,errExportJobsClosed){status,message=503,"Export service stopping"};http.Error(w,message,status)}
 func validExportSelection(req exportCreateRequest)bool{

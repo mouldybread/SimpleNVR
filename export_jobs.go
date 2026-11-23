@@ -7,6 +7,7 @@ import (
  "errors"
  "io"
  "os"
+ "sort"
  "strconv"
  "sync"
  "time"
@@ -17,6 +18,20 @@ var (
  errExportJobMissing = errors.New("export job unavailable")
  errExportJobsClosed = errors.New("export service stopping")
  errExportJobSize = errors.New("export output size limit exceeded")
+ errExportJobEmpty = errors.New("empty export")
+)
+
+// Stable machine-readable reasons reported for failed, canceled and expired jobs.
+const (
+ exportReasonOutputLimit = "output_limit"
+ exportReasonEstimateExceeded = "estimate_exceeded"
+ exportReasonDeadline = "deadline_exceeded"
+ exportReasonEmptyOutput = "empty_output"
+ exportReasonRenderFailed = "render_failed"
+ exportReasonCanceled = "canceled"
+ exportReasonCleared = "cleared"
+ exportReasonExpired = "expired"
+ exportReasonStopping = "service_stopping"
 )
 
 type exportJobLimits struct {
@@ -62,11 +77,17 @@ func loadExportJobLimits(getenv func(string)string) (exportJobLimits,error) {
 
 // ExpiresAt is the preparation deadline while a job is queued or preparing. When the
 // job completes (ready, failed or canceled) it becomes completion time plus Lifetime.
+// Reason is a stable code for failed, canceled and expired jobs. EstimatedBytes is the
+// size the job reserves while it is queued or preparing; Bytes is the actual size once
+// ready. QueuePosition is 1-based and set only while queued.
 type exportJobView struct {
  ID string `json:"id"`
  State string `json:"state"`
  Message string `json:"message"`
+ Reason string `json:"reason,omitempty"`
  Bytes int64 `json:"bytes"`
+ EstimatedBytes int64 `json:"estimated_bytes,omitempty"`
+ QueuePosition int `json:"queue_position,omitempty"`
  ExpiresAt time.Time `json:"expires_at"`
 }
 
@@ -77,8 +98,10 @@ type preparedExportJob struct {
  cancel context.CancelFunc
  render exportJobRenderer
  file *os.File
+ created time.Time
  running bool
  counted bool
+ removed bool
  readers int
  estimate int64
  reserved int64
@@ -124,6 +147,19 @@ func newExportJobStore(parent context.Context,parentDirectory string,limits expo
  return store,nil
 }
 
+// viewLocked returns a job's public view with the live queue position and estimate.
+func (s *exportJobStore) viewLocked(job *preparedExportJob) exportJobView {
+ view:=job.view
+ switch view.State {
+ case "queued":
+  view.EstimatedBytes=job.estimate
+  for i,queued:=range s.queue {if queued==job {view.QueuePosition=i+1;break}}
+ case "preparing":
+  view.EstimatedBytes=job.estimate
+ }
+ return view
+}
+
 // submit admits a job that reserves the per-job maximum when it starts.
 func (s *exportJobStore) submit(owner string,render exportJobRenderer) (exportJobView,error) {
  return s.submitEstimated(owner,0,render)
@@ -142,9 +178,9 @@ func (s *exportJobStore) submitEstimated(owner string,estimate int64,render expo
  if estimate<=0 || estimate>s.limits.MaxBytes {estimate=s.limits.MaxBytes}
  if len(s.jobs)>=s.limits.MaxJobs || len(s.queue)>=s.limits.queueLimit() {return exportJobView{},errExportJobsBusy}
  ctx,cancel:=context.WithTimeout(s.ctx,s.limits.Preparation)
- job:=&preparedExportJob{view:exportJobView{ID:id,State:"queued",Message:"Queued for export preparation",ExpiresAt:time.Now().Add(s.limits.Preparation)},owner:owner,ctx:ctx,cancel:cancel,render:render,estimate:estimate}
- view:=job.view
+ job:=&preparedExportJob{view:exportJobView{ID:id,State:"queued",Message:"Queued for export preparation",ExpiresAt:time.Now().Add(s.limits.Preparation)},owner:owner,ctx:ctx,cancel:cancel,render:render,estimate:estimate,created:time.Now()}
  s.jobs[id]=job;s.queue=append(s.queue,job)
+ view:=s.viewLocked(job)
  // A queued job has no goroutine, so its cancellation or preparation deadline is observed here.
  context.AfterFunc(ctx,func(){s.abortQueued(job)})
  s.dispatchLocked()
@@ -174,6 +210,11 @@ func (s *exportJobStore) removeQueuedLocked(job *preparedExportJob) {
  }
 }
 
+// removeIfDoneLocked drops a cleared job's record once nothing is still using it.
+func (s *exportJobStore) removeIfDoneLocked(job *preparedExportJob) {
+ if job.removed && !job.running && job.readers==0 {delete(s.jobs,job.view.ID)}
+}
+
 // abortQueued ends a job that is still waiting when its context ends: preparation
 // deadline, cancellation or shutdown. Running jobs finish through run/finish instead.
 func (s *exportJobStore) abortQueued(job *preparedExportJob) {
@@ -181,12 +222,14 @@ func (s *exportJobStore) abortQueued(job *preparedExportJob) {
  if job.view.State!="queued" {return}
  s.removeQueuedLocked(job)
  if s.closing || s.ctx.Err()!=nil || !errors.Is(job.ctx.Err(),context.DeadlineExceeded) {
-  job.view.State="canceled";job.view.Message="Export canceled"
+  job.view.State="canceled";job.view.Message="Export canceled";job.view.Reason=exportReasonCanceled
+  if s.closing || s.ctx.Err()!=nil {job.view.Reason=exportReasonStopping}
  } else {
-  job.view.State="failed";job.view.Message="Export preparation deadline exceeded"
+  job.view.State="failed";job.view.Message="Export preparation deadline exceeded";job.view.Reason=exportReasonDeadline
  }
  job.view.ExpiresAt=time.Now().Add(s.limits.Lifetime)
  s.discardLocked(job)
+ s.removeIfDoneLocked(job)
 }
 
 type boundedExportJobWriter struct {
@@ -214,7 +257,7 @@ func (s *exportJobStore) run(job *preparedExportJob) {
  err=job.render(job.ctx,writer)
  if writer.exceeded {err=errExportJobSize}
  if err==nil {err=job.ctx.Err()}
- if err==nil && writer.written==0 {err=errors.New("empty export")}
+ if err==nil && writer.written==0 {err=errExportJobEmpty}
  s.finish(job,file,writer.written,err)
 }
 
@@ -223,23 +266,30 @@ func (s *exportJobStore) finish(job *preparedExportJob,file *os.File,size int64,
  if job.counted {job.counted=false;s.active--}
  job.running=false;job.file=file
  if job.view.State=="canceled" || job.view.State=="expired" || s.closing || s.ctx.Err()!=nil {
-  if job.view.State!="expired" {job.view.State="canceled";job.view.Message="Export canceled"}
- } else if err!=nil {
-  job.view.State="failed";job.view.Message="Export preparation failed; no download is ready"
-  if errors.Is(err,errExportJobSize) {
-   job.view.Message="Export exceeds the configured server output limit"
-   if job.estimate<s.limits.MaxBytes {job.view.Message="Export exceeded its estimated output size; try a shorter range"}
+  if job.view.State!="expired" && job.view.State!="canceled" {
+   job.view.State="canceled";job.view.Message="Export canceled";job.view.Reason=exportReasonCanceled
+   if s.closing || s.ctx.Err()!=nil {job.view.Reason=exportReasonStopping}
   }
-  if errors.Is(err,context.DeadlineExceeded) {job.view.Message="Export preparation deadline exceeded"}
+ } else if err!=nil {
+  job.view.State="failed";job.view.Message="Export preparation failed; no download is ready";job.view.Reason=exportReasonRenderFailed
+  switch {
+  case errors.Is(err,errExportJobSize):
+   job.view.Message="Export exceeds the configured server output limit";job.view.Reason=exportReasonOutputLimit
+   if job.estimate<s.limits.MaxBytes {job.view.Message="Export exceeded its estimated output size; try a shorter range";job.view.Reason=exportReasonEstimateExceeded}
+  case errors.Is(err,context.DeadlineExceeded):
+   job.view.Message="Export preparation deadline exceeded";job.view.Reason=exportReasonDeadline
+  case errors.Is(err,errExportJobEmpty):
+   job.view.Reason=exportReasonEmptyOutput
+  }
  } else {
-  job.view.State="ready";job.view.Message="Ready to download";job.view.Bytes=size
+  job.view.State="ready";job.view.Message="Ready to download";job.view.Reason="";job.view.Bytes=size
   // Charge the actual size from now on and free the unused part of the estimate.
   if size<job.reserved {s.reserved-=job.reserved-size;job.reserved=size}
  }
  // The retention timer starts when the job completes.
  job.view.ExpiresAt=time.Now().Add(s.limits.Lifetime)
  if job.view.State!="ready" {s.discardLocked(job)}
- if s.closing || job.view.State=="expired" {delete(s.jobs,job.view.ID)}
+ if s.closing || job.view.State=="expired" || job.removed {delete(s.jobs,job.view.ID)}
  s.dispatchLocked()
 }
 
@@ -259,7 +309,7 @@ func (s *exportJobStore) expire(now time.Time) {
  for id,job:=range s.jobs {
   if job.running || job.view.State=="queued" {continue}
   if now.Before(job.view.ExpiresAt) {continue}
-  job.view.State="expired";job.view.Message="Prepared export expired";job.cancel()
+  job.view.State="expired";job.view.Message="Prepared export expired";job.view.Reason=exportReasonExpired;job.cancel()
   s.discardLocked(job)
   if !job.running && job.readers==0 {delete(s.jobs,id)}
  }
@@ -270,20 +320,60 @@ func (s *exportJobStore) status(owner,id string) (exportJobView,error) {
  s.mu.Lock();defer s.mu.Unlock()
  job:=s.jobs[id]
  if s.closing || s.ctx.Err()!=nil {return exportJobView{},errExportJobsClosed}
- if owner=="" || job==nil || job.owner!=owner {return exportJobView{},errExportJobMissing}
- return job.view,nil
+ if owner=="" || job==nil || job.owner!=owner || job.removed {return exportJobView{},errExportJobMissing}
+ return s.viewLocked(job),nil
+}
+
+// list returns the owner's jobs in creation order. Other sessions' jobs and jobs that
+// were cleared are never included.
+func (s *exportJobStore) list(owner string) ([]exportJobView,error) {
+ s.expire(time.Now())
+ s.mu.Lock();defer s.mu.Unlock()
+ if s.closing || s.ctx.Err()!=nil {return nil,errExportJobsClosed}
+ if owner=="" {return nil,errExportJobMissing}
+ jobs:=make([]*preparedExportJob,0,len(s.jobs))
+ for _,job:=range s.jobs {if job.owner==owner && !job.removed {jobs=append(jobs,job)}}
+ sort.Slice(jobs,func(i,j int) bool {
+  if jobs[i].created.Equal(jobs[j].created) {return jobs[i].view.ID<jobs[j].view.ID}
+  return jobs[i].created.Before(jobs[j].created)
+ })
+ views:=make([]exportJobView,0,len(jobs))
+ for _,job:=range jobs {views=append(views,s.viewLocked(job))}
+ return views,nil
+}
+
+// cancelLocked cancels a job, takes it out of the queue and releases what it holds.
+func (s *exportJobStore) cancelLocked(job *preparedExportJob,reason,message string) {
+ wasQueued:=job.view.State=="queued"
+ job.cancel();job.view.State="canceled";job.view.Message=message;job.view.Reason=reason
+ if wasQueued {job.view.ExpiresAt=time.Now().Add(s.limits.Lifetime)}
+ s.removeQueuedLocked(job)
+ s.discardLocked(job)
 }
 
 func (s *exportJobStore) cancelJob(owner,id string) error {
  s.mu.Lock();defer s.mu.Unlock()
  job:=s.jobs[id]
- if owner=="" || job==nil || job.owner!=owner {return errExportJobMissing}
- wasQueued:=job.view.State=="queued"
- job.cancel();job.view.State="canceled";job.view.Message="Export canceled"
- if wasQueued {job.view.ExpiresAt=time.Now().Add(s.limits.Lifetime)}
- s.removeQueuedLocked(job)
- s.discardLocked(job)
+ if owner=="" || job==nil || job.owner!=owner || job.removed {return errExportJobMissing}
+ s.cancelLocked(job,exportReasonCanceled,"Export canceled")
  return nil
+}
+
+// clearOwner cancels and releases every job the owner has and removes the records so
+// they no longer count against the retained-job limit. A running job, or a ready job
+// with an active download, is hidden at once and removed when it stops or its lease ends.
+func (s *exportJobStore) clearOwner(owner string) (int,error) {
+ s.mu.Lock();defer s.mu.Unlock()
+ if s.closing || s.ctx.Err()!=nil {return 0,errExportJobsClosed}
+ if owner=="" {return 0,errExportJobMissing}
+ cleared:=0
+ for _,job:=range s.jobs {
+  if job.owner!=owner || job.removed {continue}
+  s.cancelLocked(job,exportReasonCleared,"Export cleared")
+  job.removed=true;cleared++
+  s.removeIfDoneLocked(job)
+ }
+ return cleared,nil
 }
 
 // Each download gets an independent SectionReader; concurrent Range requests
@@ -294,7 +384,7 @@ func (s *exportJobStore) acquire(owner,id string) (*io.SectionReader,func(),erro
  s.mu.Lock();defer s.mu.Unlock()
  job:=s.jobs[id]
  if s.closing || s.ctx.Err()!=nil {return nil,nil,errExportJobsClosed}
- if owner=="" || job==nil || job.owner!=owner || job.view.State!="ready" || job.file==nil {return nil,nil,errExportJobMissing}
+ if owner=="" || job==nil || job.owner!=owner || job.removed || job.view.State!="ready" || job.file==nil {return nil,nil,errExportJobMissing}
  job.readers++
  reader:=io.NewSectionReader(job.file,0,job.view.Bytes)
  var once sync.Once
@@ -303,6 +393,7 @@ func (s *exportJobStore) acquire(owner,id string) (*io.SectionReader,func(),erro
   job.readers--
   if job.view.State!="ready" || s.closing || s.ctx.Err()!=nil {s.discardLocked(job)}
   if job.readers==0 && !job.running && (s.closing || job.view.State=="expired") {delete(s.jobs,id)}
+  s.removeIfDoneLocked(job)
   s.maybeDrainedLocked()
  })}
  return reader,release,nil
@@ -320,7 +411,7 @@ func (s *exportJobStore) maybeDrainedLocked() {
 func (s *exportJobStore) Close(ctx context.Context) error {
  s.closeOnce.Do(func(){
   s.mu.Lock();s.closing=true;s.cancel();s.queue=nil
-  for _,job:=range s.jobs {job.cancel();job.view.State="canceled";job.view.Message="Export service stopping"}
+  for _,job:=range s.jobs {job.cancel();job.view.State="canceled";job.view.Message="Export service stopping";job.view.Reason=exportReasonStopping}
   s.mu.Unlock()
   go func(){
    s.workers.Wait()

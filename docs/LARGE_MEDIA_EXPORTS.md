@@ -52,8 +52,10 @@ All routes require the creating authenticated dashboard session; event tokens ca
 
 - `POST /api/exports/create`
 - `GET` or `HEAD /api/exports/status?id=JOB_ID`
+- `GET` or `HEAD /api/exports/list`
 - `GET` or `HEAD /api/exports/download?id=JOB_ID`
 - `POST /api/exports/cancel`
+- `POST /api/exports/clear`
 
 POST requests use `Content-Type: application/json`. Create accepts these fields; unknown fields (including the former `accepted_start` and `accepted_end`) are rejected:
 
@@ -63,7 +65,42 @@ POST requests use `Content-Type: application/json`. Create accepts these fields;
 | `start_time`, `end_time` | Ordered RFC 3339 timestamps; end is exclusive |
 | `mode` | `copy` (default) or `accurate` |
 
-A `202` response returns `id`, `state`, `message`, `bytes`, `expires_at`, `saved_start` and `saved_end`, with a `Location` header pointing to status. The state is `queued` until the job starts, then `preparing`, then `ready`, `failed` or `canceled`. `saved_start` and `saved_end` (RFC 3339, UTC) are the range the job will save; status responses repeat them. Ready status adds `download_url`. Wait for ready before downloading; a queued or failed job has no ready download.
+A `202` response carries the job fields below, with a `Location` header pointing to status. Wait for ready before downloading; a queued or failed job has no ready download.
+
+### Job fields
+
+Create, status and list return the same fields for a job.
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Job ID |
+| `state` | `queued`, `preparing`, `ready`, `failed`, `canceled` or `expired` |
+| `message` | Short human-readable text; it never contains internal error details |
+| `reason` | Stable code explaining a `failed`, `canceled` or `expired` job (see below); absent otherwise |
+| `bytes` | Actual output size once the job is ready, otherwise 0 |
+| `estimated_bytes` | Size the job reserves while it is `queued` or `preparing` |
+| `queue_position` | Place in the queue, starting at 1, while `queued` |
+| `saved_start`, `saved_end` | RFC 3339 UTC range the job will save |
+| `expires_at` | Preparation deadline until the job completes, then completion time plus `NVR_EXPORT_TTL` |
+| `download_url` | Present when the job is `ready` |
+
+| `reason` | Meaning |
+| --- | --- |
+| `output_limit` | The output reached `NVR_EXPORT_MAX_BYTES` |
+| `estimate_exceeded` | The output grew past the size reserved for it; try a shorter range |
+| `deadline_exceeded` | The preparation deadline passed, including time spent queued |
+| `empty_output` | The render finished without producing any output |
+| `render_failed` | The render failed for another reason; details are in the server log, not the response |
+| `canceled` | The session canceled the job |
+| `cleared` | The session cleared its jobs |
+| `expired` | The retention period ended |
+| `service_stopping` | The server shut down |
+
+### List and clear
+
+`GET /api/exports/list` returns `{"jobs":[...]}` with the session's jobs, oldest first. Other sessions' jobs are never included. It takes no query parameters.
+
+`POST /api/exports/clear` (body `{}`) cancels and releases every job the session owns and returns `{"cleared":N}`. Cleared jobs disappear from list and status at once and no longer count towards `NVR_EXPORT_MAX_JOBS`. A job that is still preparing, or a download that is already in progress, finishes winding down in the background and is not interrupted mid-transfer.
 
 ### Copy range extension
 
