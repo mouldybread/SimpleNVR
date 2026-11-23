@@ -74,7 +74,7 @@ func (check *eventReleaseRevalidation) checkWithOutput(ctx context.Context,lease
  if err:=check.durationCurrent(ctx,lease);err!=nil {return err}
  if job.recoveryBorrow!=check.borrowed || job.inventory!=check.inventory || check.borrowed.output!=check.output || check.bm.camera!=check.camera || job.dir!=check.jobDir || check.inventory.path!=check.jobDir || job.recoveryFailed || m==nil {return errEventReleaseRevalidation}
  if !filepath.IsAbs(check.dir) || filepath.Clean(check.dir)!=check.dir || filepath.Dir(job.dir)!=filepath.Join(check.dir,"temp") || check.id=="" || check.id=="." || check.id==".." || len(check.id)>256 || len(job.event.ID)==0 || len(job.event.ID)>256 || job.event.Duration<1 || job.event.Duration>maxEventSeconds || strings.ContainsAny(check.id,"/\\\x00") {return errEventReleaseRevalidation}
- if m.Version!=1 || m.State!="published" || m.Partial || m.FailureCode!="" || m.CameraID!=check.id || m.EventID!=job.event.ID || m.DurationSeconds!=job.event.Duration || m.CaptureName!="event.mp4" || m.OutputPublished!=filepath.Base(check.output.path) || m.OutputTemporary!=m.OutputPublished+".tmp" || filepath.Dir(check.output.path)!=check.dir {return errEventReleaseRevalidation}
+ if m.Version!=1 || m.State!="published" || m.Partial || m.FailureCode!="" || m.CameraID!=check.id || m.EventID!=job.event.ID || m.DurationSeconds!=job.event.Duration || m.CaptureName!="event.mp4" || m.OutputPublished!=filepath.Base(check.output.path) || m.OutputTemporary!=m.OutputPublished+".tmp" || !eventPublishedPathInCamera(check.dir,check.output.path) {return errEventReleaseRevalidation}
  if len(job.preFiles)>maxRecoveryInputs || m.PinnedCount!=len(job.preFiles) || len(m.Inputs)!=len(job.preFiles) {return errEventReleaseRevalidation}
  for i,file:=range job.preFiles {name:=fmt.Sprintf("pre_%03d.mp4",i);if file!=filepath.Join(job.dir,name) || m.Inputs[i].Name!=name {return errEventReleaseRevalidation}}
  for _,name:=range []string{"event.mp4","concat.txt"} {if _,ok:=check.inventory.entries[name];!ok {return errEventReleaseRevalidation}}
@@ -90,4 +90,15 @@ func (check *eventReleaseRevalidation) checkWithOutput(ctx context.Context,lease
  if !check.execution.qualifies(check.bm,job) {return errEventReleaseRevalidation}
  if err:=check.durationCurrent(ctx,lease);err!=nil {return err}
  return check.registryCurrent()
+}
+
+// Pure location check only; descriptor identity, checkpoint and registry checks
+// remain mandatory in checkWithOutput. Unstamped direct children retain the old
+// publication contract while producers are transitioned; no recursive adoption.
+func eventPublishedPathInCamera(cameraDir,path string) bool {
+ if !filepath.IsAbs(cameraDir) || filepath.Clean(cameraDir)!=cameraDir || !filepath.IsAbs(path) || filepath.Clean(path)!=path {return false}
+ name:=filepath.Base(path)
+ stamp,err:=parseStampedName(name)
+ if err!=nil {return filepath.Dir(path)==cameraDir}
+ return path==filepath.Join(cameraDir,stampedDayName(stamp.Start),name)
 }
