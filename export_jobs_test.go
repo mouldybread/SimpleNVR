@@ -159,8 +159,23 @@ func TestExportJobsReserveEstimateNotMaximum(t *testing.T) {
  if view,err:=s.status("owner",c.ID);err!=nil || view.State!="queued" {t.Fatalf("job started without room for its estimate: %+v %v",view,err)}
  close(hold)
  awaitExportJob(t,s,c.ID,"ready")
- d,err:=s.submitEstimated("owner",1000,func(ctx context.Context,w io.Writer)error{_,err:=io.WriteString(w,"d");return err});if err!=nil {t.Fatal(err)}
- awaitExportJob(t,s,d.ID,"ready")
+}
+
+func TestExportJobsEstimateClampedToMaximum(t *testing.T) {
+ limits:=defaultExportJobLimits();limits.MaxBytes=100;limits.TotalBytes=100;limits.Lifetime=time.Hour
+ s:=testExportJobsWithLimits(t,limits)
+ hold:=make(chan struct{})
+ job,err:=s.submitEstimated("owner",1000,func(ctx context.Context,w io.Writer)error{
+  select {case <-hold:case <-ctx.Done():return ctx.Err()}
+  _,err:=io.WriteString(w,"d");return err
+ });if err!=nil {t.Fatal(err)}
+ awaitExportJob(t,s,job.ID,"preparing")
+ s.mu.Lock();reserved:=s.reserved;s.mu.Unlock()
+ if reserved!=100 {t.Fatalf("an estimate above the per-job maximum reserved %d bytes, want 100",reserved)}
+ close(hold)
+ ready:=awaitExportJob(t,s,job.ID,"ready")
+ s.mu.Lock();reserved=s.reserved;s.mu.Unlock()
+ if ready.Bytes!=1 || reserved!=1 {t.Fatalf("reservation did not shrink to the actual output size: bytes %d reserved %d",ready.Bytes,reserved)}
 }
 
 func TestExportJobsExpiryStartsAtCompletion(t *testing.T) {
