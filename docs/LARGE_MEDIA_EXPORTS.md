@@ -6,9 +6,10 @@ SimpleNVR prepares exports on the server and serves finished files through authe
 
 - Disk-backed jobs have random IDs, session ownership, independent seekable readers, cancellation, expiry, and shutdown joining.
 - Jobs that cannot start yet wait in a bounded server queue (state `queued`) and start in order as capacity frees up.
-- The browser creates a job, polls its status, then offers a normal same-origin download with HTTP Range support. Control responses are bounded to 8 KiB.
-- The UI processes cameras sequentially. The next job starts after the previous prepared file is released or expires.
-- Cancel/release requires server acknowledgement. Failures remain visible with a retry control. A lost creation response is not retried automatically.
+- The browser creates a job, polls its status, then offers a normal same-origin download with HTTP Range support. Control responses are bounded to 8 KiB, and the queue list to 64 KiB.
+- The UI queues one job per camera selected for playback, in selection order. The server prepares them in order, as many at a time as `NVR_EXPORT_PARALLEL` allows. A prepared file can be downloaded as soon as it is ready; it does not have to be released before the next one starts.
+- The Export queue panel lists the session's jobs (`GET /api/exports/list`) with state, queue position, estimated and actual size, saved range, a Download link for ready jobs, Cancel or Release, and Clear all. The list is read when the panel opens, on Refresh, and after create, cancel, release and clear actions; there is no background polling of the list.
+- Cancel/release requires server acknowledgement. If it cannot be confirmed, the row stays visible with a Retry cancellation/release button. A failed or lost creation response is never retried automatically.
 - Navigation leaves jobs to expire rather than cancelling a download during browser handoff. Jobs do not survive restart.
 - Copy and Accurate are explicit choices. Copy never silently falls back to re-encoding. See [export rendering](EXPORT_RENDERING.md).
 
@@ -29,7 +30,7 @@ When the setting is absent, the application can start but prepared export endpoi
 | `NVR_EXPORT_MAX_BYTES` | 8589934592 | Maximum prepared output per job (8 GiB) |
 | `NVR_EXPORT_TOTAL_BYTES` | 17179869184 | Aggregate job-output reservation (16 GiB) |
 | `NVR_EXPORT_MAX_JOBS` | 8 | Maximum retained job records (queued, running and finished) |
-| `NVR_EXPORT_MAX_QUEUED` | 4 | Maximum jobs waiting to start |
+| `NVR_EXPORT_MAX_QUEUED` | 8 | Maximum jobs waiting to start |
 | `NVR_EXPORT_PARALLEL` | 1 | Concurrent preparations |
 | `NVR_EXPORT_TTL` | 30m | How long a finished job is kept; the timer starts when the job completes |
 | `NVR_EXPORT_PREPARE_TIMEOUT` | 30m | Preparation deadline, including queue wait |
@@ -119,3 +120,7 @@ Cancel takes `{"id":"JOB_ID"}` and confirms with `204`. Cancellation/expiry prev
 The prepared-job Go and live-browser checks passed on PR #8's recorded integration head. See [verification evidence](PREPARED_EXPORT_VERIFICATION.md) for the exact commit and scope.
 
 Prepared copies are written to scratch; this is not zero-copy original-file delivery. Subsection copy requires non-reordered video with usable keyframe timestamps. Representative real-camera timing/colour behaviour, full-resolution media, multi-GiB transfers, and heavy-load cancellation remain outside the recorded synthetic qualification. Do not treat an 8 GiB configured limit or a metadata-only large-file test as evidence of an actual 8 GiB transfer.
+
+### Long recordings and Copy
+
+A Copy export that has to cut inside a single recording file longer than about two hours will fail. To find safe cut points the server lists that file's video packets, and the listing is capped at 16 MiB (roughly 200,000 packets, about two hours at 25 fps). A larger file is refused as an unsafe cut and the request returns `422`. Choose Accurate, which does not use this listing. Copy of whole, untrimmed recordings is not affected.
