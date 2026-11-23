@@ -90,13 +90,22 @@ func TestExportJobsListAndClear(t *testing.T) {
  data,err:=io.ReadAll(reader);if err!=nil || string(data)!="x" {t.Fatalf("clearing interrupted an active download: %q %v",data,err)}
  release()
  close(hold)
- if view:=awaitExportJob(t,s,other.ID,"ready");view.Bytes!=1 {t.Fatalf("%+v",view)}
+ // awaitExportJob polls as "owner"; the other session's job must be polled as "other".
+ deadline:=time.Now().Add(3*time.Second)
+ for {
+  view,err:=s.status("other",other.ID);if err!=nil {t.Fatal(err)}
+  if view.State=="ready" {if view.Bytes!=1 {t.Fatalf("%+v",view)};break}
+  if time.Now().After(deadline) {t.Fatalf("other session's job never became ready: %+v",view)}
+  time.Sleep(time.Millisecond)
+ }
  if n,err:=s.clearOwner("other");err!=nil || n!=1 {t.Fatalf("cleared %d: %v",n,err)}
  awaitExportStoreIdle(t,s)
 }
 
 func TestExportJobsClearFreesCapacity(t *testing.T) {
- limits:=defaultExportJobLimits();limits.MaxBytes=8;limits.TotalBytes=8;limits.MaxJobs=2;limits.MaxQueued=2;limits.Parallel=1;limits.Lifetime=time.Hour
+ // TotalBytes 9 fits one 8-byte reservation beside a 1-byte ready job, so two jobs can
+ // become ready but a third reservation fits only after clear-all releases both.
+ limits:=defaultExportJobLimits();limits.MaxBytes=8;limits.TotalBytes=9;limits.MaxJobs=2;limits.MaxQueued=2;limits.Parallel=1;limits.Lifetime=time.Hour
  s:=testExportJobsWithLimits(t,limits)
  render:=func(ctx context.Context,w io.Writer)error{_,err:=io.WriteString(w,"v");return err}
  for i:=0;i<2;i++ {job,err:=s.submit("owner",render);if err!=nil {t.Fatal(err)};awaitExportJob(t,s,job.ID,"ready")}
@@ -104,4 +113,6 @@ func TestExportJobsClearFreesCapacity(t *testing.T) {
  if n,err:=s.clearOwner("owner");err!=nil || n!=2 {t.Fatalf("cleared %d: %v",n,err)}
  next,err:=s.submit("owner",render);if err!=nil {t.Fatalf("cleared records still count against the limit: %v",err)}
  awaitExportJob(t,s,next.ID,"ready")
+ s.mu.Lock();reserved:=s.reserved;s.mu.Unlock()
+ if reserved!=1 {t.Fatalf("cleared jobs still hold reservations: reserved=%d",reserved)}
 }

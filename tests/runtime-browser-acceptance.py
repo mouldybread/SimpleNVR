@@ -127,11 +127,14 @@ async def application_ready(page, origin):
 
 
 async def prepare_ui(page, start, end, mode="accurate"):
-    if await page.locator("#download-modal").is_visible():
-        await page.locator("#download-modal .close").click()
+    # Export uses every camera selected for playback; the fixture selects only id_browser.
+    assert await page.evaluate("JSON.stringify(selectedCameras)") == '["id_browser"]'
     await page.locator("#download-btn").click()
-    await page.evaluate("([start,end]) => {downloadCameras=['id_browser'];downloadStartTime=new Date(start);downloadEndTime=new Date(end);updateDownloadTimeDisplay();}", [start, end])
-    await page.locator("#download-export-mode").select_option(mode)
+    assert await page.locator("#export-panel").is_visible()
+    assert await page.locator("#timeline-range-overlay").is_visible()
+    await page.evaluate("([start,end]) => {downloadStartTime=new Date(start);downloadEndTime=new Date(end);updateDownloadTimeDisplay();}", [start, end])
+    await page.locator("#export-mode-" + mode).click()
+    assert await page.locator("#export-mode-" + mode).get_attribute("aria-pressed") == "true"
     await page.locator("#export-start-btn").click()
 
 

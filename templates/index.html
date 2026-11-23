@@ -1,11 +1,121 @@
 <!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>SimpleNVR</title><link rel="stylesheet" href="/static/style.css"></head><body>
-<div class="container"><section class="section" id="playback-section">
-<div class="section-header" style="padding:10px 20px;display:flex;align-items:center;gap:20px"><h1 style="margin:0;line-height:1;flex-shrink:0">🔴SimpleNVR</h1><div class="timeline-controls" style="flex:1;margin:0;display:flex;align-items:center;gap:15px;flex-wrap:wrap"><div class="control-group"><label>Cameras:</label><div id="timeline-camera-selector" style="min-width:200px"></div></div><div class="control-group"><label>Date:</label><input type="date" id="timeline-date-picker"></div><div class="control-group"><label>Speed:</label><select id="speed-control" onchange="playbackSpeed=parseFloat(this.value);updatePlaybackSpeed();"><option value="0.25">0.25x</option><option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="2">2x</option><option value="4">4x</option></select></div><div class="control-group" style="margin-left:auto;display:flex;align-items:center;gap:8px"><button id="play-pause" type="button" class="btn btn-small" aria-label="Play recordings" aria-controls="video-grid" onclick="togglePlayPause()">Play</button><button id="mute-all-btn" class="btn btn-small" onclick="toggleMuteAll()">🔇 Mute All</button><button id="fullscreen-btn" class="btn btn-small" onclick="toggleFullscreen()">⛶ Fullscreen</button><button id="download-btn" class="btn btn-small" onclick="openDownloadModal()">⬇ Export range</button></div></div><button onclick="openEventsModal()" title="View Events">📋</button><button onclick="openCameraSettings()" title="Camera Settings">⚙️</button><button onclick="openSessionSettings()" title="Session Settings">🔒</button></div>
-<div class="section-content" id="playback-content"><div id="fullscreen-wrapper"><div id="video-grid" class="video-grid"></div><div class="timeline-container"><canvas id="timeline-canvas"></canvas><div id="timeline-range-overlay" class="timeline-range-overlay" hidden></div></div></div><section id="export-queue-panel" class="export-queue-panel" aria-label="Export queue"><h3>Export queue</h3><p class="export-queue-help">Exports use all cameras selected for playback. Deselect any camera you do not want in the export.</p><div id="download-range-controls"></div><div id="download-progress-list" aria-live="polite"><p>No prepared or queued exports.</p></div></section></div></section></div>
-<div id="live-modal" class="modal"><div class="modal-content"><span class="close" onclick="closeLiveModal()">&times;</span><h2 id="live-modal-title">Live Stream</h2><video id="live-video" autoplay muted controls></video></div></div>
-<div id="retention-modal" class="modal"><div class="modal-content"><span class="close" onclick="closeRetentionModal()">&times;</span><h2>Set Retention Period</h2><p id="retention-camera-name"></p><div class="form-group"><label for="retention-days">Retention Days:</label><input type="number" id="retention-days" min="1" max="365" value="7"></div><button onclick="updateRetention()" class="btn btn-primary">Update</button></div></div>
-<div id="delete-recordings-modal" class="modal"><div class="modal-content small-modal"><span class="close" onclick="closeDeleteRecordingsModal()">&times;</span><h2>⚠️ Delete All Recordings</h2><p>This will permanently delete ALL recordings from ALL cameras!</p><p>To confirm, enter the code: <strong id="delete-code"></strong></p><div class="form-group"><input type="text" id="delete-code-input" placeholder="Enter code" maxlength="4"></div><button id="delete-recordings-btn" onclick="deleteAllRecordings()" class="btn btn-danger" disabled>Delete All Recordings</button></div></div>
-<div id="delete-cameras-modal" class="modal"><div class="modal-content small-modal"><span class="close" onclick="closeDeleteAllCamerasModal()">&times;</span><h2>⚠️ Delete All Cameras</h2><p>This will permanently delete ALL cameras!</p><p>To confirm, enter the code: <strong id="delete-cameras-code"></strong></p><div class="form-group"><input type="text" id="delete-cameras-code-input" placeholder="Enter code" maxlength="4"></div><button id="delete-cameras-btn" onclick="removeAllCameras()" class="btn btn-danger" disabled>Delete All Cameras</button></div></div>
-<div id="clear-events-modal" class="modal"><div class="modal-content small-modal"><span class="close" onclick="closeClearEventsModal()">&times;</span><h2>Clear All Events</h2><p>This will permanently delete ALL events from ALL cameras!</p><p>To confirm, enter the code: <strong id="clear-events-code"></strong></p><div class="form-group"><input type="text" id="clear-events-code-input" placeholder="Enter code" maxlength="4"></div><button id="clear-events-btn" onclick="clearAllEvents()" class="btn btn-danger" disabled>Clear All Events</button></div></div>
-<div id="toast-container"></div><script src="/static/js/core.js"></script><script src="/static/js/cameras.js"></script><script src="/static/js/modals.js"></script><script src="/static/js/events.js"></script><script src="/static/js/timeline-geometry.js"></script><script src="/static/js/playback.js"></script><script src="/static/js/export-ui.js"></script><script src="/static/js/recordings.js"></script><script src="/static/js/toast.js"></script><script src="/static/js/session-settings.js"></script></body></html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SimpleNVR</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <section class="section" id="playback-section">
+            <div class="section-header" style="padding: 10px 20px; display: flex; align-items: center; gap: 20px;">
+                <h1 style="margin: 0; line-height: 1; flex-shrink: 0;">🔴SimpleNVR</h1>
+                <div class="timeline-controls" style="flex: 1; margin: 0; display: flex; align-items: center; gap: 15px; flex-wrap: wrap;">
+                    <div class="control-group" style="display: flex; align-items: center; gap: 8px;"><label>Cameras:</label><div id="timeline-camera-selector" style="min-width: 200px;"></div></div>
+                    <div class="control-group" style="display: flex; align-items: center; gap: 8px;"><label>Date:</label><input type="date" id="timeline-date-picker"></div>
+                    <div class="control-group" style="display: flex; align-items: center; gap: 8px;">
+                        <label>Speed:</label>
+                        <select id="speed-control" onchange="playbackSpeed = parseFloat(this.value); updatePlaybackSpeed();">
+                            <option value="0.25">0.25x</option><option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="2">2x</option><option value="4">4x</option>
+                        </select>
+                    </div>
+                    <div class="control-group" style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
+                        <button id="play-pause" type="button" class="btn btn-small" aria-label="Play recordings" aria-controls="video-grid" onclick="togglePlayPause()">Play</button>
+                        <button id="mute-all-btn" class="btn btn-small" onclick="toggleMuteAll()">🔇 Mute All</button>
+                        <button id="fullscreen-btn" class="btn btn-small" onclick="toggleFullscreen()">⛶ Fullscreen</button>
+                        <button id="download-btn" type="button" class="btn btn-small" aria-controls="export-panel" aria-expanded="false" onclick="openExportPanel()">⬇ Export range</button>
+                    </div>
+                </div>
+                <button onclick="openEventsModal()" style="background: none; border: none; color: #4CAF50; cursor: pointer; font-size: 24px; padding: 5px; flex-shrink: 0;" title="View Events">📋</button>
+                <button onclick="openCameraSettings();" style="background: none; border: none; color: #4CAF50; cursor: pointer; font-size: 24px; padding: 5px; flex-shrink: 0;" title="Camera Settings">⚙️</button>
+                <button onclick="openSessionSettings();" style="background: none; border: none; color: #4CAF50; cursor: pointer; font-size: 24px; padding: 5px; flex-shrink: 0;" title="Session Settings">🔒</button>
+            </div>
+            <div class="section-content" id="playback-content"><div id="fullscreen-wrapper"><div id="video-grid" class="video-grid"></div><div class="timeline-container"><canvas id="timeline-canvas"></canvas><div id="timeline-range-overlay" class="timeline-range-overlay" hidden></div></div></div>
+                <div id="export-panel" class="export-panel" role="region" aria-labelledby="export-panel-title" hidden>
+                    <div class="export-panel-header"><h2 id="export-panel-title">Export range</h2><button type="button" class="btn btn-small" aria-label="Close export panel" onclick="closeExportPanel()">✕</button></div>
+                    <p id="export-camera-guidance" class="export-guidance" aria-live="polite"></p>
+                    <div id="export-range-controls"></div>
+                    <div class="export-panel-actions"><button id="export-start-btn" type="button" class="btn btn-primary" onclick="startExportDownloads()">Queue exports for selected cameras</button></div>
+                    <div id="download-status" class="export-batch"><h3>This request</h3><div id="download-progress-list"></div></div>
+                    <div class="export-queue">
+                        <div class="export-queue-header"><h3>Export queue (this session)</h3><button id="export-refresh-btn" type="button" class="btn btn-small" onclick="refreshExportQueue()">Refresh</button><button id="export-clear-btn" type="button" class="btn btn-small btn-danger" onclick="clearExportQueue()">Clear all</button></div>
+                        <div id="export-queue-list" aria-live="polite"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        <section class="section" style="display: none;">
+            <div class="section-header" onclick="toggleSection('cameras-content')"><h2>📷 Camera Management</h2><span class="toggle-icon" id="cameras-content-icon">▼</span></div>
+            <div class="section-content" id="cameras-content">
+                <div class="config-subsection">
+                    <h3>🔗 Go2RTC Integration</h3>
+                    <form id="go2rtc-form" class="form"><div class="form-group"><label for="go2rtc-url">Go2RTC URL:</label><input type="text" id="go2rtc-url" name="go2rtc-url" value="http://go2rtc:1984"></div><button type="submit" class="btn btn-primary">Scan & Import Streams</button></form>
+                </div>
+                <div class="config-subsection">
+                    <h3>➕ Add Camera Manually</h3>
+                    <form id="add-camera-form" class="form">
+                        <div class="form-group"><label for="camera-name">Camera Name:</label><input type="text" id="camera-name" name="camera-name" required></div>
+                        <div class="form-group"><label for="rtsp-url">RTSP URL:</label><input type="text" id="rtsp-url" name="rtsp-url" placeholder="rtsp://..." required></div>
+                        <button type="submit" class="btn btn-primary">Add Camera</button>
+                    </form>
+                </div>
+                <div class="config-subsection">
+                    <h3>Bulk Operations</h3>
+                    <div class="bulk-ops">
+                        <div class="form-group"><label for="retention-all">Retention period (days):</label><input type="number" id="retention-all" min="1" max="365" value="7"><button onclick="setAllRetention()" class="btn">Set Retention</button></div>
+                        <button onclick="openDeleteAllCamerasModal()" class="btn btn-danger">Remove All Cameras</button>
+                        <button onclick="openDeleteAllRecordingsModal()" class="btn btn-danger">Delete All Recordings</button>
+                        <button onclick="openClearEventsModal()" class="btn btn-danger">Clear All Events</button>
+                        <button onclick="cleanupOrphanedRecordings()" class="btn btn-danger">Cleanup Orphaned Recordings</button>
+                    </div>
+                </div>
+                <div id="cleanup-results" style="display: none; background: #1f1f1f; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #4CAF50;">
+                    <h4 style="margin: 0 0 10px 0; color: #4CAF50;">✓ Cleanup Complete</h4><p id="cleanup-results-text" style="margin: 0; color: #ccc;"></p>
+                </div>
+                <div class="config-subsection"><h3>📹 Your Cameras</h3><div id="camera-list"></div></div>
+            </div>
+        </section>
+    </div>
+    <div id="live-modal" class="modal"><div class="modal-content"><span class="close" onclick="closeLiveModal()">&times;</span><h2 id="live-modal-title">Live Stream</h2><video id="live-video" autoplay muted controls></video></div></div>
+    <div id="retention-modal" class="modal"><div class="modal-content"><span class="close" onclick="closeRetentionModal()">&times;</span><h2>Set Retention Period</h2><p id="retention-camera-name"></p><div class="form-group"><label for="retention-days">Retention Days:</label><input type="number" id="retention-days" min="1" max="365" value="7"></div><button onclick="updateRetention()" class="btn btn-primary">Update</button></div></div>
+    <div id="delete-recordings-modal" class="modal" style="z-index: 10001;">
+        <div class="modal-content small-modal" style="width: fit-content !important; max-width: 500px !important; height: auto !important; padding: 20px;">
+            <span class="close" onclick="closeDeleteRecordingsModal()">&times;</span><h2>⚠️ Delete All Recordings</h2>
+            <p style="color: #f44336; margin: 10px 0;">This will permanently delete ALL recordings from ALL cameras!</p>
+            <p style="margin: 10px 0;">To confirm, enter the code: <strong id="delete-code" style="color: #4CAF50; font-size: 20px;"></strong></p>
+            <div class="form-group"><input type="text" id="delete-code-input" placeholder="Enter code" maxlength="4" style="text-align: center; font-size: 18px;"></div>
+            <button id="delete-recordings-btn" onclick="deleteAllRecordings()" class="btn btn-danger" disabled>Delete All Recordings</button>
+        </div>
+    </div>
+    <div id="delete-cameras-modal" class="modal" style="z-index: 10001;">
+        <div class="modal-content small-modal" style="width: fit-content !important; max-width: 500px !important; height: auto !important; padding: 20px;">
+            <span class="close" onclick="closeDeleteAllCamerasModal()">&times;</span><h2>⚠️ Delete All Cameras</h2>
+            <p style="color: #f44336; margin: 10px 0;">This will permanently delete ALL cameras!</p>
+            <p style="margin: 10px 0;">To confirm, enter the code: <strong id="delete-cameras-code" style="color: #4CAF50; font-size: 20px;"></strong></p>
+            <div class="form-group"><input type="text" id="delete-cameras-code-input" placeholder="Enter code" maxlength="4" style="text-align: center; font-size: 18px; width: 80%; padding: 10px;"></div>
+            <button id="delete-cameras-btn" onclick="removeAllCameras()" class="btn btn-danger" disabled style="width: 100%; padding: 12px; margin-top: 10px;">Delete All Cameras</button>
+        </div>
+    </div>
+    <div id="clear-events-modal" class="modal" style="z-index: 10001;">
+        <div class="modal-content small-modal" style="width: fit-content !important; max-width: 500px !important; height: auto !important; padding: 20px;">
+            <span class="close" onclick="closeClearEventsModal()">&times;</span><h2>Clear All Events</h2>
+            <p style="color: #f44336; margin: 10px 0;">This will permanently delete ALL events from ALL cameras!</p>
+            <p style="margin: 10px 0;">To confirm, enter the code: <strong id="clear-events-code" style="color: #4CAF50; font-size: 20px;"></strong></p>
+            <div class="form-group"><input type="text" id="clear-events-code-input" placeholder="Enter code" maxlength="4" style="text-align: center; font-size: 18px; width: 80%; padding: 10px;"></div>
+            <button id="clear-events-btn" onclick="clearAllEvents()" class="btn btn-danger" disabled style="width: 100%; padding: 12px; margin-top: 10px;">Clear All Events</button>
+        </div>
+    </div>
+    <div id="toast-container"></div>
+    <script src="/static/js/core.js"></script>
+    <script src="/static/js/cameras.js"></script>
+    <script src="/static/js/modals.js"></script>
+    <script src="/static/js/events.js"></script>
+    <script src="/static/js/timeline-geometry.js"></script>
+    <script src="/static/js/playback.js"></script>
+    <script src="/static/js/export-ui.js"></script>
+    <script src="/static/js/recordings.js"></script>
+    <script src="/static/js/toast.js"></script>
+    <script src="/static/js/session-settings.js"></script>
+</body>
+</html>
