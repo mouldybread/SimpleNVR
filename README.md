@@ -61,20 +61,20 @@ The idle timeout must be between 1 minute and 24 hours, and the maximum session 
 
 - In Camera Settings, add an RTSP URL or import streams from go2rtc. Choose continuous recording, event-based recording with a prebuffer, or no recording. Adding a camera does not start recording.
 - Live preview requires go2rtc on the host in the camera's RTSP URL, with its HTTP API on port `1984`. The camera name must be unique and match the go2rtc stream name. Direct-camera preview and custom go2rtc HTTP ports are not supported.
-- Use the timeline to find recordings and events. Playback does not automatically skip gaps. Use Downloads to export video; see below.
+- Use the timeline to find recordings and events. Playback does not automatically skip gaps. Use Export range to export video; see below.
 - Known continuous-recording failures appear as "Recording failed" or "Recording failed — retrying", with the recording setting and reason shown separately. "Recording enabled" is a setting, not proof that footage is being captured.
 - Removing a camera can delete its published recordings. If removal fails or the result is unclear, refresh and check the camera and its recordings before retrying.
 
 ## Export video
 
-In Downloads, choose cameras, adjust the start and end times, and choose a mode:
+Select the cameras to export in the Cameras selector, move the playhead to the time you want, and click Export range in the playback toolbar. An export always covers every camera currently selected for playback (up to 8); deselect a camera to leave it out. Set the start and end by dragging the two handles over the timeline or with the Earlier and Later buttons, then choose a mode with the Copy / Accurate toggle:
 
-- Copy (default) preserves the encoded media without re-encoding. A single complete recording is copied byte for byte; compatible complete recordings can be joined without re-encoding. For part of a recording, SimpleNVR shows the proposed video range and audio packet allowance and waits for approval before creating a job. An unsupported copy is refused, never silently converted to Accurate.
+- Copy (default) preserves the encoded media without re-encoding. A single complete recording is copied byte for byte; compatible complete recordings can be joined without re-encoding. For part of a recording, SimpleNVR extends the range outward to the nearest safe cut (at most 30 seconds at each end) without asking, and shows the saved range once the job is created. Audio packet boundaries can reach slightly past the video range. If no safe cut is available within 30 seconds, or the video cannot be copied safely, the export is refused and you can choose Accurate instead. An unsupported copy is refused, never silently converted to Accurate.
 - Accurate re-encodes supported video and audio to cut within frame and packet limits at the selected times. It is not lossless and can require more processing.
 
-Choose Prepare exports on server. SimpleNVR prepares one camera's file at a time. When ready, choose Download prepared video. Once your browser has accepted the download, release the prepared file to continue to the next camera; an already-started transfer may continue. The page cannot verify that your browser saved the file to disk.
+Choose Queue exports for selected cameras. SimpleNVR queues one job per camera and prepares them on the server in order. The Export queue lists every export from your session. When one is ready, click Download to save it through your browser. Release a prepared file, or use Clear all, to free server space; an already-started transfer may continue. The page cannot verify that your browser saved the file to disk.
 
-Prepared files expire, normally 30 minutes after preparation finishes, and do not survive a restart. Exports require complete recording coverage: gaps are never skipped silently. See [export rendering](docs/EXPORT_RENDERING.md) for supported media and timing limitations.
+Prepared files expire, normally 30 minutes after preparation finishes, and do not survive a restart. Exports require complete recording coverage: gaps are never skipped silently. A Copy export that has to cut inside a single recording file longer than about two hours is refused; choose Accurate instead. See [export rendering](docs/EXPORT_RENDERING.md) for supported media and timing limitations.
 
 ## Home Assistant events
 

@@ -24,14 +24,26 @@
                         <button id="play-pause" type="button" class="btn btn-small" aria-label="Play recordings" aria-controls="video-grid" onclick="togglePlayPause()">Play</button>
                         <button id="mute-all-btn" class="btn btn-small" onclick="toggleMuteAll()">🔇 Mute All</button>
                         <button id="fullscreen-btn" class="btn btn-small" onclick="toggleFullscreen()">⛶ Fullscreen</button>
-                        <button id="download-btn" class="btn btn-small" onclick="openDownloadModal()">⬇ Download</button>
+                        <button id="download-btn" type="button" class="btn btn-small" aria-controls="export-panel" aria-expanded="false" onclick="openExportPanel()">⬇ Export range</button>
                     </div>
                 </div>
                 <button onclick="openEventsModal()" style="background: none; border: none; color: #4CAF50; cursor: pointer; font-size: 24px; padding: 5px; flex-shrink: 0;" title="View Events">📋</button>
                 <button onclick="openCameraSettings();" style="background: none; border: none; color: #4CAF50; cursor: pointer; font-size: 24px; padding: 5px; flex-shrink: 0;" title="Camera Settings">⚙️</button>
                 <button onclick="openSessionSettings();" style="background: none; border: none; color: #4CAF50; cursor: pointer; font-size: 24px; padding: 5px; flex-shrink: 0;" title="Session Settings">🔒</button>
             </div>
-            <div class="section-content" id="playback-content"><div id="fullscreen-wrapper"><div id="video-grid" class="video-grid"></div><div class="timeline-container"><canvas id="timeline-canvas"></canvas></div></div></div>
+            <div class="section-content" id="playback-content"><div id="fullscreen-wrapper"><div id="video-grid" class="video-grid"></div><div class="timeline-container"><canvas id="timeline-canvas"></canvas><div id="timeline-range-overlay" class="timeline-range-overlay" hidden></div></div></div>
+                <div id="export-panel" class="export-panel" role="region" aria-labelledby="export-panel-title" hidden>
+                    <div class="export-panel-header"><h2 id="export-panel-title">Export range</h2><button type="button" class="btn btn-small" aria-label="Close export panel" onclick="closeExportPanel()">✕</button></div>
+                    <p id="export-camera-guidance" class="export-guidance" aria-live="polite"></p>
+                    <div id="export-range-controls"></div>
+                    <div class="export-panel-actions"><button id="export-start-btn" type="button" class="btn btn-primary" onclick="startExportDownloads()">Queue exports for selected cameras</button></div>
+                    <div id="download-status" class="export-batch"><h3>This request</h3><div id="download-progress-list"></div></div>
+                    <div class="export-queue">
+                        <div class="export-queue-header"><h3>Export queue (this session)</h3><button id="export-refresh-btn" type="button" class="btn btn-small" onclick="refreshExportQueue()">Refresh</button><button id="export-clear-btn" type="button" class="btn btn-small btn-danger" onclick="clearExportQueue()">Clear all</button></div>
+                        <div id="export-queue-list" aria-live="polite"></div>
+                    </div>
+                </div>
+            </div>
         </section>
         <section class="section" style="display: none;">
             <div class="section-header" onclick="toggleSection('cameras-content')"><h2>📷 Camera Management</h2><span class="toggle-icon" id="cameras-content-icon">▼</span></div>
@@ -83,23 +95,6 @@
             <p style="margin: 10px 0;">To confirm, enter the code: <strong id="delete-cameras-code" style="color: #4CAF50; font-size: 20px;"></strong></p>
             <div class="form-group"><input type="text" id="delete-cameras-code-input" placeholder="Enter code" maxlength="4" style="text-align: center; font-size: 18px; width: 80%; padding: 10px;"></div>
             <button id="delete-cameras-btn" onclick="removeAllCameras()" class="btn btn-danger" disabled style="width: 100%; padding: 12px; margin-top: 10px;">Delete All Cameras</button>
-        </div>
-    </div>
-    <div id="download-modal" class="modal">
-        <div class="modal-content">
-            <span class="close" onclick="closeDownloadModal()">&times;</span><h2>📥 Download Recordings</h2>
-            <div style="margin: 20px 0;">
-                <h3>Time Range</h3>
-                <div style="display: flex; align-items: center; gap: 10px; margin: 15px 0;">
-                    <button onclick="expandDownloadTimeEarlier()" class="btn">⬅ -10 min</button>
-                    <button onclick="resetDownloadTimeRange()" class="btn" style="flex: 0 0 auto;">🔄 Reset</button>
-                    <div style="flex: 1; text-align: center;"><div id="download-time-display" style="font-size: 16px; font-weight: bold;"></div><div id="download-duration-display" style="font-size: 14px; color: #888; margin-top: 5px;"></div></div>
-                    <button onclick="expandDownloadTimeLater()" class="btn">+10 min ➡</button>
-                </div>
-            </div>
-            <div style="margin: 20px 0;"><h3>Included Cameras</h3><div id="download-camera-list" style="margin: 10px 0;"></div></div>
-            <div style="margin: 20px 0;"><button id="export-start-btn" onclick="startExportDownloads()" class="btn btn-primary" style="width: 100%; padding: 15px; font-size: 16px;">📥 Prepare Monitored Exports</button></div>
-            <div id="download-status" style="display: none; margin-top: 20px; padding: 15px; background: #1f1f1f; border-radius: 8px;"><h4 style="margin: 0 0 10px 0;">Export Status:</h4><div id="download-progress-list"></div></div>
         </div>
     </div>
     <div id="clear-events-modal" class="modal" style="z-index: 10001;">

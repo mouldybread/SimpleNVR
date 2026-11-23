@@ -15,31 +15,55 @@ import (
  "sync"
  "time"
 )
-const(exportCreatePath="/api/exports/create";exportCancelPath="/api/exports/cancel";exportStatusPath="/api/exports/status";exportDownloadPath="/api/exports/download")
-func init(){mutationPaths[exportCreatePath]=true;mutationPaths[exportCancelPath]=true}
+const(exportCreatePath="/api/exports/create";exportCancelPath="/api/exports/cancel";exportStatusPath="/api/exports/status";exportDownloadPath="/api/exports/download";exportListPath="/api/exports/list";exportClearPath="/api/exports/clear")
+func init(){mutationPaths[exportCreatePath]=true;mutationPaths[exportCancelPath]=true;mutationPaths[exportClearPath]=true}
 type exportCreateRequest struct{
  CameraID string `json:"camera_id"`
  Start string `json:"start_time"`
  End string `json:"end_time"`
  Mode string `json:"mode,omitempty"`
- AcceptedStart string `json:"accepted_start,omitempty"`
- AcceptedEnd string `json:"accepted_end,omitempty"`
 }
-type exportHTTPView struct{exportJobView;DownloadURL string `json:"download_url,omitempty"`}
+// exportSavedRange is what the planner reports back for a job: the interval it will
+// actually save (copy mode may extend the requested range outward to the nearest safe
+// cut) and an estimate of the output size used for the job's byte reservation. The
+// planner fills it through a sink carried by the planning context. The request details
+// (camera, mode and requested range) are added by create, so a page that was reloaded
+// can still show what each job in the session's list was for.
+type exportSavedRange struct{Start,End time.Time;EstimateBytes int64;CameraID,CameraName,Mode,RequestStart,RequestEnd string}
+func(r exportSavedRange)known()bool{return !r.Start.IsZero() && !r.End.IsZero() && r.End.After(r.Start)}
+type exportSavedRangeKey struct{}
+type exportSavedEntry struct{owner string;saved exportSavedRange}
+type exportHTTPView struct{
+ exportJobView
+ DownloadURL string `json:"download_url,omitempty"`
+ SavedStart string `json:"saved_start,omitempty"`
+ SavedEnd string `json:"saved_end,omitempty"`
+ CameraID string `json:"camera_id,omitempty"`
+ CameraName string `json:"camera_name,omitempty"`
+ Mode string `json:"mode,omitempty"`
+ RequestedStart string `json:"requested_start,omitempty"`
+ RequestedEnd string `json:"requested_end,omitempty"`
+}
 type exportPlanHTTPError struct{status int;message string}
 func(e *exportPlanHTTPError)Error()string{return e.message}
-type exportCopyProposal struct{
- Code string `json:"code"`
- RequestedStart string `json:"requested_start"`
- RequestedEnd string `json:"requested_end"`
- ExportStart string `json:"export_start"`
- ExportEnd string `json:"export_end"`
- AudioAllowanceMS int64 `json:"audio_allowance_ms"`
-}
-func(e *exportCopyProposal)Error()string{return "copy range approval required"}
 type exportHTTPPlanner func(context.Context,exportCreateRequest)(exportJobRenderer,error)
-type exportJobHTTP struct{auth *authManager;store *exportJobStore;plan exportHTTPPlanner;ctx context.Context;cancel context.CancelFunc;mu sync.Mutex;closing bool;requests sync.WaitGroup;once sync.Once;done chan struct{};closeErr error}
+type exportJobHTTP struct{auth *authManager;store *exportJobStore;plan exportHTTPPlanner;ctx context.Context;cancel context.CancelFunc;mu sync.Mutex;closing bool;requests sync.WaitGroup;once sync.Once;done chan struct{};closeErr error;savedMu sync.Mutex;saved map[string]exportSavedEntry}
 func newExportJobHTTP(a *authManager,store *exportJobStore,plan exportHTTPPlanner)*exportJobHTTP{ctx,cancel:=context.WithCancel(context.Background());return &exportJobHTTP{auth:a,store:store,plan:plan,ctx:ctx,cancel:cancel,done:make(chan struct{})}}
+// rememberSaved keeps the saved range and request details of a job for status and list
+// responses. Entries whose job is gone are pruned on every call, so the map never
+// outgrows the live job set.
+func(s *exportJobHTTP)rememberSaved(owner,id string,saved exportSavedRange){
+ if !saved.known() && saved.CameraID==""{return}
+ s.savedMu.Lock();defer s.savedMu.Unlock()
+ if s.saved==nil{s.saved=make(map[string]exportSavedEntry)}
+ for known,entry:=range s.saved{if _,err:=s.store.status(entry.owner,known);err!=nil{delete(s.saved,known)}}
+ s.saved[id]=exportSavedEntry{owner:owner,saved:saved}
+}
+func(s *exportJobHTTP)savedFor(owner,id string)[]exportSavedRange{
+ s.savedMu.Lock();defer s.savedMu.Unlock()
+ if entry,ok:=s.saved[id];ok && entry.owner==owner{return []exportSavedRange{entry.saved}}
+ return nil
+}
 func configuredExportJobHTTP(a *authManager,n *NVR)(*exportJobHTTP,error){
  limits,err:=loadExportJobLimits(os.Getenv);if err!=nil{return nil,err};directory:=os.Getenv("NVR_EXPORT_SCRATCH_DIR");if directory==""{return newExportJobHTTP(a,nil,nil),nil}
  if !filepath.IsAbs(directory){return nil,errors.New("NVR_EXPORT_SCRATCH_DIR must be absolute")};directory=filepath.Clean(directory)
@@ -52,7 +76,7 @@ func configuredExportJobHTTP(a *authManager,n *NVR)(*exportJobHTTP,error){
  store,err:=newExportJobStore(context.Background(),directory,limits);if err!=nil{return nil,err};service:=newExportJobHTTP(a,store,nil)
  service.plan=func(ctx context.Context,req exportCreateRequest)(exportJobRenderer,error){return planExistingExportJob(ctx,n,store.directory,req)};return service,nil
 }
-func exportJobRoute(path string)bool{return path==exportCreatePath || path==exportCancelPath || path==exportStatusPath || path==exportDownloadPath}
+func exportJobRoute(path string)bool{return path==exportCreatePath || path==exportCancelPath || path==exportStatusPath || path==exportDownloadPath || path==exportListPath || path==exportClearPath}
 func(s *exportJobHTTP)owner(r *http.Request)(string,error){
  if s.auth==nil{return "",errExportJobMissing};cfg,stamp,err:=readAuthConfig(s.auth.path);if err!=nil{return "",err}
  user:=s.auth.sessions.GetString(r.Context(),"user");version:=s.auth.sessions.GetString(r.Context(),"credential_version");token:=s.auth.sessions.Token(r.Context())
@@ -62,7 +86,7 @@ func(s *exportJobHTTP)Handler(next http.Handler)http.Handler{return http.Handler
  if !exportJobRoute(r.URL.Path){next.ServeHTTP(w,r);return}
  w.Header().Set("Cache-Control","private, no-store");w.Header().Set("X-Content-Type-Options","nosniff");w.Header().Set("Referrer-Policy","no-referrer")
  owner,err:=s.owner(r);if err!=nil{http.Error(w,"Unauthorized",401);return}
- allowed:="GET, HEAD";if r.URL.Path==exportCreatePath || r.URL.Path==exportCancelPath{allowed="POST"}
+ allowed:="GET, HEAD";if r.URL.Path==exportCreatePath || r.URL.Path==exportCancelPath || r.URL.Path==exportClearPath{allowed="POST"}
  if (allowed=="POST" && r.Method!="POST") || (allowed!="POST" && r.Method!="GET" && r.Method!="HEAD"){w.Header().Set("Allow",allowed);http.Error(w,"Method not allowed",405);return}
  s.mu.Lock();if s.closing || s.store==nil{s.mu.Unlock();http.Error(w,"Prepared exports unavailable; configure export scratch storage or retry after restart",503);return};s.requests.Add(1);s.mu.Unlock();defer s.requests.Done()
  ctx,cancel:=context.WithCancel(r.Context());defer cancel();stopService:=context.AfterFunc(s.ctx,cancel);defer stopService();r=r.WithContext(ctx)
@@ -70,7 +94,9 @@ func(s *exportJobHTTP)Handler(next http.Handler)http.Handler{return http.Handler
  switch r.URL.Path{
  case exportCreatePath:s.create(w,r,owner)
  case exportCancelPath:s.cancelRequest(w,r,owner)
- case exportStatusPath:id,ok:=exportRequestID(w,r);if !ok{return};view,err:=s.store.status(owner,id);if err!=nil{writeExportJobHTTPError(w,err);return};writeExportJobView(w,r,200,view)
+ case exportClearPath:s.clearRequest(w,r,owner)
+ case exportListPath:s.listRequest(w,r,owner)
+ case exportStatusPath:id,ok:=exportRequestID(w,r);if !ok{return};view,err:=s.store.status(owner,id);if err!=nil{writeExportJobHTTPError(w,err);return};writeExportJobView(w,r,200,view,s.savedFor(owner,id)...)
  case exportDownloadPath:id,ok:=exportRequestID(w,r);if !ok{return};reader,release,err:=s.store.acquire(owner,id);if err!=nil{writeExportJobHTTPError(w,err);return};defer release();w.Header().Set("Content-Type","video/mp4");w.Header().Set("Content-Disposition",`attachment; filename="export-`+id+`.mp4"`);http.ServeContent(w,r,"export-"+id+".mp4",time.Time{},reader)
  }
 })}
@@ -80,32 +106,48 @@ func decodeExportJobJSON(w http.ResponseWriter,r *http.Request,value interface{}
  if r.URL.RawQuery!=""{http.Error(w,"Query parameters not accepted",400);return false};kind,_,err:=mime.ParseMediaType(r.Header.Get("Content-Type"));if err!=nil || kind!="application/json"{http.Error(w,"Content-Type must be application/json",415);return false}
  d:=json.NewDecoder(http.MaxBytesReader(w,r.Body,4096));d.DisallowUnknownFields();if err:=d.Decode(value);err!=nil{http.Error(w,"Invalid export request",400);return false};if err:=d.Decode(&struct{}{});err!=io.EOF{http.Error(w,"One export JSON object is required",400);return false};return true
 }
-func writeExportJobView(w http.ResponseWriter,r *http.Request,status int,view exportJobView){body:=exportHTTPView{exportJobView:view};if view.State=="ready"{body.DownloadURL=exportDownloadPath+"?id="+view.ID};w.Header().Set("Content-Type","application/json");w.WriteHeader(status);if r.Method!="HEAD"{json.NewEncoder(w).Encode(body)}}
+func newExportHTTPView(view exportJobView,saved ...exportSavedRange)exportHTTPView{
+ body:=exportHTTPView{exportJobView:view};if view.State=="ready"{body.DownloadURL=exportDownloadPath+"?id="+view.ID}
+ if len(saved)>0 && saved[0].known(){body.SavedStart=saved[0].Start.UTC().Format(time.RFC3339Nano);body.SavedEnd=saved[0].End.UTC().Format(time.RFC3339Nano)}
+ if len(saved)>0{body.CameraID=saved[0].CameraID;body.CameraName=saved[0].CameraName;body.Mode=saved[0].Mode;body.RequestedStart=saved[0].RequestStart;body.RequestedEnd=saved[0].RequestEnd}
+ return body
+}
+func writeExportJobView(w http.ResponseWriter,r *http.Request,status int,view exportJobView,saved ...exportSavedRange){
+ body:=newExportHTTPView(view,saved...)
+ w.Header().Set("Content-Type","application/json");w.WriteHeader(status);if r.Method!="HEAD"{json.NewEncoder(w).Encode(body)}
+}
+// listRequest returns the session's jobs, oldest first, with the same fields as status.
+func(s *exportJobHTTP)listRequest(w http.ResponseWriter,r *http.Request,owner string){
+ if r.URL.RawQuery!=""{http.Error(w,"Query parameters not accepted",400);return}
+ views,err:=s.store.list(owner);if err!=nil{writeExportJobHTTPError(w,err);return}
+ body:=struct{Jobs []exportHTTPView `json:"jobs"`}{Jobs:make([]exportHTTPView,0,len(views))}
+ for _,view:=range views{body.Jobs=append(body.Jobs,newExportHTTPView(view,s.savedFor(owner,view.ID)...))}
+ w.Header().Set("Content-Type","application/json");w.WriteHeader(200);if r.Method!="HEAD"{json.NewEncoder(w).Encode(body)}
+}
+// clearRequest cancels and releases every job the session owns.
+func(s *exportJobHTTP)clearRequest(w http.ResponseWriter,r *http.Request,owner string){
+ var req struct{};if !decodeExportJobJSON(w,r,&req){return}
+ cleared,err:=s.store.clearOwner(owner);if err!=nil{writeExportJobHTTPError(w,err);return}
+ w.Header().Set("Content-Type","application/json");w.WriteHeader(200);json.NewEncoder(w).Encode(struct{Cleared int `json:"cleared"`}{cleared})
+}
 func writeExportJobHTTPError(w http.ResponseWriter,err error){status,message:=404,"Export unavailable, expired, or not ready";if errors.Is(err,errExportJobsBusy){status,message=429,"Export capacity exhausted; release prepared exports or wait for expiry";w.Header().Set("Retry-After","5")};if errors.Is(err,errExportJobsClosed){status,message=503,"Export service stopping"};http.Error(w,message,status)}
 func validExportSelection(req exportCreateRequest)bool{
  start,e1:=time.Parse(time.RFC3339Nano,req.Start);end,e2:=time.Parse(time.RFC3339Nano,req.End)
- if req.CameraID=="" || len(req.CameraID)>256 || e1!=nil || e2!=nil || !end.After(start) || (req.Mode!="copy" && req.Mode!="accurate"){return false}
- if req.AcceptedStart!="" || req.AcceptedEnd!=""{a,e1:=time.Parse(time.RFC3339Nano,req.AcceptedStart);b,e2:=time.Parse(time.RFC3339Nano,req.AcceptedEnd);if req.Mode!="copy" || e1!=nil || e2!=nil || a.After(start) || b.Before(end) || !b.After(a){return false}}
- return true
+ return req.CameraID!="" && len(req.CameraID)<=256 && e1==nil && e2==nil && end.After(start) && (req.Mode=="copy" || req.Mode=="accurate")
 }
 func(s *exportJobHTTP)create(w http.ResponseWriter,r *http.Request,owner string){
- var req exportCreateRequest;if !decodeExportJobJSON(w,r,&req){return};if req.Mode==""{req.Mode="copy"};if !validExportSelection(req){http.Error(w,"Valid camera, interval, copy/accurate mode and matching approval fields required",400);return}
- if s.plan==nil{http.Error(w,"Export renderer unavailable",503);return};render,err:=s.plan(r.Context(),req)
- if err!=nil{var proposal *exportCopyProposal;var requestErr *exportPlanHTTPError
-  if errors.As(err,&proposal){w.Header().Set("Content-Type","application/json");w.WriteHeader(409);json.NewEncoder(w).Encode(proposal)}else if errors.As(err,&requestErr){http.Error(w,requestErr.message,requestErr.status)}else if errors.Is(err,errCopyReordered) || errors.Is(err,errPreparedMediaProfile){message:="Unsupported or incompatible export tracks";if errors.Is(err,errCopyReordered){message=errCopyReordered.Error()};http.Error(w,message,422)}else if errors.Is(err,errExportPlanGap) || errors.Is(err,errExportPlanOverlap) || errors.Is(err,errExportInputLimit) || errors.Is(err,errExportPlanInvalid){writeExportPlanError(w,err)}else{writeRecordingIntervalError(w,r,err)};return
+ var req exportCreateRequest;if !decodeExportJobJSON(w,r,&req){return};if req.Mode==""{req.Mode="copy"};if !validExportSelection(req){http.Error(w,"Valid camera, interval and copy/accurate mode required",400);return}
+ if s.plan==nil{http.Error(w,"Export renderer unavailable",503);return};var saved exportSavedRange;render,err:=s.plan(context.WithValue(r.Context(),exportSavedRangeKey{},&saved),req)
+ if err!=nil{var requestErr *exportPlanHTTPError
+  if errors.As(err,&requestErr){http.Error(w,requestErr.message,requestErr.status)}else if errors.Is(err,errCopyUnsafeCut) || errors.Is(err,errPreparedMediaProfile){message:="Unsupported or incompatible export tracks";if errors.Is(err,errCopyUnsafeCut){message=errCopyUnsafeCut.Error()};http.Error(w,message,422)}else if errors.Is(err,errExportPlanGap) || errors.Is(err,errExportPlanOverlap) || errors.Is(err,errExportInputLimit) || errors.Is(err,errExportPlanInvalid){writeExportPlanError(w,err)}else{writeRecordingIntervalError(w,r,err)};return
  }
- if r.Context().Err()!=nil{return};view,err:=s.store.submit(owner,render);if err!=nil{writeExportJobHTTPError(w,err);return};w.Header().Set("Location",exportStatusPath+"?id="+view.ID);writeExportJobView(w,r,202,view)
+ saved.CameraID=req.CameraID;saved.Mode=req.Mode
+ if requestedStart,parseErr:=time.Parse(time.RFC3339Nano,req.Start);parseErr==nil{saved.RequestStart=requestedStart.UTC().Format(time.RFC3339Nano)}
+ if requestedEnd,parseErr:=time.Parse(time.RFC3339Nano,req.End);parseErr==nil{saved.RequestEnd=requestedEnd.UTC().Format(time.RFC3339Nano)}
+ if r.Context().Err()!=nil{return};view,err:=s.store.submitEstimated(owner,saved.EstimateBytes,render);if err!=nil{writeExportJobHTTPError(w,err);return};s.rememberSaved(owner,view.ID,saved);w.Header().Set("Location",exportStatusPath+"?id="+view.ID);writeExportJobView(w,r,202,view,saved)
 }
 func(s *exportJobHTTP)cancelRequest(w http.ResponseWriter,r *http.Request,owner string){var req struct{ID string `json:"id"`};if !decodeExportJobJSON(w,r,&req){return};if !validExportJobID(req.ID){http.Error(w,"Valid export id required",400);return};if err:=s.store.cancelJob(owner,req.ID);err!=nil{writeExportJobHTTPError(w,err);return};w.WriteHeader(204)}
 
-func copyProposal(req exportCreateRequest,requested,actual exportPlan,indices []copyFrameIndex)error{
- a,b:=actual.Start.UTC().Format(time.RFC3339Nano),actual.End.UTC().Format(time.RFC3339Nano)
- approvedA,e1:=time.Parse(time.RFC3339Nano,req.AcceptedStart);approvedB,e2:=time.Parse(time.RFC3339Nano,req.AcceptedEnd)
- if req.AcceptedStart!="" && e1==nil && e2==nil && approvedA.Equal(actual.Start) && approvedB.Equal(actual.End){return nil}
- // Partial copy also requires approval of possible AAC packet-boundary overhang.
- var allowance time.Duration;for _,index:=range indices{if index.audioAllowance>allowance{allowance=index.audioAllowance}}
- return &exportCopyProposal{Code:"copy_range_approval_required",RequestedStart:requested.Start.UTC().Format(time.RFC3339Nano),RequestedEnd:requested.End.UTC().Format(time.RFC3339Nano),ExportStart:a,ExportEnd:b,AudioAllowanceMS:int64((allowance+time.Millisecond-1)/time.Millisecond)}
-}
 func planExistingExportJob(parent context.Context,n *NVR,_ string,req exportCreateRequest)(exportJobRenderer,error){
  if req.Mode==""{req.Mode="copy"};if !validExportSelection(req){return nil,errExportPlanInvalid}
  start,_:=time.Parse(time.RFC3339Nano,req.Start);end,_:=time.Parse(time.RFC3339Nano,req.End)
@@ -117,14 +159,16 @@ func planExistingExportJob(parent context.Context,n *NVR,_ string,req exportCrea
  profiles:=make([]preparedMediaProfile,len(pins.files));for i,file:=range pins.files{profiles[i],err=inspectPreparedMediaProfile(ctx,file);if err!=nil{return nil,err}}
  var indices []copyFrameIndex
  if req.Mode=="copy" && requested.NeedsTrim{
+  // Copy extends the range outward to the nearest safe IDR cuts (at most 30 s per
+  // end, see validateCopyExtension). The job reports the extended range.
   plan,indices,err=planKeyframeCopy(ctx,pins,requested);if err!=nil{return nil,err}
   // Reinspect expanded coverage, so overlapping media outside the original
-  // selection cannot become an implicit source choice after approval.
+  // selection cannot become an implicit source choice.
   expanded,err:=collectRecordingIntervals(ctx,[]timelineCamera{camera},timelineWindow{Start:plan.Start,End:plan.End},recordingDurations);if err!=nil{return nil,err};checked,err:=buildExportPlan(expanded,timelineWindow{Start:plan.Start,End:plan.End});if err!=nil{return nil,err}
   if len(checked.Parts)!=len(plan.Parts){return nil,errRecordingChanged};for i:=range checked.Parts{if checked.Parts[i].Clip.Path!=plan.Parts[i].Clip.Path || !sameMediaFile(checked.Parts[i].Clip.identity,plan.Parts[i].Clip.identity){return nil,errRecordingChanged}}
-  if err:=copyProposal(req,requested,plan,indices);err!=nil{return nil,err}
- }else if req.Mode=="copy" && req.AcceptedStart!=""{a,_:=time.Parse(time.RFC3339Nano,req.AcceptedStart);b,_:=time.Parse(time.RFC3339Nano,req.AcceptedEnd);if !a.Equal(plan.Start) || !b.Equal(plan.End){return nil,errExportPlanInvalid}}
+ }
  if req.Mode=="copy"{for i:=1;i<len(profiles);i++{if !compatiblePreparedCopy(profiles[0],profiles[i]){return nil,errPreparedMediaProfile}}}else{if _,err:=preparedAccurateArguments(profiles,plan);err!=nil{return nil,err}}
+ if sink,ok:=parent.Value(exportSavedRangeKey{}).(*exportSavedRange);ok && sink!=nil{sink.Start,sink.End=plan.Start.UTC(),plan.End.UTC();sink.EstimateBytes=estimateExportBytes(plan,req.Mode);sink.CameraName=cam.Name}
  return func(ctx context.Context,w io.Writer)error{
   output,ok:=w.(*boundedExportJobWriter);if !ok{return errors.New("export output unavailable")}
   held,err:=exportInputPins.prepare(ctx,plan.clips());if err!=nil{return err};defer held.Close()

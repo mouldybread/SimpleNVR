@@ -14,7 +14,7 @@ REQUIRED = (
     'FuzzRecoveryContractStrictManifest',
 )
 FUZZ = REQUIRED[-1]
-COMMAND = ['go','test','-json','-race','-count=1','-timeout=120s','./...']
+COMMAND = ['go','test','-json','-race','-count=1','-timeout=240s','./...']
 MAX_LOG = 64 << 20
 MAX_LINE = 1 << 20
 

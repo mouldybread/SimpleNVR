@@ -8,11 +8,11 @@ A single complete source is copied byte for byte into bounded prepared-output st
 
 ### Part of a recording
 
-Subsection copy supports non-reordered video with usable decoded keyframe timestamps. The server plans an earlier video start and later video end at available keyframe or file boundaries and reinspects expanded coverage for gaps/overlaps. It returns a proposal before creating a job or reserving output storage. The browser displays the requested/proposed video intervals and AAC packet allowance and waits for explicit approval. Cancelling that proposal creates no job.
+Subsection copy supports non-reordered video with usable decoded keyframe timestamps. The server plans an earlier video start and later video end at available keyframe or file boundaries, at most 30 seconds beyond the request at each end, and reinspects expanded coverage for gaps/overlaps. The job is created without an approval step and reports the range it will save. The browser displays that saved range and marks it when it differs from the requested range.
 
-Approval keeps the original requested selection and adds the accepted video boundaries. The server recomputes the plan and requires a new approval when those video boundaries change. Reordered video, missing keyframe information, incompatible tracks or undecodable candidate output are refused; the user must explicitly choose Accurate instead.
+Reordered video, missing keyframe information, incompatible tracks, an extension beyond 30 seconds or undecodable candidate output are refused; the user must explicitly choose Accurate (or a wider range) instead.
 
-AAC packet boundaries can extend outside the video-aligned interval by the disclosed allowance. Candidate copy output is duration-probed and externally decoded before readiness. A prepared copy is not zero-copy HTTP delivery of the original recording.
+AAC packet boundaries can extend outside the video-aligned interval by up to one AAC frame. Candidate copy output is duration-probed and externally decoded before readiness. A prepared copy is not zero-copy HTTP delivery of the original recording.
 
 ## Accurate
 

@@ -54,7 +54,11 @@ func TestCorrStreamChild(t *testing.T) {
  case "oversize":
   chunk:=bytes.Repeat([]byte("x"),64<<10)
   for i:=0;i<513;i++ {if _,err:=os.Stdout.Write(chunk);err!=nil {os.Exit(94)}}
-  os.Exit(0)
+  // Stay alive, and keep the audio pipe open, until the parent refuses the stream and
+  // kills this child. Exiting right after the last chunk closes the audio pipe, so the
+  // audio comparator can report an empty stream before the video comparator reads the
+  // byte past the ceiling, and the parent returns whichever comparator error arrives first.
+  time.Sleep(10*time.Second);os.Exit(0)
  }
  if _,err:=os.Stdout.Write(v);err!=nil {os.Exit(95)}
  if _,err:=audio.Write(a);err!=nil {os.Exit(96)}

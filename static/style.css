@@ -1189,3 +1189,218 @@ button[disabled]:hover {
 .toast-close:hover {
     color: #fff;
 }
+
+/* Export range: floating range bar over the timeline and the export queue panel */
+.timeline-container {
+    position: relative;
+}
+
+.timeline-range-overlay {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    right: 10px;
+    height: 85px;
+    pointer-events: none;
+    z-index: 2;
+}
+
+.timeline-range-overlay[hidden] {
+    display: none;
+}
+
+.timeline-range-band {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: rgba(33, 150, 243, 0.18);
+    border-top: 2px solid #2196F3;
+    border-bottom: 2px solid #2196F3;
+    box-sizing: border-box;
+    pointer-events: none;
+}
+
+.timeline-range-handle {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 14px;
+    margin-left: -7px;
+    padding: 0;
+    border: none;
+    border-radius: 3px;
+    background: #2196F3;
+    cursor: ew-resize;
+    pointer-events: auto;
+    touch-action: none;
+}
+
+.timeline-range-handle::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 2px;
+    height: 24px;
+    margin: -12px 0 0 -1px;
+    background: #fff;
+}
+
+.timeline-range-handle:focus-visible {
+    outline: 2px solid #fff;
+    outline-offset: 2px;
+}
+
+.timeline-range-handle:disabled {
+    background: #555;
+    cursor: not-allowed;
+}
+
+.export-panel {
+    flex: 0 0 auto;
+    max-height: 45vh;
+    overflow-y: auto;
+    margin-top: 10px;
+    padding: 12px 15px;
+    background: #1f1f1f;
+    border: 1px solid #333;
+    border-radius: 8px;
+}
+
+.export-panel[hidden] {
+    display: none;
+}
+
+.export-panel-header,
+.export-queue-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.export-panel-header h2,
+.export-queue-header h3 {
+    margin: 0;
+    flex: 1;
+}
+
+.export-panel h3 {
+    margin: 12px 0 6px 0;
+    font-size: 15px;
+}
+
+.export-guidance,
+.export-help {
+    margin: 8px 0;
+    color: #bbb;
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.export-range-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.export-range-boundaries,
+.export-range-settings {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 16px;
+}
+
+.export-range-boundary {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.export-range-boundary output {
+    min-width: 200px;
+    font-variant-numeric: tabular-nums;
+}
+
+.export-mode-toggle {
+    display: inline-flex;
+    border: 1px solid #4CAF50;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.export-mode-option {
+    padding: 6px 12px;
+    border: none;
+    background: #2a2a2a;
+    color: #ddd;
+    cursor: pointer;
+}
+
+.export-mode-option[aria-pressed="true"] {
+    background: #4CAF50;
+    color: #fff;
+}
+
+.export-mode-option:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+.export-panel-actions {
+    margin: 10px 0;
+}
+
+.export-job,
+.export-queue-item {
+    margin: 8px 0;
+    padding: 8px 10px;
+    background: #2a2a2a;
+    border-left: 4px solid #888;
+    border-radius: 4px;
+}
+
+.export-job h4,
+.export-queue-item h4 {
+    margin: 0 0 4px 0;
+    font-size: 14px;
+}
+
+.export-job p,
+.export-queue-item p {
+    margin: 4px 0;
+    font-size: 13px;
+    color: #ccc;
+}
+
+.export-job .btn,
+.export-queue-item .btn {
+    margin: 4px 6px 0 0;
+}
+
+.export-job[data-state="ready"],
+.export-job[data-state="handed"],
+.export-queue-item[data-state="ready"] {
+    border-left-color: #4CAF50;
+}
+
+.export-job[data-state="queued"],
+.export-job[data-state="preparing"],
+.export-queue-item[data-state="queued"],
+.export-queue-item[data-state="preparing"] {
+    border-left-color: #2196F3;
+}
+
+.export-job[data-state="failed"],
+.export-job[data-state="release-failed"],
+.export-queue-item[data-state="failed"] {
+    border-left-color: #f44336;
+}
+
+.export-job[data-state="canceled"],
+.export-job[data-state="expired"],
+.export-job[data-state="released"],
+.export-queue-item[data-state="canceled"],
+.export-queue-item[data-state="expired"] {
+    border-left-color: #666;
+}

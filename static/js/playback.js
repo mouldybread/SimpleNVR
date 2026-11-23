@@ -3,7 +3,7 @@ let selectedCameras = [], allCameras = [], timelineSegments = [], videoPlayers =
 let currentDate = new Date(), gridLayout = 1, playbackSpeed = 1.0, isPlaying = false;
 let currentTimePosition = null, isUpdatingGrid = false, pendingSeekTime = null, lastSeekTime = null;
 let seekTimeoutId = null, loadDataTimeoutId = null, pendingVideoTimeouts = [];
-let downloadStartTime = null, downloadEndTime = null, downloadCameras = [];
+let downloadStartTime = null, downloadEndTime = null;
 let timelineEvents = [], eventTooltip = null;
 let timelineRequestVersion = 0, timelineAbort = null, pendingEventNavigation = null, cameraLoadVersion = 0;
 let playbackIntentVersion = 0;
@@ -99,6 +99,7 @@ function toggleCamera(cameraId) {
   selectedCameras = selectedCameras.includes(cameraId) ? selectedCameras.filter(id => id !== cameraId) : [...selectedCameras,cameraId];
   if (!cameraColorMap[cameraId]) cameraColorMap[cameraId] = COLORS[nextColorIndex++ % COLORS.length];
   saveCameraSelection(); gridLayout = selectedCameras.length; updateDropdownLabel(); loadTimelineData(); updateVideoGrid();
+  if (typeof refreshExportCameraGuidance === 'function') refreshExportCameraGuidance();
 }
 function setupDatePicker() {
   const picker = document.getElementById('timeline-date-picker'); if (!picker) return;
@@ -205,6 +206,8 @@ function renderTimeline() {
     const x=TimelineGeometry.fractionAt(currentTimePosition,viewport)*width;
     ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,height);ctx.stroke();ctx.lineWidth=1;
   }
+  // Keep the export range bar aligned with the timeline after zoom, pan or day changes.
+  if (typeof renderExportRangeOverlay==='function') renderExportRangeOverlay();
 }
 function setupTimelineZoom() {
   const canvas=document.getElementById('timeline-canvas');if (!canvas) return;
@@ -420,34 +423,4 @@ function setupKeyboardShortcuts() {
     if (e.code==='Space') { e.preventDefault(); togglePlayPause(); } else if (e.code==='ArrowLeft') { e.preventDefault(); previousSegment(); } else if (e.code==='ArrowRight') { e.preventDefault(); nextSegment(); }
   });
 }
-function openDownloadModal() {
-  if (currentTimePosition===null) { playbackError('Please select a time on the timeline first'); return; }
-  const modal=document.getElementById('download-modal'); if (!modal) return;
-  downloadStartTime=new Date(currentTimePosition); downloadStartTime.setMinutes(downloadStartTime.getMinutes()-10);
-  downloadEndTime=new Date(currentTimePosition); downloadEndTime.setMinutes(downloadEndTime.getMinutes()+10);
-  downloadCameras=[...selectedCameras]; updateDownloadTimeDisplay(); renderDownloadCameraSelection(); modal.classList.add('active'); modal.style.display='block';
-}
-function closeDownloadModal() { const modal=document.getElementById('download-modal'); if (modal) { modal.classList.remove('active'); modal.style.display='none'; } }
-function updateDownloadTimeDisplay() {
-  const display=document.getElementById('download-time-display'), duration=document.getElementById('download-duration-display');
-  if (display && downloadStartTime && downloadEndTime) display.textContent=`${formatTimeForDisplay(downloadStartTime)} - ${formatTimeForDisplay(downloadEndTime)}`;
-  if (duration && downloadStartTime && downloadEndTime) duration.textContent=`Total duration: ${Math.round((downloadEndTime-downloadStartTime)/60000)} min`;
-}
-function expandDownloadTimeEarlier() { if (downloadStartTime) { downloadStartTime.setMinutes(downloadStartTime.getMinutes()-10); updateDownloadTimeDisplay(); } }
-function expandDownloadTimeLater() { if (downloadEndTime) { downloadEndTime.setMinutes(downloadEndTime.getMinutes()+10); updateDownloadTimeDisplay(); } }
-function resetDownloadTimeRange() {
-  if (currentTimePosition===null) return;
-  downloadStartTime=new Date(currentTimePosition); downloadStartTime.setMinutes(downloadStartTime.getMinutes()-10);
-  downloadEndTime=new Date(currentTimePosition); downloadEndTime.setMinutes(downloadEndTime.getMinutes()+10); updateDownloadTimeDisplay();
-}
-function formatTimeForDisplay(date) { return date.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'}); }
-function renderDownloadCameraSelection() {
-  const container=document.getElementById('download-camera-list'); if (!container) return; container.innerHTML='';
-  selectedCameras.forEach(id=>{ const camera=allCameras.find(cam=>cam.id===id); if (!camera) return;
-    const label=document.createElement('label'); label.className='camera-checkbox'; label.style.cssText='display:block;margin:5px 0;cursor:pointer;';
-    const checkbox=document.createElement('input'); checkbox.type='checkbox'; checkbox.value=id; checkbox.checked=downloadCameras.includes(id); checkbox.onchange=()=>toggleDownloadCamera(id);
-    label.appendChild(checkbox); label.appendChild(document.createTextNode(' '+camera.name)); container.appendChild(label);
-  });
-}
-function toggleDownloadCamera(id) { downloadCameras=downloadCameras.includes(id)?downloadCameras.filter(camera=>camera!==id):[...downloadCameras,id]; renderDownloadCameraSelection(); }
 if (document.readyState==='loading') document.addEventListener('DOMContentLoaded',initializeTimelinePlayback); else initializeTimelinePlayback();
