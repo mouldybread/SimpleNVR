@@ -23,10 +23,11 @@ type exportCreateRequest struct{
  End string `json:"end_time"`
  Mode string `json:"mode,omitempty"`
 }
-// exportSavedRange is the interval a job will actually save. Copy mode may extend
-// the requested range outward to the nearest safe cut; the planner reports it
-// through a sink carried by the planning context.
-type exportSavedRange struct{Start,End time.Time}
+// exportSavedRange is what the planner reports back for a job: the interval it will
+// actually save (copy mode may extend the requested range outward to the nearest safe
+// cut) and an estimate of the output size used for the job's byte reservation. The
+// planner fills it through a sink carried by the planning context.
+type exportSavedRange struct{Start,End time.Time;EstimateBytes int64}
 func(r exportSavedRange)known()bool{return !r.Start.IsZero() && !r.End.IsZero() && r.End.After(r.Start)}
 type exportSavedRangeKey struct{}
 type exportSavedEntry struct{owner string;saved exportSavedRange}
@@ -111,7 +112,7 @@ func(s *exportJobHTTP)create(w http.ResponseWriter,r *http.Request,owner string)
  if err!=nil{var requestErr *exportPlanHTTPError
   if errors.As(err,&requestErr){http.Error(w,requestErr.message,requestErr.status)}else if errors.Is(err,errCopyReordered) || errors.Is(err,errPreparedMediaProfile){message:="Unsupported or incompatible export tracks";if errors.Is(err,errCopyReordered){message=errCopyReordered.Error()};http.Error(w,message,422)}else if errors.Is(err,errExportPlanGap) || errors.Is(err,errExportPlanOverlap) || errors.Is(err,errExportInputLimit) || errors.Is(err,errExportPlanInvalid){writeExportPlanError(w,err)}else{writeRecordingIntervalError(w,r,err)};return
  }
- if r.Context().Err()!=nil{return};view,err:=s.store.submit(owner,render);if err!=nil{writeExportJobHTTPError(w,err);return};s.rememberSaved(owner,view.ID,saved);w.Header().Set("Location",exportStatusPath+"?id="+view.ID);writeExportJobView(w,r,202,view,saved)
+ if r.Context().Err()!=nil{return};view,err:=s.store.submitEstimated(owner,saved.EstimateBytes,render);if err!=nil{writeExportJobHTTPError(w,err);return};s.rememberSaved(owner,view.ID,saved);w.Header().Set("Location",exportStatusPath+"?id="+view.ID);writeExportJobView(w,r,202,view,saved)
 }
 func(s *exportJobHTTP)cancelRequest(w http.ResponseWriter,r *http.Request,owner string){var req struct{ID string `json:"id"`};if !decodeExportJobJSON(w,r,&req){return};if !validExportJobID(req.ID){http.Error(w,"Valid export id required",400);return};if err:=s.store.cancelJob(owner,req.ID);err!=nil{writeExportJobHTTPError(w,err);return};w.WriteHeader(204)}
 
@@ -135,7 +136,7 @@ func planExistingExportJob(parent context.Context,n *NVR,_ string,req exportCrea
   if len(checked.Parts)!=len(plan.Parts){return nil,errRecordingChanged};for i:=range checked.Parts{if checked.Parts[i].Clip.Path!=plan.Parts[i].Clip.Path || !sameMediaFile(checked.Parts[i].Clip.identity,plan.Parts[i].Clip.identity){return nil,errRecordingChanged}}
  }
  if req.Mode=="copy"{for i:=1;i<len(profiles);i++{if !compatiblePreparedCopy(profiles[0],profiles[i]){return nil,errPreparedMediaProfile}}}else{if _,err:=preparedAccurateArguments(profiles,plan);err!=nil{return nil,err}}
- if sink,ok:=parent.Value(exportSavedRangeKey{}).(*exportSavedRange);ok && sink!=nil{sink.Start,sink.End=plan.Start.UTC(),plan.End.UTC()}
+ if sink,ok:=parent.Value(exportSavedRangeKey{}).(*exportSavedRange);ok && sink!=nil{sink.Start,sink.End=plan.Start.UTC(),plan.End.UTC();sink.EstimateBytes=estimateExportBytes(plan,req.Mode)}
  return func(ctx context.Context,w io.Writer)error{
   output,ok:=w.(*boundedExportJobWriter);if !ok{return errors.New("export output unavailable")}
   held,err:=exportInputPins.prepare(ctx,plan.clips());if err!=nil{return err};defer held.Close()

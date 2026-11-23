@@ -5,6 +5,7 @@ SimpleNVR prepares exports on the server and serves finished files through authe
 ## How it works
 
 - Disk-backed jobs have random IDs, session ownership, independent seekable readers, cancellation, expiry, and shutdown joining.
+- Jobs that cannot start yet wait in a bounded server queue (state `queued`) and start in order as capacity frees up.
 - The browser creates a job, polls its status, then offers a normal same-origin download with HTTP Range support. Control responses are bounded to 8 KiB.
 - The UI processes cameras sequentially. The next job starts after the previous prepared file is released or expires.
 - Cancel/release requires server acknowledgement. Failures remain visible with a retry control. A lost creation response is not retried automatically.
@@ -27,14 +28,21 @@ When the setting is absent, the application can start but prepared export endpoi
 | --- | --- | --- |
 | `NVR_EXPORT_MAX_BYTES` | 8589934592 | Maximum prepared output per job (8 GiB) |
 | `NVR_EXPORT_TOTAL_BYTES` | 17179869184 | Aggregate job-output reservation (16 GiB) |
-| `NVR_EXPORT_MAX_JOBS` | 8 | Maximum retained job records |
+| `NVR_EXPORT_MAX_JOBS` | 8 | Maximum retained job records (queued, running and finished) |
+| `NVR_EXPORT_MAX_QUEUED` | 4 | Maximum jobs waiting to start |
 | `NVR_EXPORT_PARALLEL` | 1 | Concurrent preparations |
-| `NVR_EXPORT_TTL` | 30m | Initial job expiry; retention resets when preparation finishes |
+| `NVR_EXPORT_TTL` | 30m | How long a finished job is kept; the timer starts when the job completes |
 | `NVR_EXPORT_PREPARE_TIMEOUT` | 30m | Preparation deadline, including queue wait |
 
-Byte limits are positive integers in bytes. Counts must be positive; maximum jobs cannot exceed 64 and parallel preparations cannot exceed maximum jobs. Total bytes must be at least the per-job limit. Durations use Go duration syntax such as `30m` or `1h`, must be positive, and cannot exceed 24 hours.
+Byte limits are positive integers in bytes. Counts must be positive; maximum jobs and maximum queued cannot exceed 64 and parallel preparations cannot exceed maximum jobs. Total bytes must be at least the per-job limit. Durations use Go duration syntax such as `30m` or `1h`, must be positive, and cannot exceed 24 hours.
 
-Each admitted job reserves its maximum output, including queued jobs, so the default byte budget permits at most two concurrent reservations. This does not mean two renders run in parallel: the default parallel setting is one. Retained records also count toward the job limit.
+### Queue and reservations
+
+A new job enters the queue. The oldest queued job starts when a parallel slot is free and its reservation fits the remaining byte budget; the queue is never reordered, so a large job is not starved by smaller ones behind it. Queued jobs reserve nothing. When the queue is full or the retained-job limit is reached, create returns `429`.
+
+When a job starts it reserves an estimate of its output size, worked out from the source recordings it reads, instead of the full per-job maximum. Copy reserves the share of each source file that the export uses plus 15% and 8 MiB. Accurate reserves four times that share, because re-encoded output can be much larger than a low-bitrate camera stream. Both are capped at `NVR_EXPORT_MAX_BYTES`, and if the sizes are unknown the full maximum is reserved. The reservation is also the job's output cap: a job that writes more than it reserved fails with a message saying so. When a job becomes ready its reservation shrinks to the actual size, which frees the rest for queued jobs.
+
+A queued or preparing job does not expire. The preparation timeout, which includes time spent queued, bounds it. The retention timer starts when the job completes, whether it became ready, failed or was canceled, and `expires_at` shows the preparation deadline until then.
 
 Expired or released outputs with active readers stay charged until their readers finish. Reservations are accounting limits, not preallocated physical disk space or a bound on every filesystem allocation. Monitor free space and underlying storage health.
 
@@ -55,7 +63,7 @@ POST requests use `Content-Type: application/json`. Create accepts these fields;
 | `start_time`, `end_time` | Ordered RFC 3339 timestamps; end is exclusive |
 | `mode` | `copy` (default) or `accurate` |
 
-A `202` response returns `id`, `state`, `message`, `bytes`, `expires_at`, `saved_start` and `saved_end`, with a `Location` header pointing to status. `saved_start` and `saved_end` (RFC 3339, UTC) are the range the job will save; status responses repeat them. Ready status adds `download_url`. Wait for ready before downloading; a queued or failed job has no ready download.
+A `202` response returns `id`, `state`, `message`, `bytes`, `expires_at`, `saved_start` and `saved_end`, with a `Location` header pointing to status. The state is `queued` until the job starts, then `preparing`, then `ready`, `failed` or `canceled`. `saved_start` and `saved_end` (RFC 3339, UTC) are the range the job will save; status responses repeat them. Ready status adds `download_url`. Wait for ready before downloading; a queued or failed job has no ready download.
 
 ### Copy range extension
 
@@ -63,7 +71,7 @@ Subsection copy does not need approval. The server extends the requested range o
 
 If the nearest safe cut is more than 30 seconds beyond the request, or no safe cut exists, create returns `422` and no job or output reservation is made. Choose a wider range or Accurate. Accurate reports the requested range as the saved range.
 
-Other common outcomes include `409` with `X-Export-Plan-Status: gap` or `overlap` for missing/ambiguous coverage, `413` for too many clips, `422` for an unsupported mode/profile combination, `429` for exhausted job capacity, and `503` for unavailable export service or metadata. No gap is silently skipped or overlapping source selected automatically.
+Other common outcomes include `409` with `X-Export-Plan-Status: gap` or `overlap` for missing/ambiguous coverage, `413` for too many clips, `422` for an unsupported mode/profile combination, `429` for a full queue or exhausted job capacity, and `503` for unavailable export service or metadata. No gap is silently skipped or overlapping source selected automatically.
 
 ### Cancel, release and expiry
 
