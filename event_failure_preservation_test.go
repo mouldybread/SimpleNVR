@@ -81,10 +81,14 @@ func TestAssemblyFailurePublicationPreservesStaging(t *testing.T) {
    bm.slots<-struct{}{}
    input:=filepath.Join(job.dir,"event.mp4")
    if err:=os.WriteFile(input,[]byte("original capture evidence"),0600);err!=nil {t.Fatal(err)}
-   name:=fmt.Sprintf("%s_%s_%s.mp4",job.preStart.UTC().Format("20060102_150405"),sanitizeFilename(event.Label),sanitizeFilename(event.ID))
-   expected:=filepath.Join(bm.camera.RecordDir,name)
+   normal,err:=stampedFinalPath(bm.camera.RecordDir,job.preStart,event.StartTime.Add(time.Duration(event.Duration)*time.Second),sanitizeFilename(event.Label)+"_"+sanitizeFilename(event.ID),false)
+   if err!=nil {t.Fatal(err)}
+   name:=filepath.Base(normal);expected:=normal
    if tc.exitCode!=0 {expected=partialRecordingName(expected)}
-   if tc.collision {if err:=os.WriteFile(expected,[]byte("existing evidence"),0600);err!=nil {t.Fatal(err)}}
+   if tc.collision {
+    if err:=os.MkdirAll(filepath.Dir(expected),0700);err!=nil {t.Fatal(err)}
+    if err:=os.WriteFile(expected,[]byte("existing evidence"),0600);err!=nil {t.Fatal(err)}
+   }
    final:=bm.concatenateEventRecording(job,input)
    if (final!="")!=tc.wantPublished {t.Fatalf("publication=%q",final)}
    if final!="" && final!=expected {t.Fatalf("wrong output path: %q",final)}
