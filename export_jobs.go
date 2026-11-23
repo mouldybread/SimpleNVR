@@ -168,7 +168,7 @@ func (s *exportJobStore) submit(owner string,render exportJobRenderer) (exportJo
 // submitEstimated queues a job. It reserves estimate bytes (clamped to MaxBytes; zero or
 // less means MaxBytes) only when it starts, and that reservation is also the job's
 // output cap. Admission fails with errExportJobsBusy when the queue or the retained
-// job records are full.
+// job records are full. Expired records are evicted, oldest first, to make room.
 func (s *exportJobStore) submitEstimated(owner string,estimate int64,render exportJobRenderer) (exportJobView,error) {
  if owner=="" || render==nil {return exportJobView{},errors.New("export owner and renderer required")}
  raw:=make([]byte,32);if _,err:=rand.Read(raw);err!=nil {return exportJobView{},err}
@@ -176,6 +176,7 @@ func (s *exportJobStore) submitEstimated(owner string,estimate int64,render expo
  s.mu.Lock();defer s.mu.Unlock()
  if s.closing || s.ctx.Err()!=nil {return exportJobView{},errExportJobsClosed}
  if estimate<=0 || estimate>s.limits.MaxBytes {estimate=s.limits.MaxBytes}
+ if len(s.jobs)>=s.limits.MaxJobs {s.evictExpiredLocked(len(s.jobs)-s.limits.MaxJobs+1)}
  if len(s.jobs)>=s.limits.MaxJobs || len(s.queue)>=s.limits.queueLimit() {return exportJobView{},errExportJobsBusy}
  ctx,cancel:=context.WithTimeout(s.ctx,s.limits.Preparation)
  job:=&preparedExportJob{view:exportJobView{ID:id,State:"queued",Message:"Queued for export preparation",ExpiresAt:time.Now().Add(s.limits.Preparation)},owner:owner,ctx:ctx,cancel:cancel,render:render,estimate:estimate,created:time.Now()}
@@ -213,6 +214,23 @@ func (s *exportJobStore) removeQueuedLocked(job *preparedExportJob) {
 // removeIfDoneLocked drops a cleared job's record once nothing is still using it.
 func (s *exportJobStore) removeIfDoneLocked(job *preparedExportJob) {
  if job.removed && !job.running && job.readers==0 {delete(s.jobs,job.view.ID)}
+}
+
+// evictExpiredLocked drops up to n expired records, oldest first, so that a new job can be
+// admitted. Expired records otherwise stay listed until their session clears them.
+func (s *exportJobStore) evictExpiredLocked(n int) {
+ expired:=make([]*preparedExportJob,0)
+ for _,job:=range s.jobs {
+  if job.view.State=="expired" && !job.running && job.readers==0 {expired=append(expired,job)}
+ }
+ sort.Slice(expired,func(i,j int) bool {
+  if expired[i].created.Equal(expired[j].created) {return expired[i].view.ID<expired[j].view.ID}
+  return expired[i].created.Before(expired[j].created)
+ })
+ for _,job:=range expired {
+  if n<=0 {break}
+  delete(s.jobs,job.view.ID);n--
+ }
 }
 
 // abortQueued ends a job that is still waiting when its context ends: preparation
@@ -289,7 +307,7 @@ func (s *exportJobStore) finish(job *preparedExportJob,file *os.File,size int64,
  // The retention timer starts when the job completes.
  job.view.ExpiresAt=time.Now().Add(s.limits.Lifetime)
  if job.view.State!="ready" {s.discardLocked(job)}
- if s.closing || job.view.State=="expired" || job.removed {delete(s.jobs,job.view.ID)}
+ if s.closing || job.removed {delete(s.jobs,job.view.ID)}
  s.dispatchLocked()
 }
 
@@ -302,16 +320,16 @@ func (s *exportJobStore) discardLocked(job *preparedExportJob) {
  s.dispatchLocked()
 }
 
-// expire drops completed jobs whose retention ended. Queued and preparing jobs are
-// never expired here: the preparation timeout bounds them.
+// expire marks completed jobs whose retention ended as expired and releases their output.
+// The record stays listed as expired until its session clears it or a new job needs the
+// room. Queued and preparing jobs never expire here: the preparation timeout bounds them.
 func (s *exportJobStore) expire(now time.Time) {
  s.mu.Lock();defer s.mu.Unlock()
- for id,job:=range s.jobs {
-  if job.running || job.view.State=="queued" {continue}
+ for _,job:=range s.jobs {
+  if job.running || job.view.State=="queued" || job.view.State=="expired" {continue}
   if now.Before(job.view.ExpiresAt) {continue}
   job.view.State="expired";job.view.Message="Prepared export expired";job.view.Reason=exportReasonExpired;job.cancel()
   s.discardLocked(job)
-  if !job.running && job.readers==0 {delete(s.jobs,id)}
  }
 }
 
@@ -351,10 +369,15 @@ func (s *exportJobStore) cancelLocked(job *preparedExportJob,reason,message stri
  s.discardLocked(job)
 }
 
+// cancelJob cancels or releases a job. A job that already failed, was canceled or expired
+// is left as it is, so its recorded reason is not rewritten, and the call succeeds.
 func (s *exportJobStore) cancelJob(owner,id string) error {
  s.mu.Lock();defer s.mu.Unlock()
  job:=s.jobs[id]
  if owner=="" || job==nil || job.owner!=owner || job.removed {return errExportJobMissing}
+ switch job.view.State {
+ case "failed","canceled","expired":return nil
+ }
  s.cancelLocked(job,exportReasonCanceled,"Export canceled")
  return nil
 }
@@ -396,7 +419,7 @@ func (s *exportJobStore) acquire(owner,id string) (*io.SectionReader,func(),erro
   s.mu.Lock();defer s.mu.Unlock()
   job.readers--
   if job.view.State!="ready" || s.closing || s.ctx.Err()!=nil {s.discardLocked(job)}
-  if job.readers==0 && !job.running && (s.closing || job.view.State=="expired") {delete(s.jobs,id)}
+  if job.readers==0 && !job.running && s.closing {delete(s.jobs,id)}
   s.removeIfDoneLocked(job)
   s.maybeDrainedLocked()
  })}

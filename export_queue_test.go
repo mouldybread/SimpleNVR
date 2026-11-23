@@ -60,7 +60,7 @@ func TestExportJobsCancelAndShutdownReasons(t *testing.T) {
  ready,err:=s.submit("owner",func(ctx context.Context,w io.Writer)error{_,err:=io.WriteString(w,"ok");return err});if err!=nil {t.Fatal(err)}
  if view:=awaitExportJob(t,s,ready.ID,"ready");view.Reason!="" {t.Fatalf("ready job has a reason: %+v",view)}
  s.expire(time.Now().Add(2*time.Hour))
- if _,err:=s.status("owner",ready.ID);!errors.Is(err,errExportJobMissing) {t.Fatal("expired job still listed")}
+ if view,err:=s.status("owner",ready.ID);err!=nil || view.State!="expired" || view.Reason!=exportReasonExpired {t.Fatalf("expired job is not kept visible as expired: %+v %v",view,err)}
 }
 
 func TestExportJobsListAndClear(t *testing.T) {
