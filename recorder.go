@@ -234,8 +234,11 @@ func (bm *BufferManager) concatenateEventRecording(job *bufferEvent,eventFile st
  execution.requireCheckpoint(job,"assembling")
  job.keepStaging=true
  if err:=job.writeEventConcat(bm.ctx,eventFile);err!=nil {return ""}
- name:=fmt.Sprintf("%s_%s_%s.mp4",job.preStart.UTC().Format("20060102_150405"),sanitizeFilename(job.event.Label),sanitizeFilename(job.event.ID))
- final:=filepath.Join(bm.camera.RecordDir,name);temp:=final+".tmp"
+ label:=sanitizeFilename(job.event.Label)
+ if len(label)>79 {label=label[:79]}
+ final,err:=stampedFinalPath(bm.camera.RecordDir,job.preStart,job.event.StartTime.Add(time.Duration(job.event.Duration)*time.Second),label+"_"+sanitizeFilename(job.event.ID),false)
+ if err!=nil {log.Printf("Event output name unavailable for camera %s; staging retained",bm.camera.ID);return ""}
+ temp:=filepath.Join(bm.camera.RecordDir,filepath.Base(final)+".tmp")
  ctx,cancel:=context.WithTimeout(bm.ctx,2*time.Minute);defer cancel()
  cmd:=ffmpegCommand(ctx,"-hide_banner","-loglevel","error","-nostats","-f","concat","-safe","1","-i","concat.txt","-c","copy","-f","mp4","-movflags","faststart","-y",temp)
  cmd.Dir=job.dir
@@ -265,19 +268,24 @@ func probeRecording(parent context.Context,path string) error {
 
 func recordSegment(ctx context.Context,cam *Camera,durationSeconds int) error {
  now:=time.Now().UTC()
- filename:=fmt.Sprintf("%s_%s_%s.mp4",now.Format("20060102_150405"),sanitizeFilename(cam.Name),generateID("segment",now))
- filePath:=filepath.Join(cam.RecordDir,filename);tempPath:=filePath+".tmp"
+ label:=sanitizeFilename(cam.Name)+"_"+generateID("segment",now)
+ tempPath:=filepath.Join(cam.RecordDir,now.Format("20060102_150405")+"_"+label+".mp4.tmp")
  segmentCtx,cancel:=context.WithTimeout(ctx,time.Duration(durationSeconds)*time.Second+5*time.Second);defer cancel()
  cmd:=ffmpegCommand(segmentCtx,"-hide_banner","-loglevel","error","-nostats","-rtsp_transport","tcp","-fflags","+genpts+igndts+ignidx+discardcorrupt","-i",cam.RTSPUrl,"-t",strconv.Itoa(durationSeconds),"-c","copy","-movflags","faststart","-f","mp4","-y",tempPath)
  stderr:=&recordingStderrTail{}
  cmd.Stderr=stderr
  runErr:=cmd.Run()
+ ended:=time.Now().UTC()
  // Freeze the capture outcome as FFmpeg returns. Validation and publication run
  // under their own finalize deadline and must not rewrite a completed capture.
  captureErr:=segmentCtx.Err()
- if runErr!=nil || captureErr!=nil {filePath=partialRecordingName(filePath)}
  finalizeCtx,finalizeCancel:=context.WithTimeout(context.WithoutCancel(ctx),recordingFinalizeGrace);defer finalizeCancel()
- publicationErr:=publishRecording(finalizeCtx,tempPath,filePath)
+ publicationErr:=func() error {
+  lease,err:=recordingMediaOwnership.acquire(finalizeCtx);if err!=nil {return err}
+  defer lease.release()
+  _,err=publishStampedRecordingLeased(finalizeCtx,lease,tempPath,cam.RecordDir,now,ended,label,runErr!=nil || captureErr!=nil)
+  return err
+ }()
  if publicationErr!=nil {removeEmptyRecording(tempPath)}
  return continuousAttemptOutcome(ctx.Err(),captureErr,runErr,publicationErr,tempPath,stderr.data)
 }
@@ -291,18 +299,4 @@ func sanitizeFilename(name string) string {
  return out.String()
 }
 
-func recoverPartialRecordings() {
- nvr.mu.RLock()
- cameras:=make([]*Camera,0,len(nvr.cameras));for _,cam:=range nvr.cameras {cameras=append(cameras,cam)}
- nvr.mu.RUnlock()
- for _,cam:=range cameras {
-  logPreservedEventStorage(cam)
-  files,_:=filepath.Glob(filepath.Join(cam.RecordDir,"*.tmp"))
-  for _,file:=range files {
-   final:=partialRecordingName(strings.TrimSuffix(file,".tmp"))
-   ctx,cancel:=context.WithTimeout(context.Background(),recordingFinalizeGrace)
-   err:=publishRecording(ctx,file,final);cancel()
-   if err!=nil {log.Printf("Partial recording for camera %s retained for inspection",cam.ID)}
-  }
- }
-}
+func recoverPartialRecordings() {recoverBeforeStartup(context.Background(),nvr)}
