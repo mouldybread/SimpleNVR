@@ -5,7 +5,6 @@ import (
  "errors"
  "log"
  "net/http"
- "path/filepath"
  "strings"
  "sync"
  "time"
@@ -94,12 +93,6 @@ func recoverBeforeStartup(ctx context.Context,n *NVR) {
  for _,cam:=range cameras {
   if ctx.Err()!=nil {return}
   logPreservedEventStorage(cam)
-  files,_:=filepath.Glob(filepath.Join(cam.RecordDir,"*.tmp"))
-  for _,file:=range files {
-   if ctx.Err()!=nil {return}
-   final:=partialRecordingName(strings.TrimSuffix(file,".tmp"));probeCtx,cancel:=context.WithTimeout(ctx,recordingFinalizeGrace)
-   err:=publishRecording(probeCtx,file,final);cancel()
-   if err!=nil {log.Printf("Partial recording for camera %s retained for inspection",cam.ID)}
-  }
+  if err:=recoverStampedCameraTemps(ctx,cam.RecordDir,validateRecording);err!=nil {log.Printf("Partial recordings for camera %s retained for inspection: %v",cam.ID,err)}
  }
 }
