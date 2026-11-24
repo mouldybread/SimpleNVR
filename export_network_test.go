@@ -65,7 +65,9 @@ func (f *exportNetworkFixture) releaseCleanup(){f.releaseOnce.Do(func(){close(f.
 
 func newExportNetworkFixture(t *testing.T,holdCleanup bool) *exportNetworkFixture {
  t.Helper();requireFFmpeg(t)
- dir:=t.TempDir();source:=filepath.Join(dir,"20261110_000000_fixture.mp4")
+ dir:=t.TempDir();day:=filepath.Join(dir,"20261110")
+ if err:=os.MkdirAll(day,0755);err!=nil {t.Fatal(err)}
+ source:=filepath.Join(day,"20261110_000000_E20261110_000002_fixture.mp4")
  ctx,cancel:=context.WithTimeout(context.Background(),20*time.Second);defer cancel()
  cmd:=exec.CommandContext(ctx,"ffmpeg","-nostdin","-v","error","-f","lavfi","-i","testsrc2=size=256x144:rate=10","-filter_threads","1","-vf","noise=alls=100:allf=t+u","-t","2","-c:v","mpeg4","-q:v","2","-threads","1","-an","-y",source)
  if output,err:=cmd.CombinedOutput();err!=nil {t.Fatalf("network fixture media: %v %s",err,output)}
@@ -77,7 +79,7 @@ func newExportNetworkFixture(t *testing.T,holdCleanup bool) *exportNetworkFixtur
   file,err:=openExportInput(path);if err==nil {f.filesMu.Lock();f.opened=append(f.opened,file);f.filesMu.Unlock()};return file,err
  }
  if !holdCleanup {f.releaseCleanup()}
- cache:=newDurationCache(2,2,probeVideoDuration)
+ cache:=newDurationCache(2,2,func(context.Context,*os.File)(time.Duration,error){t.Error("export interval selection probed duration");return 0,errRecordingMetadata})
  auth,_:=authFixture(t)
  route:=http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
   if r.URL.Path!="/api/download" {http.NotFound(w,r);return}
@@ -125,7 +127,7 @@ func (f *exportNetworkFixture) request(t *testing.T,trim bool) (*http.Response,c
  req,err:=http.NewRequestWithContext(ctx,"GET",f.server.URL+"/api/download?"+query.Encode(),nil);if err!=nil {cancel();t.Fatal(err)}
  for _,cookie:=range f.cookies {req.AddCookie(cookie)}
  response,err:=f.client.Do(req);if err!=nil {cancel();t.Fatal(err)}
- if response.StatusCode!=200 || response.ProtoMajor!=1 || response.Header.Get("Content-Type")!="video/mp4" || response.Header.Get("X-Export-Trim-Applied")!=strconv.FormatBool(trim) {
+ if response.StatusCode!=200 || response.ProtoMajor!=1 || response.Header.Get("Content-Type")!="video/mp4" || response.Header.Get("X-Export-Trim-Applied")!=strconv.FormatBool(trim) || response.Header.Get("X-Recording-Duration-Policy")!="name-end" {
   body,_:=io.ReadAll(io.LimitReader(response.Body,4096));response.Body.Close();cancel();t.Fatalf("unexpected export: %d %v %s",response.StatusCode,response.Header,body)
  }
  t.Cleanup(func(){cancel();response.Body.Close()})

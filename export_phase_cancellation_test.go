@@ -2,7 +2,6 @@ package main
 
 import (
  "context"
- "crypto/sha256"
  "errors"
  "fmt"
  "os"
@@ -73,13 +72,14 @@ func awaitExportPhase(t *testing.T,marker,real string) int {
 }
 
 func TestAuthenticatedExportPhaseCancellationAndFullServerShutdown(t *testing.T) {
- for _,phase:=range []string{"duration","profile","render"} {for _,shutdown:=range []bool{false,true} {t.Run(fmt.Sprintf("%s/shutdown=%t",phase,shutdown),func(t *testing.T){
+ // Selection now trusts stamped ends; only profile inspection and rendering
+ // launch media children. Duration-probe cancellation stays tested separately.
+ for _,phase:=range []string{"profile","render"} {for _,shutdown:=range []bool{false,true} {t.Run(fmt.Sprintf("%s/shutdown=%t",phase,shutdown),func(t *testing.T){
   f:=newExportNetworkFixture(t,true);enlargeExportRenderFixture(t,f)
   marker,real:=installExportPhaseFixture(t,phase)
   result,cancelRequest:=startPreheaderTrimRequest(t,f);defer cancelRequest()
   pid:=awaitExportPhase(t,marker,real)
-  wantSlots:=1;if phase=="duration" {wantSlots=0}
-  if len(f.pool.slots)!=wantSlots {t.Fatal("unexpected export admission phase",phase,len(f.pool.slots))}
+  if len(f.pool.slots)!=1 {t.Fatal("unexpected export admission phase",phase,len(f.pool.slots))}
   if phase=="profile" && len(recordingDurations.slots)!=1 {t.Fatal("profile probe admission not occupied")}
   if phase=="render" {
    assertAnonymousTrimPresent(t,f.pool.tempDir)
@@ -108,11 +108,7 @@ func TestAuthenticatedExportPhaseCancellationAndFullServerShutdown(t *testing.T)
   select {case <-f.mediaReturned:case <-time.After(ffmpegStopGrace-time.Second):t.Fatal("phase cleanup did not complete before renderer force-kill grace")}
   if persisted.Load() {t.Fatal("persisted before tracked handler cleanup release")}
   if _,err:=os.Stat(fmt.Sprintf("/proc/%d",pid));!os.IsNotExist(err) {t.Fatal("media child not reaped",err)}
-  if phase!="duration" {f.assertResourcesClosed(t)} else {
-   f.filesMu.Lock();count:=len(f.opened);f.filesMu.Unlock()
-   raw,err:=os.ReadFile(f.source)
-   if count!=0 || len(f.pool.slots)!=0 || err!=nil || sha256.Sum256(raw)!=f.sourceHash {t.Fatal("metadata-phase cancellation changed source or reached pinning",err)}
-  }
+  f.assertResourcesClosed(t)
   if len(recordingDurations.slots)!=0 {t.Fatal("profile probe slot leaked")}
   f.releaseCleanup();awaitExportNetwork(t,f.handlerDone,"phase handler did not join")
   if shutdown {
