@@ -4,7 +4,6 @@ import (
  "context"
  "errors"
  "os"
- "os/exec"
  "path/filepath"
  "sync"
  "sync/atomic"
@@ -61,19 +60,16 @@ func TestDurationConcurrencyAndCancellation(t *testing.T) {
  deadline:=newDurationCache(1,1,func(ctx context.Context,_ *os.File)(time.Duration,error){<-ctx.Done();return 0,ctx.Err()});deadline.budget=20*time.Millisecond
  if _,_,err:=deadline.duration(context.Background(),filepath.Join(dir,"a"));!errors.Is(err,context.DeadlineExceeded) {t.Fatal(err)}
 }
-func TestSyntheticRecordingIntervalsAndCorruptMedia(t *testing.T) {
- requireFFmpeg(t);dir:=t.TempDir();path:=filepath.Join(dir,"20261109_235959_partial.mp4")
- ctx,cancel:=context.WithTimeout(context.Background(),15*time.Second);defer cancel()
- cmd:=exec.CommandContext(ctx,"ffmpeg","-nostdin","-v","error","-f","lavfi","-i","testsrc2=size=64x64:rate=10","-t","2","-c:v","mpeg4","-an","-y",path)
- if output,err:=cmd.CombinedOutput();err!=nil {t.Fatal(err,string(output))}
- if err:=os.Link(path,filepath.Join(dir,"20261110_000005_event.mp4"));err!=nil {t.Fatal(err)}
- cache:=newDurationCache(8,2,probeVideoDuration)
- start:=time.Date(2026,11,10,0,0,0,0,time.UTC)
- clips,err:=collectRecordingIntervals(ctx,[]timelineCamera{{"front","Front",dir}},timelineWindow{Start:start,End:start.Add(6*time.Second)},cache)
- if err!=nil || len(clips)!=2 {t.Fatal(clips,err)}
- if !clips[0].Start.Before(start) || clips[0].End.Sub(clips[0].Start)<1900*time.Millisecond || clips[0].End.Sub(clips[0].Start)>2100*time.Millisecond {t.Fatal("wrong probed partial interval",clips[0])}
+func TestRecordingIntervalsTrustNamesAndNeverProbe(t *testing.T) {
+ dir:=t.TempDir();start:=time.Date(2026,11,10,0,0,0,0,time.UTC)
+ scanFixture(t,dir,start.Add(-2*time.Second),start.Add(2*time.Second),"partial")
+ scanFixture(t,dir,start.Add(5*time.Second),start.Add(8*time.Second),"event")
+ scanFixture(t,dir,start.Add(10*time.Second),start.Add(12*time.Second),"after")
  intervalFixture(t,dir,"20261110_000001_corrupt.mp4")
- if _,err:=collectRecordingIntervals(ctx,[]timelineCamera{{"front","Front",dir}},timelineWindow{Start:start,End:start.Add(time.Minute)},cache);err==nil {t.Fatal("corrupt media silently accepted")}
+ cache:=newDurationCache(1,1,func(context.Context,*os.File)(time.Duration,error){t.Error("recording selection probed media");return 0,errRecordingMetadata})
+ clips,err:=collectRecordingIntervals(context.Background(),[]timelineCamera{{"front","Front",dir}},timelineWindow{Start:start,End:start.Add(6*time.Second)},cache)
+ if err!=nil || len(clips)!=2 {t.Fatal(clips,err)}
+ if !clips[0].Start.Equal(start.Add(-2*time.Second)) || !clips[0].End.Equal(start.Add(2*time.Second)) || !clips[1].End.Equal(start.Add(8*time.Second)) {t.Fatal("interval did not come from the stamped name",clips)}
 }
 func TestTimelineProbeShutdownIsJoined(t *testing.T) {
  entered:=make(chan struct{});returned:=make(chan struct{})

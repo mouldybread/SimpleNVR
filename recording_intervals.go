@@ -12,9 +12,7 @@ import (
  "os"
  "os/exec"
  "path/filepath"
- "sort"
  "strconv"
- "strings"
  "sync"
  "syscall"
  "time"
@@ -124,46 +122,12 @@ func probeVideoDuration(ctx context.Context,file *os.File) (time.Duration,error)
 
 type recordingInterval struct {CameraID,CameraName,Path string;Start,End time.Time;Size int64;identity os.FileInfo}
 func intervalsOverlap(start,end,windowStart,windowEnd time.Time) bool {return start.Before(windowEnd) && end.After(windowStart)}
-func collectRecordingIntervals(ctx context.Context,cameras []timelineCamera,window timelineWindow,cache *durationCache) ([]recordingInterval,error) {
- result:=make([]recordingInterval,0)
- scanned:=0
- for _,cam:=range cameras {
-  if err:=ctx.Err();err!=nil {return nil,err}
-  dir,err:=os.Open(cam.Dir)
-  if os.IsNotExist(err) {continue}
-  if err!=nil {return nil,errRecordingMetadata}
-  err=func() error {
-   defer dir.Close()
-   for {
-    if err:=ctx.Err();err!=nil {return err}
-    entries,readErr:=dir.ReadDir(256)
-    for _,entry:=range entries {
-     scanned++;if scanned>maxRecordingScanEntries {return errRecordingScanLimit}
-     if err:=ctx.Err();err!=nil {return err}
-     name:=entry.Name()
-     if !strings.HasSuffix(name,".mp4") || len(name)<15 {continue}
-     start,err:=time.ParseInLocation("20060102_150405",name[:15],time.UTC)
-     if err!=nil || !start.Before(window.End) {continue}
-     path:=filepath.Join(cam.Dir,name)
-     info,err:=os.Lstat(path)
-     if os.IsNotExist(err) {continue}
-     if err!=nil {return errRecordingMetadata}
-     if !info.Mode().IsRegular() {continue}
-     duration,info,err:=cache.duration(ctx,path)
-     if os.IsNotExist(err) {continue}
-     if err!=nil {return err}
-     end:=start.Add(duration)
-     if end.Year()>9999 || !end.After(start) {return errRecordingMetadata}
-     if intervalsOverlap(start,end,window.Start,window.End) {result=append(result,recordingInterval{cam.ID,cam.Name,path,start,end,info.Size(),info})}
-    }
-    if readErr==io.EOF {return nil}
-    if readErr!=nil {return errRecordingMetadata}
-   }
-  }()
-  if err!=nil {return nil,err}
- }
- sort.Slice(result,func(i,j int) bool {if result[i].Start.Equal(result[j].Start) {return result[i].Path<result[j].Path};return result[i].Start.Before(result[j].Start)})
- return result,nil
+
+// Exports select recordings by stamped name only (collectStampedIntervals): no
+// probing, and the duration cache argument is kept for existing callers but unused.
+func collectRecordingIntervals(ctx context.Context,cameras []timelineCamera,window timelineWindow,_ *durationCache) ([]recordingInterval,error) {
+ scan,err:=collectStampedIntervals(ctx,cameras,window);if err!=nil {return nil,err}
+ return scan.Intervals,nil
 }
 func writeRecordingIntervalError(w http.ResponseWriter,r *http.Request,err error) {
  if r.Context().Err()!=nil {return}

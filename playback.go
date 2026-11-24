@@ -4,30 +4,18 @@ import (
  "context"
  "errors"
  "net"
- "encoding/json"
  "fmt"
  "io"
  "log"
  "net/http"
  "os"
  "path/filepath"
- "sort"
  "time"
 )
 
-func listRecordingsHandler(w http.ResponseWriter,r *http.Request) {
- cameraID:=r.URL.Query().Get("camera_id")
- if cameraID=="" {http.Error(w,"Camera ID required",400);return}
- nvr.mu.RLock();cam,exists:=nvr.cameras[cameraID];nvr.mu.RUnlock()
- if !exists {http.Error(w,"Camera not found",404);return}
- files,err:=filepath.Glob(filepath.Join(cam.RecordDir,"*.mp4"))
- if err!=nil {http.Error(w,"Failed to list recordings",500);return}
- type Recording struct {Filename string `json:"filename"`;Path string `json:"path"`;Timestamp time.Time `json:"timestamp"`;Size int64 `json:"size"`}
- var recordings []Recording
- for _,file:=range files {info,err:=os.Stat(file);if err!=nil {continue};name:=filepath.Base(file);recordings=append(recordings,Recording{name,"/recordings/"+filepath.Join(filepath.Base(cam.RecordDir),name),info.ModTime(),info.Size()})}
- sort.Slice(recordings,func(i,j int) bool {return recordings[i].Timestamp.After(recordings[j].Timestamp)})
- w.Header().Set("Content-Type","application/json");json.NewEncoder(w).Encode(recordings)
-}
+// Retired: recordings are listed through /api/timeline/recordings, which scans the
+// stamped day folders by name. The route stays registered so callers get a clear answer.
+func listRecordingsHandler(w http.ResponseWriter,r *http.Request) {http.Error(w,"Gone: use /api/timeline/recordings",http.StatusGone)}
 
 func serveRecordingHandler(w http.ResponseWriter,r *http.Request) {
  path:=r.URL.Path[len("/recordings/"):];fullPath:=filepath.Join("/recordings",path)
@@ -67,7 +55,7 @@ func serveDownload(w http.ResponseWriter,r *http.Request,n *NVR,cache *durationC
  name:=fmt.Sprintf("%s_%s.mp4",sanitizeFilename(camera.Name),start.UTC().Format("20060102_150405"))
  headers:=func(){
   w.Header().Set("Content-Type","video/mp4");w.Header().Set("Content-Disposition",fmt.Sprintf("attachment; filename=%q",name))
-  w.Header().Set("X-Recording-Duration-Policy","probed-media");w.Header().Set("X-Export-Input-Policy","pinned-descriptors");plan.setHeaders(w)
+  w.Header().Set("X-Recording-Duration-Policy","name-end");w.Header().Set("X-Export-Input-Policy","pinned-descriptors");plan.setHeaders(w)
  }
  if plan.NeedsTrim {
   output,err:=renderTrimmedExport(r.Context(),pins,plan,pool.tempDir,maxTrimBytes)
