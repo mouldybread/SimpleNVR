@@ -20,8 +20,9 @@ func privateMediaComponent(value string) bool {
  return true
 }
 
-// Only a direct filename or one UTC day plus filename is allowed. Arbitrary
-// subdirectories, including buffer/temp, are never exposed by this route.
+// Only a direct filename or one UTC start day plus stamped filename is allowed.
+// Day folders must match the filename's UTC start date. Arbitrary subdirectories,
+// including buffer/temp, are never exposed by this route.
 func privateMediaParts(parts []string) bool {
  if len(parts)!=1 && len(parts)!=2 {return false}
  for _,part:=range parts {if !privateMediaComponent(part) {return false}}
@@ -29,6 +30,8 @@ func privateMediaParts(parts []string) bool {
  if len(parts)==2 {
   if len(parts[0])!=8 {return false}
   if _,err:=time.Parse(stampDayLayout,parts[0]);err!=nil {return false}
+  stamp,err:=parseStampedName(parts[1])
+  if err!=nil || !stamp.inDay(parts[0]) {return false}
  }
  return true
 }
