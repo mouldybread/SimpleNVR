@@ -15,10 +15,10 @@ from urllib.parse import urlencode
 from runtime_export_writer_observer import THREAD_PROBE, attach_thread_observations, writer_pressure_key
 
 CAMERA = "id_export"
-SOURCE = "/recordings/id_export/20261110_130000_fixture.mp4"
+SOURCE = "/recordings/id_export/20261110/20261110_130000_E20261110_130012_fixture.mp4"
 MARKER = "Shutdown complete; recording intent persisted"
 BODY_CAP = 48 << 20
-EXPECTED_FILES = ["id_export/20261110_130000_fixture.mp4",
+EXPECTED_FILES = ["id_export/20261110/20261110_130000_E20261110_130012_fixture.mp4",
                   "id_export/temp/retained-evidence/event.mp4",
                   "id_export/temp/retained-evidence/recovery.json",
                   "id_export/buffer/retained-unreported.mp4"]
@@ -45,7 +45,7 @@ readlink /proc/1/fd/0 >/dev/null
 for f in /proc/1/fd/*; do
   t=$(readlink "$f") || continue
   case "$t" in
-    /recordings/id_export/20261110_130000_fixture.mp4|/tmp/simplenvr-export-*|/tmp/simplenvr-trim-*|pipe:*|socket:*)
+    /recordings/id_export/20261110/20261110_130000_E20261110_130012_fixture.mp4|/tmp/simplenvr-export-*|/tmp/simplenvr-trim-*|pipe:*|socket:*)
       size=0
       case "$t" in /tmp/simplenvr-trim-*) size=$(stat -L -c %s "$f");; esac
       printf 'F\t%s\t%s\t%s\n' "${f##*/}" "$t" "$size";;
@@ -59,7 +59,7 @@ for p in /proc/[0-9]*; do
   printf 'P\t%s\t%s\n' "${p##*/}" "${exe##*/}"
   test "$exe" = /usr/bin/ffmpeg || continue
   src=$(readlink "$p/fd/4") || continue
-  test "$src" = /recordings/id_export/20261110_130000_fixture.mp4 || continue
+  test "$src" = /recordings/id_export/20261110/20261110_130000_E20261110_130012_fixture.mp4 || continue
   pipe=$(readlink "$p/fd/1") || continue
   wait=$(cat "$p/wchan") || continue
   counts=$(awk '$1=="rchar:" {r=$2} $1=="wchar:" {w=$2} END {print r " " w}' "$p/io") || continue
