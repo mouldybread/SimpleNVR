@@ -1,7 +1,6 @@
 package main
 
 import (
- "context"
  "encoding/json"
  "net/http/httptest"
  "net/url"
@@ -39,20 +38,29 @@ func TestLegacyTimelineDateCompatibility(t *testing.T) {
  window,err=parseTimelineWindow(nil,time.Date(2026,11,10,20,0,0,0,time.UTC))
  if err!=nil || window.Start.Format(time.RFC3339)!="2026-11-10T16:00:00Z" {t.Fatal(window,err)}
 }
-func TestTimelineWindowHandlerBoundariesAndRegularFiles(t *testing.T) {
- dir:=t.TempDir()
- for _,name:=range []string{"20261110_055958_ends_at_start.mp4","20261110_055959_overlap.mp4","20261110_060000_start.mp4","20261111_055959_inside.mp4","20261111_060000_end.mp4","20261110_070000_active.mp4.tmp"} {if err:=os.WriteFile(filepath.Join(dir,name),[]byte("fixture"),0600);err!=nil {t.Fatal(err)}}
- if err:=os.Symlink(filepath.Join(dir,"20261110_060000_start.mp4"),filepath.Join(dir,"20261110_080000_link.mp4"));err!=nil {t.Fatal(err)}
- n:=&NVR{cameras:map[string]*Camera{"front":{ID:"front",Name:"Front",RecordDir:dir}}}
- cache:=newDurationCache(10,1,func(context.Context,*os.File)(time.Duration,error){if !n.mu.TryLock() {t.Error("probe holds NVR lock")} else {n.mu.Unlock()};return 2*time.Second,nil})
- query:=timelineQuery("2026-11-10T00:00:00-06:00","2026-11-11T00:00:00-06:00")
- response:=httptest.NewRecorder();serveTimelineWithDurations(response,httptest.NewRequest("GET","/api/timeline/recordings?"+query.Encode(),nil),n,cache)
- if response.Code!=200 || response.Header().Get("X-Timeline-Duration-Policy")!="probed-media" {t.Fatal(response.Code,response.Body.String())}
- var segments []TimelineSegment;if err:=json.Unmarshal(response.Body.Bytes(),&segments);err!=nil {t.Fatal(err)}
- if len(segments)!=3 || segments[0].StartTime.Format(time.RFC3339)!="2026-11-10T05:59:59Z" || segments[0].EndTime.Sub(segments[0].StartTime)!=2*time.Second {t.Fatalf("wrong overlap selection: %+v",segments)}
- empty:=httptest.NewRecorder();serveTimelineWithDurations(empty,httptest.NewRequest("GET","/api/timeline/recordings?"+query.Encode(),nil),&NVR{cameras:map[string]*Camera{}},cache)
- if empty.Body.String()!="[]\n" {t.Fatal(empty.Body.String())}
- failed:=httptest.NewRecorder();bad:=newDurationCache(1,1,func(context.Context,*os.File)(time.Duration,error){return 0,errRecordingMetadata})
- serveTimelineWithDurations(failed,httptest.NewRequest("GET","/api/timeline/recordings?"+query.Encode(),nil),n,bad)
- if failed.Code!=503 || failed.Header().Get("X-Recording-Metadata-Status")!="unavailable" {t.Fatal("probe failure returned apparent coverage")}
+func TestTimelineWindowHandlerStampedNames(t *testing.T) {
+ base:=t.TempDir();front,side:=filepath.Join(base,"front"),filepath.Join(base,"side")
+ n:=&NVR{cameras:map[string]*Camera{"front":{ID:"front",Name:"Front",RecordDir:front},"side":{ID:"side",Name:"Side",RecordDir:side}}}
+ scanFixture(t,front,scanTime("20261110","055959"),scanTime("20261110","060001"),"continuous")
+ scanFixture(t,front,scanTime("20261110","050000"),scanTime("20261110","060000"),"continuous")
+ scanFixture(t,side,scanTime("20261110","070000"),scanTime("20261110","071000"),"event")
+ if err:=os.WriteFile(filepath.Join(front,"20261110","20261110_080000_old.mp4"),[]byte("x"),0600);err!=nil {t.Fatal(err)}
+ query:=timelineQuery("2026-11-10T00:00:00-06:00","2026-11-11T00:00:00-06:00").Encode()
+ get:=func(n *NVR,extra string) *httptest.ResponseRecorder {
+  response:=httptest.NewRecorder();serveTimelineWithDurations(response,httptest.NewRequest("GET","/api/timeline/recordings?"+query+extra,nil),n,nil);return response
+ }
+ decode:=func(response *httptest.ResponseRecorder) []TimelineSegment {
+  var segments []TimelineSegment;if err:=json.Unmarshal(response.Body.Bytes(),&segments);err!=nil {t.Fatal(err,response.Body.String())};return segments
+ }
+ all:=get(n,"")
+ if all.Code!=200 || all.Header().Get("X-Timeline-Duration-Policy")!="name-end" || all.Header().Get("X-Timeline-Unparseable-Count")!="1" {t.Fatal(all.Code,all.Header(),all.Body.String())}
+ segments:=decode(all)
+ if len(segments)!=2 || segments[0].CameraID!="front" || segments[0].StartTime.Format(time.RFC3339)!="2026-11-10T05:59:59Z" || segments[0].EndTime.Sub(segments[0].StartTime)!=2*time.Second || segments[0].Size!=7 {t.Fatalf("wrong segments: %+v",segments)}
+ if segments[0].FilePath!="/recordings/front/20261110/20261110_055959_E20261110_060001_continuous.mp4" {t.Fatal(segments[0].FilePath)}
+ only:=decode(get(n,"&camera_id=side"))
+ if len(only)!=1 || only[0].CameraID!="side" {t.Fatalf("camera filter failed: %+v",only)}
+ if len(decode(get(n,"&camera_id=front&camera_id=side&camera_id=front")))!=2 {t.Fatal("repeated camera_id failed")}
+ if code:=get(n,"&camera_id=nope").Code;code!=404 {t.Fatal(code)}
+ if code:=get(n,"&camera_id=").Code;code!=400 {t.Fatal(code)}
+ if empty:=get(&NVR{cameras:map[string]*Camera{}},"");empty.Body.String()!="[]\n" {t.Fatal(empty.Body.String())}
 }
