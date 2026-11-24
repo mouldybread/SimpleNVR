@@ -88,7 +88,7 @@ assert stat.S_IMODE(os.stat(p).st_mode)==0o600
 with open(p) as f: state=json.load(f)
 assert set(state['cameras'])=={'id_continuous','id_event'}
 assert all(cam['is_recording'] for cam in state['cameras'].values())
-outputs=glob.glob(os.path.join(root,'id_continuous','*_partial.mp4'))
+outputs=glob.glob(os.path.join(root,'id_continuous','*','*_partial.mp4'))
 assert len(outputs)>=int(sys.argv[2]) and any(os.path.getsize(p)>0 for p in outputs), 'no new retained partial output'
 buffer=os.path.join(root,'id_event','buffer')
 assert os.path.isdir(buffer), 'stopped buffer evidence directory lost'
