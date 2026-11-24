@@ -54,7 +54,7 @@ func TestEventPublisherRefusesUnsafeDayDestinationsAndPreservesCandidate(t *test
   }
   err:=bm.publishEventRecording(context.Background(),bm.ctx,job,temporary,final,false)
   if err==nil || job.recoveryBorrow!=nil {t.Fatal("unsafe publication accepted or borrow leaked",err)}
-  if kind=="collision" && !os.IsExist(err) {t.Fatal("collision error lost",err)}
+  if kind=="collision" && !errors.Is(err,os.ErrExist) {t.Fatal("collision error lost",err)}
   assertPublicationBytes(t,temporary,"candidate")
   if kind=="collision" {assertPublicationBytes(t,final,"existing")}
   entries,err:=os.ReadDir(outside);if err!=nil || len(entries)!=0 {t.Fatal("outside directory changed",err)}

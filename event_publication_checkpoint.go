@@ -40,7 +40,14 @@ func (bm *BufferManager) publishEventRecordingWith(ctx,captureCtx context.Contex
  job.keepStaging=true
  lease,err:=recordingMediaOwnership.acquire(ctx);if err!=nil {return err}
  transferred:=false
- defer func(){if !transferred {resultErr=errors.Join(resultErr,job.closePublishedOutput());job.recoveryBorrow=nil;lease.release()}}()
+ defer func(){
+  if !transferred {
+   // Join only a real close failure so the publisher's error keeps its identity.
+   if closeErr:=job.closePublishedOutput();closeErr!=nil {resultErr=errors.Join(resultErr,closeErr)}
+   job.recoveryBorrow=nil
+   lease.release()
+  }
+ }()
  if job.inventory!=nil {
   if job.inventory.path!=job.dir {return errStagingInventory}
   if err:=job.inventory.check(ctx,lease);err!=nil {return err}
