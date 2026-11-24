@@ -69,7 +69,7 @@ func TestStampedScanLargeRetentionNarrowWindow(t *testing.T) {
  physical+=4
  if physical<=maxStampedCandidates || physical<=maxStampedFolderEntries {t.Fatal("fixture is not larger than the scan bounds",physical)}
  scan,stats:=stampedObserve(t,scanCam(cam),window)
- want:=stampedScanStats{DayLookups:2,DaysOpened:2,EntriesRead:1404,MetadataCalls:4}
+ want:=stampedScanStats{DayLookups:2,DaysOpened:2,EntriesRead:1404,RelevantCandidates:4,MetadataCalls:4}
  if len(scan.Intervals)!=4 || scan.Unparseable!=0 || stats!=want || scan.Intervals[0].Path!=cross {t.Fatal(len(scan.Intervals),scan.Unparseable,stats)}
 
  n:=&NVR{cameras:map[string]*Camera{"front":{ID:"front",Name:"Front",RecordDir:cam}}}
@@ -98,7 +98,7 @@ func TestStampedScan34CamerasIgnoresOlderRetention(t *testing.T) {
   stampedPutFile(t,stampedDayDir(t,dir,base.Add(-time.Hour)),base.Add(-time.Hour),base.Add(7*time.Hour),"cross",true)
  }
  first,firstStats:=stampedObserve(t,cams,window)
- want:=stampedScanStats{DayLookups:68,DaysOpened:68,EntriesRead:102,MetadataCalls:102}
+ want:=stampedScanStats{DayLookups:68,DaysOpened:68,EntriesRead:102,RelevantCandidates:102,MetadataCalls:102}
  if len(first.Intervals)!=102 || firstStats!=want {t.Fatal(len(first.Intervals),firstStats)}
  perCamera:=map[string]int{}
  for _,clip:=range first.Intervals {perCamera[clip.CameraID]++}
@@ -142,13 +142,13 @@ func TestStampedScanCandidateLimitIsCallWide(t *testing.T) {
   stampedPutFile(t,noise,late,late.Add(30*time.Second),"late",false)
  }
  scan,stats:=stampedObserve(t,cams,window)
- want:=stampedScanStats{DayLookups:8,DaysOpened:4,EntriesRead:4*each+1500,MetadataCalls:maxStampedCandidates}
+ want:=stampedScanStats{DayLookups:8,DaysOpened:4,EntriesRead:4*each+1500,RelevantCandidates:maxStampedCandidates,MetadataCalls:maxStampedCandidates}
  if len(scan.Intervals)!=maxStampedCandidates || scan.Unparseable!=500 || stats!=want {t.Fatal(len(scan.Intervals),scan.Unparseable,stats)}
 
  extra:=window.Start.Add(each*time.Second)
  stampedPutFile(t,stampedDayDir(t,cams[cameras-1].Dir,base),extra,extra.Add(time.Minute),"c",true)
  failed,failedStats,err:=collectStampedIntervalsObserved(context.Background(),cams,window,nil)
- if !errors.Is(err,errRecordingScanLimit) || len(failed.Intervals)!=0 || failed.Unparseable!=0 || failedStats.MetadataCalls!=maxStampedCandidates {t.Fatal(err,len(failed.Intervals),failedStats)}
+ if !errors.Is(err,errRecordingScanLimit) || len(failed.Intervals)!=0 || failed.Unparseable!=0 || failedStats.RelevantCandidates!=maxStampedCandidates+1 || failedStats.MetadataCalls!=maxStampedCandidates {t.Fatal(err,len(failed.Intervals),failedStats)}
 }
 
 // The physical bound is per opened folder, not per call: two folders of exactly
@@ -167,7 +167,7 @@ func TestStampedScanFolderBoundIsPerFolder(t *testing.T) {
  if len(scan.Intervals)!=0 || scan.Unparseable!=2*maxStampedFolderEntries || stats!=want {t.Fatal(len(scan.Intervals),scan.Unparseable,stats)}
  if err:=os.WriteFile(filepath.Join(cam,"20261110","99999.mp4"),nil,0600);err!=nil {t.Fatal(err)}
  failed,failedStats,err:=collectStampedIntervalsObserved(context.Background(),scanCam(cam),window,nil)
- if !errors.Is(err,errRecordingScanLimit) || failed.Unparseable!=0 || failedStats.EntriesRead!=2*maxStampedFolderEntries+1 {t.Fatal(err,failed.Unparseable,failedStats)}
+ if !errors.Is(err,errRecordingScanLimit) || failed.Unparseable!=0 || failedStats.EntriesRead!=2*maxStampedFolderEntries+1 || failedStats.RelevantCandidates!=0 || failedStats.MetadataCalls!=0 {t.Fatal(err,failed.Unparseable,failedStats)}
 }
 
 type stampedBoundaryFixture struct {label string;start,end time.Time;want bool}
@@ -182,7 +182,7 @@ func stampedRunBoundary(t *testing.T,window timelineWindow,fixtures []stampedBou
  scan,stats:=stampedObserve(t,scanCam(cam),window)
  got:=map[string]bool{}
  for _,path:=range stampedPaths(scan) {got[path]=true}
- if len(got)!=len(want) || len(scan.Intervals)!=len(want) || stats.MetadataCalls!=len(want) {t.Fatal("wrong selection",stampedPaths(scan),stats)}
+ if len(got)!=len(want) || len(scan.Intervals)!=len(want) || stats.RelevantCandidates!=len(want) || stats.MetadataCalls!=len(want) {t.Fatal("wrong selection",stampedPaths(scan),stats)}
  for _,path:=range want {if !got[path] {t.Fatal("missing",path)}}
  return scan
 }
@@ -233,7 +233,7 @@ func TestStampedScanMidnightWindowAndDayLookups(t *testing.T) {
  stampedPutFile(t,stampedDayDir(t,cam,next),next,next.Add(time.Minute),"next_day",true)
  stampedPutFile(t,stampedDayDir(t,cam,base),base.Add(-15*time.Minute),base.Add(15*time.Minute),"misfiled",true)
  scan,stats:=stampedObserve(t,scanCam(cam),window)
- want:=stampedScanStats{DayLookups:2,DaysOpened:2,EntriesRead:2,MetadataCalls:1}
+ want:=stampedScanStats{DayLookups:2,DaysOpened:2,EntriesRead:2,RelevantCandidates:1,MetadataCalls:1}
  if len(scan.Intervals)!=1 || scan.Intervals[0].Path!=cross || scan.Unparseable!=1 || stats!=want {t.Fatal(stampedPaths(scan),scan.Unparseable,stats)}
 }
 

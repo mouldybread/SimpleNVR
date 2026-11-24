@@ -24,10 +24,11 @@ const (
 // DayLookups counts day directories requested, whether or not they exist.
 // EntriesRead counts all names returned by Readdirnames, including batch read-ahead
 // on early failure. It is not the number of names processed before failure.
-// MetadataCalls counts candidate inspections started; only valid overlapping
-// names are inspected. On success len(Intervals) is the accepted candidate count;
-// on failure the result is discarded, while these counters remain observable.
-type stampedScanStats struct {DayLookups,DaysOpened,EntriesRead,MetadataCalls int}
+// RelevantCandidates counts valid, correct-day, overlapping names identified before
+// the candidate-limit check, including candidate 20,001 refused without inspection.
+// MetadataCalls counts candidate inspections actually started. On failure the scan
+// result is discarded, while these counters remain observable.
+type stampedScanStats struct {DayLookups,DaysOpened,EntriesRead,RelevantCandidates,MetadataCalls int}
 
 // stampedInspector inspects one named entry of a held day directory. Production
 // uses stampedCandidateInfo; tests may wrap it to inject failures.
@@ -118,6 +119,7 @@ func scanStampedDay(ctx context.Context,cam timelineCamera,root *os.File,day str
    stamp,err:=parseStampedName(name)
    if err!=nil || !stamp.inDay(day) {scan.Unparseable++;continue}
    if !stampedInWindow(stamp,window.Start,window.End) {continue}
+   scan.Stats.RelevantCandidates++
    // Every previously accepted candidate has exactly one interval. Any rejected
    // candidate aborts the call, so this length is the call-wide candidate count.
    // Check before inspecting candidate 20,001, across all cameras and day folders.

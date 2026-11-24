@@ -28,7 +28,7 @@ func TestStampedScanCountsReadAheadOnInspectionFailure(t *testing.T) {
     return stampedCandidateInfo(dir,name)
    }
    scan,stats,err:=collectStampedIntervalsObserved(context.Background(),scanCam(cam),timelineWindow{Start:base,End:base.Add(time.Hour)},inspect)
-   want:=stampedScanStats{DayLookups:2,DaysOpened:1,EntriesRead:32,MetadataCalls:failAt}
+   want:=stampedScanStats{DayLookups:2,DaysOpened:1,EntriesRead:32,RelevantCandidates:failAt,MetadataCalls:failAt}
    if !errors.Is(err,errRecordingMetadata) || scan.Intervals!=nil || scan.Unparseable!=0 || stats!=want || calls!=failAt {t.Fatal(scan,stats,err,calls)}
   })
  }
@@ -59,7 +59,7 @@ func TestStampedScanDiscardsEarlierHealthyCamera(t *testing.T) {
   return stampedCandidateInfo(dir,name)
  }
  scan,stats,err:=collectStampedIntervalsObserved(context.Background(),cams,healthy.window,inspect)
- want:=stampedScanStats{DayLookups:4,DaysOpened:2,EntriesRead:5,MetadataCalls:5}
+ want:=stampedScanStats{DayLookups:4,DaysOpened:2,EntriesRead:5,RelevantCandidates:5,MetadataCalls:5}
  if !errors.Is(err,errRecordingMetadata) || scan.Intervals!=nil || scan.Unparseable!=0 || stats!=want || healthyCalls!=4 || badCalls!=1 {t.Fatal(scan,stats,err,healthyCalls,badCalls)}
  // The failing fixture itself is a real empty in-window file, not an injected error.
  info,statErr:=os.Stat(filepath.Join(badDay,stampedFileName(start,end,"empty")))
