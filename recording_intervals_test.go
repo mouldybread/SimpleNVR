@@ -27,7 +27,7 @@ func TestRecordingIntervalsTrustNamesAndNeverProbe(t *testing.T) {
  intervalFixture(t,dir,"20261110_000001_corrupt.mp4")
  // Selection succeeds on synthetic non-media bytes with no media tools in PATH.
  t.Setenv("PATH",t.TempDir())
- clips,err:=collectRecordingIntervals(context.Background(),[]timelineCamera{{"front","Front",dir}},timelineWindow{Start:start,End:start.Add(6*time.Second)},nil)
+ clips,err:=collectRecordingIntervals(context.Background(),[]timelineCamera{{"front","Front",dir}},timelineWindow{Start:start,End:start.Add(6*time.Second)})
  if err!=nil || len(clips)!=2 {t.Fatal(clips,err)}
  if !clips[0].Start.Equal(start.Add(-2*time.Second)) || !clips[0].End.Equal(start.Add(2*time.Second)) || !clips[1].End.Equal(start.Add(8*time.Second)) {t.Fatal("interval did not come from the stamped name",clips)}
 }

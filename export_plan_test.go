@@ -61,7 +61,7 @@ func TestExportPlanRejectsBeforePinningOrVideoHeaders(t *testing.T) {
   pool:=newExportInputPool(1,2);opened:=false
   pool.open=func(string)(*os.File,error){opened=true;return nil,os.ErrNotExist}
   end:="2026-11-10T00:00:03Z";if kind=="gap" {end="2026-11-10T00:00:04Z"}
-  response:=httptest.NewRecorder();serveDownload(response,httptest.NewRequest("GET","/api/download?camera_id=front&start_time=2026-11-10T00:00:00Z&end_time="+end,nil),n,nil,pool)
+  response:=httptest.NewRecorder();serveDownload(response,httptest.NewRequest("GET","/api/download?camera_id=front&start_time=2026-11-10T00:00:00Z&end_time="+end,nil),n,pool)
   if response.Code!=409 || response.Header().Get("X-Export-Plan-Status")!=kind || opened || strings.HasPrefix(response.Header().Get("Content-Type"),"video/") || response.Header().Get("Content-Disposition")!="" {t.Fatal("invalid plan reached streaming",response.Code,response.Header())}
  })}
 }
@@ -73,7 +73,7 @@ func TestWholeClipExportDeclaresRangePolicy(t *testing.T) {
  pool:=newExportInputPool(1,2);pool.tempDir=t.TempDir()
  ctx,cancel:=context.WithTimeout(context.Background(),15*time.Second);defer cancel()
  request:=httptest.NewRequest("GET","/api/download?camera_id=front&start_time=2026-11-10T00:00:00Z&end_time=2026-11-10T00:00:04Z",nil).WithContext(ctx)
- response:=httptest.NewRecorder();serveDownload(response,request,n,nil,pool)
+ response:=httptest.NewRecorder();serveDownload(response,request,n,pool)
  if response.Code!=200 || response.Header().Get("X-Export-Range-Policy")!="whole-clips-untrimmed" || response.Header().Get("X-Export-Trim-Required")!="false" || response.Header().Get("X-Export-Trim-Applied")!="false" || response.Header().Get("X-Export-Media-End")!="2026-11-10T00:00:04Z" || response.Header().Get("X-Recording-Duration-Policy")!="name-end" {t.Fatal("incorrect whole-clip policy",response.Code,response.Header())}
  output:=filepath.Join(dir,"output.mp4");if err:=os.WriteFile(output,response.Body.Bytes(),0600);err!=nil {t.Fatal(err)}
  file,err:=os.Open(output);if err!=nil {t.Fatal(err)};defer file.Close()

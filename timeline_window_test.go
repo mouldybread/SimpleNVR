@@ -47,7 +47,7 @@ func TestTimelineWindowHandlerStampedNames(t *testing.T) {
  if err:=os.WriteFile(filepath.Join(front,"20261110","20261110_080000_old.mp4"),[]byte("x"),0600);err!=nil {t.Fatal(err)}
  query:=timelineQuery("2026-11-10T00:00:00-06:00","2026-11-11T00:00:00-06:00").Encode()
  get:=func(n *NVR,extra string) *httptest.ResponseRecorder {
-  response:=httptest.NewRecorder();serveTimelineWithDurations(response,httptest.NewRequest("GET","/api/timeline/recordings?"+query+extra,nil),n,nil);return response
+  response:=httptest.NewRecorder();serveTimelineRecordings(response,httptest.NewRequest("GET","/api/timeline/recordings?"+query+extra,nil),n);return response
  }
  decode:=func(response *httptest.ResponseRecorder) []TimelineSegment {
   var segments []TimelineSegment;if err:=json.Unmarshal(response.Body.Bytes(),&segments);err!=nil {t.Fatal(err,response.Body.String())};return segments

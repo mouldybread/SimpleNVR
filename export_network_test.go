@@ -79,13 +79,12 @@ func newExportNetworkFixture(t *testing.T,holdCleanup bool) *exportNetworkFixtur
   file,err:=openExportInput(path);if err==nil {f.filesMu.Lock();f.opened=append(f.opened,file);f.filesMu.Unlock()};return file,err
  }
  if !holdCleanup {f.releaseCleanup()}
- cache:=newDurationCache(2,2,func(context.Context,*os.File)(time.Duration,error){t.Error("export interval selection probed duration");return 0,errRecordingMetadata})
  auth,_:=authFixture(t)
  route:=http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
   if r.URL.Path!="/api/download" {http.NotFound(w,r);return}
   defer close(f.handlerDone)
   if r.Header.Get("Cookie")!="" || r.Header.Get("Authorization")!="" {t.Error("auth credentials reached media handler")}
-  serveDownload(w,r,f.n,cache,f.pool)
+  serveDownload(w,r,f.n,f.pool)
   close(f.mediaReturned)
   <-f.cleanupRelease
  })

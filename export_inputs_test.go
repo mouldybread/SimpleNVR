@@ -74,7 +74,7 @@ func TestIntervalSelectionCarriesExportIdentity(t *testing.T) {
  dir:=t.TempDir();start:=time.Date(2026,11,10,0,0,0,0,time.UTC)
  path:=scanFixture(t,dir,start,start.Add(time.Second),"clip")
  info,err:=os.Stat(path);if err!=nil {t.Fatal(err)}
- clips,err:=collectRecordingIntervals(context.Background(),[]timelineCamera{{"front","Front",dir}},timelineWindow{Start:start,End:start.Add(time.Minute)},nil)
+ clips,err:=collectRecordingIntervals(context.Background(),[]timelineCamera{{"front","Front",dir}},timelineWindow{Start:start,End:start.Add(time.Minute)})
  if err!=nil || len(clips)!=1 || !sameMediaFile(info,clips[0].identity) {t.Fatal("selected identity missing",err)}
  replacement:=filepath.Join(filepath.Dir(path),"replacement")
  if err:=os.WriteFile(replacement,[]byte("fixture"),0600);err!=nil {t.Fatal(err)}
@@ -132,7 +132,7 @@ func TestExportPinFailureDoesNotStartVideoResponse(t *testing.T) {
  n:=&NVR{cameras:map[string]*Camera{"front":{ID:"front",Name:"Front",RecordDir:dir}}}
  pool:=newExportInputPool(1,1);pool.open=func(string)(*os.File,error){return nil,os.ErrNotExist}
  query:="/api/download?camera_id=front&start_time=2026-11-10T00:00:00Z&end_time=2026-11-10T00:00:01Z"
- response:=httptest.NewRecorder();serveDownload(response,httptest.NewRequest("GET",query,nil),n,nil,pool)
+ response:=httptest.NewRecorder();serveDownload(response,httptest.NewRequest("GET",query,nil),n,pool)
  if response.Code!=503 || strings.HasPrefix(response.Header().Get("Content-Type"),"video/") || response.Header().Get("Content-Disposition")!="" {t.Fatal("pin failure started an export response",response.Code,response.Header())}
  if len(pool.slots)!=0 {t.Fatal("slot leaked")}
 }

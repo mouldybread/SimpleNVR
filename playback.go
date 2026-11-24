@@ -29,8 +29,8 @@ func serveRecordingHandler(w http.ResponseWriter,r *http.Request) {
 
 func deleteAllRecordingsHandler(w http.ResponseWriter,r *http.Request) {serveManagedPublishedDeletion(w,r,nvr,deleteAllPublishedLeased)}
 
-func handleDownload(w http.ResponseWriter,r *http.Request) {serveDownload(w,r,nvr,recordingDurations,exportInputPins)}
-func serveDownload(w http.ResponseWriter,r *http.Request,n *NVR,cache *durationCache,pool *exportInputPool) {
+func handleDownload(w http.ResponseWriter,r *http.Request) {serveDownload(w,r,nvr,exportInputPins)}
+func serveDownload(w http.ResponseWriter,r *http.Request,n *NVR,pool *exportInputPool) {
  if r.Context().Err()!=nil {return}
  query:=r.URL.Query()
  if len(query["camera_id"])!=1 || len(query["start_time"])!=1 || len(query["end_time"])!=1 || query.Get("camera_id")=="" {http.Error(w,"One camera_id, start_time and end_time are required",400);return}
@@ -44,7 +44,7 @@ func serveDownload(w http.ResponseWriter,r *http.Request,n *NVR,cache *durationC
  if !exists {http.Error(w,"Camera not found",404);return}
  ctx,cancel:=context.WithTimeout(r.Context(),recordingMetadataBudget);defer cancel()
  window:=timelineWindow{Start:start.UTC(),End:end.UTC()}
- clips,err:=collectRecordingIntervals(ctx,[]timelineCamera{camera},window,cache)
+ clips,err:=collectRecordingIntervals(ctx,[]timelineCamera{camera},window)
  if err!=nil {writeRecordingIntervalError(w,r,err);return}
  if len(clips)==0 {http.Error(w,"No recordings found in time range",404);return}
  plan,err:=buildExportPlan(clips,window)

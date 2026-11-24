@@ -44,12 +44,10 @@ type TimelineSegment struct {
 
 type timelineCamera struct {ID,Name,Dir string}
 func timelineRecordingsHandler(w http.ResponseWriter,r *http.Request) {serveTimelineRecordings(w,r,nvr)}
-func serveTimelineRecordings(w http.ResponseWriter,r *http.Request,n *NVR) {serveTimelineWithDurations(w,r,n,recordingDurations)}
 
-// Intervals come from the stamped file names only; the duration cache is unused here
-// and kept in the signature for callers that still pass it. Optional repeated
-// camera_id limits the result; an unknown id is a 404, an empty one a 400.
-func serveTimelineWithDurations(w http.ResponseWriter,r *http.Request,n *NVR,_ *durationCache) {
+// Intervals come from stamped names only. Optional repeated camera_id limits
+// the result; an unknown id is a 404, an empty one a 400.
+func serveTimelineRecordings(w http.ResponseWriter,r *http.Request,n *NVR) {
  if r.Method!=http.MethodGet && r.Method!=http.MethodHead {w.Header().Set("Allow","GET, HEAD");http.Error(w,"Method not allowed",405);return}
  window,err:=parseTimelineWindow(r.URL.Query(),time.Now())
  if err!=nil {http.Error(w,err.Error(),400);return}
