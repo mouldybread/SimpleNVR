@@ -31,7 +31,12 @@ func enlargeExportRenderFixture(t *testing.T,f *exportNetworkFixture) {
  if result,err:=cmd.CombinedOutput();err!=nil {t.Fatalf("render cancellation fixture: %v %s",err,result)}
  info,err:=os.Stat(replacement)
  if err!=nil || info.Size()<512<<10 || info.Size()>32<<20 {t.Fatal("render fixture outside test bounds",err)}
- if err:=os.Rename(replacement,f.source);err!=nil {t.Fatal(err)}
+ cameraDir:=f.n.cameras["front"].RecordDir
+ day:=filepath.Join(cameraDir,"20261110");if err:=os.MkdirAll(day,0755);err!=nil {t.Fatal(err)}
+ final:=filepath.Join(day,"20261110_000000_E20261110_000008_fixture.mp4")
+ if err:=os.Rename(replacement,final);err!=nil {t.Fatal(err)}
+ if final!=f.source {if err:=os.Remove(f.source);err!=nil {t.Fatal(err)}}
+ f.source=final
  data,err:=os.ReadFile(f.source);if err!=nil {t.Fatal(err)};f.sourceHash=sha256.Sum256(data)
 }
 

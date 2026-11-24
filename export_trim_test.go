@@ -57,7 +57,8 @@ func TestDecodedTrimMatchesSourceFramesAcrossClips(t *testing.T) {
 }
 func TestTrimLimitsCancellationAndHandlerPolicy(t *testing.T) {
  dir:=t.TempDir();clips:=syntheticExportClips(t,dir)
- for index,name:=range []string{"20261110_000000_a.mp4","20261110_000002_b.mp4"} {if err:=os.Rename(clips[index].Path,filepath.Join(dir,name));err!=nil {t.Fatal(err)}}
+ day:=filepath.Join(dir,"20261110");if err:=os.MkdirAll(day,0755);err!=nil {t.Fatal(err)}
+ for index,name:=range []string{"20261110_000000_E20261110_000002_a.mp4","20261110_000002_E20261110_000004_b.mp4"} {if err:=os.Rename(clips[index].Path,filepath.Join(day,name));err!=nil {t.Fatal(err)}}
  base:=time.Date(2026,11,10,0,0,0,0,time.UTC);ctx,cancel:=context.WithTimeout(context.Background(),30*time.Second);defer cancel()
  cache:=newDurationCache(2,2,probeVideoDuration);camera:=timelineCamera{"front","Front",dir};window:=timelineWindow{Start:base.Add(500*time.Millisecond),End:base.Add(3500*time.Millisecond)}
  selected,err:=collectRecordingIntervals(ctx,[]timelineCamera{camera},window,cache);if err!=nil {t.Fatal(err)}
