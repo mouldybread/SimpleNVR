@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 from playwright.async_api import async_playwright, Error as PlaywrightError
 from browser_ci_diagnostics import BrowserNetworkEvidence, observe_login_post
 from prepared_export_protocol import create_ready, release
+from browser_playback_edges import FIRST, SECOND
 
 BASE = "2026-11-10T12:00:"
 CAMERA = "id_browser"
@@ -84,7 +85,7 @@ async def playback_snapshot(page):
 
 
 async def private_media_preflight(context, origin):
-    path = "/recordings/id_browser/20261110_120000_fixture.mp4"
+    path = FIRST
     response = await context.request.get(origin + path, headers={"Range": "bytes=0-11"})
     body = await response.body()
     result = {"status": response.status, "type": response.headers.get("content-type"), "content_range": response.headers.get("content-range"), "prefix_hex": body[:12].hex()}
@@ -175,7 +176,7 @@ async def exports(page, context, p, args, report):
     selection = {"camera_id": CAMERA, "start_time": BASE + "00Z", "end_time": BASE + "16Z", "mode": "copy"}
     anonymous = await p.request.new_context(ignore_https_errors=True)
     try:
-        for path in ("/api/exports/status?id=" + "a"*64, "/api/exports/download?id=" + "a"*64, "/recordings/id_browser/20261110_120000_fixture.mp4"):
+        for path in ("/api/exports/status?id=" + "a"*64, "/api/exports/download?id=" + "a"*64, FIRST):
             response = await anonymous.get(args.origin + path)
             assert response.status == 401
             assert response.headers.get("content-type", "").split(";")[0] != "video/mp4"
@@ -194,9 +195,9 @@ async def exports(page, context, p, args, report):
     saved.write_bytes(raw)
     assert abs(duration(await asyncio.to_thread(media_metadata, saved)) - 16) < 0.3
     sources = []
-    for stamp in ("120000", "120008"):
+    for stamp, source_path in (("120000", FIRST), ("120008", SECOND)):
         source = args.evidence / (stamp + "-source.mp4")
-        fetched = await request.get(args.origin + f"/recordings/id_browser/20261110_{stamp}_fixture.mp4")
+        fetched = await request.get(args.origin + source_path)
         assert fetched.status == 200
         source.write_bytes(await fetched.body())
         sources.extend(await asyncio.to_thread(packet_hashes, source))
