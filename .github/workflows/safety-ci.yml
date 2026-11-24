@@ -233,7 +233,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          "$RUNNER_TEMP/correspondence-resource.test" -test.v -test.run '^TestCorrResource' -test.timeout=420s 2>&1 | tee "$RUNNER_TEMP/correspondence-resources/tests.log"
+          GITHUB_SHA="$CHECKPOINT_SHA" "$RUNNER_TEMP/correspondence-resource.test" -test.v -test.run '^TestCorrResource' -test.timeout=420s 2>&1 | tee "$RUNNER_TEMP/correspondence-resources/tests.log"
           test -s "$SIMPLENVR_CORRESPONDENCE_REPORT"
           git diff --exit-code -- go.mod go.sum
       - name: Evidence assessment regression tests
