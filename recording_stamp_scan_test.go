@@ -41,6 +41,9 @@ func TestStampedScanWindowEdgesAndPriorDay(t *testing.T) {
  }
 }
 
+// Names that are not a valid stamped name for their folder are counted and never
+// returned. A valid in-window name that is not a regular file is a different case:
+// it fails the whole call (see the fail-closed tests).
 func TestStampedScanCountsButNeverReturnsUnparseableNames(t *testing.T) {
  cam:=t.TempDir()
  window:=timelineWindow{Start:scanTime("20261110","000000"),End:scanTime("20261111","000000")}
@@ -52,7 +55,6 @@ func TestStampedScanCountsButNeverReturnsUnparseableNames(t *testing.T) {
  other:=filepath.Join(cam,"20261109")
  if err:=os.MkdirAll(other,0755);err!=nil {t.Fatal(err)}
  if err:=os.WriteFile(filepath.Join(other,stampedFileName(scanTime("20261110","070000"),scanTime("20261110","071000"),"misplaced")),[]byte("x"),0600);err!=nil {t.Fatal(err)}
- if err:=os.Mkdir(filepath.Join(day,stampedFileName(scanTime("20261110","080000"),scanTime("20261110","081000"),"dir")),0755);err!=nil {t.Fatal(err)}
  scan,err:=collectStampedIntervals(context.Background(),scanCam(cam),window)
  if err!=nil || len(scan.Intervals)!=1 || scan.Unparseable!=3 {t.Fatal(scan,err)}
 }
@@ -64,12 +66,15 @@ func TestStampedScanDoesNotFollowSymlinkedDayOrFile(t *testing.T) {
  if err:=os.Symlink(filepath.Dir(target),filepath.Join(cam,"20261110"));err!=nil {t.Fatal(err)}
  scan,err:=collectStampedIntervals(context.Background(),scanCam(cam),window)
  if err!=nil || len(scan.Intervals)!=0 || scan.Unparseable!=0 {t.Fatal(scan,err)}
+ // A symlinked day directory is skipped, never followed. A symlink carrying a valid
+ // in-window stamped name is an in-window candidate that is not a regular file, so
+ // the whole call fails closed instead of silently returning partial coverage.
  cam2:=t.TempDir()
  real:=scanFixture(t,cam2,scanTime("20261110","020000"),scanTime("20261110","021000"),"real")
  link:=filepath.Join(cam2,"20261110",stampedFileName(scanTime("20261110","030000"),scanTime("20261110","031000"),"link"))
  if err:=os.Symlink(real,link);err!=nil {t.Fatal(err)}
  scan,err=collectStampedIntervals(context.Background(),scanCam(cam2),window)
- if err!=nil || len(scan.Intervals)!=1 || scan.Unparseable!=0 {t.Fatal(scan,err)}
+ if !errors.Is(err,errRecordingMetadata) || len(scan.Intervals)!=0 || scan.Unparseable!=0 {t.Fatal(scan,err)}
 }
 
 func TestStampedScanLimitsMissingDirAndCancellation(t *testing.T) {

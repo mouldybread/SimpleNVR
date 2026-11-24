@@ -19,29 +19,52 @@ const (
  maxStampedCandidates=20000
 )
 
+// stampedScanStats counts the work done by one call. It travels with the call's
+// accumulator and is never global, so concurrent scans cannot disturb each other.
+// DayLookups counts day directories requested, whether or not they exist.
+// EntriesRead counts names read from opened day directories, malformed ones too.
+// MetadataCalls counts candidate inspections started; only valid overlapping
+// names are inspected.
+type stampedScanStats struct {DayLookups,DaysOpened,EntriesRead,MetadataCalls int}
+
+// stampedInspector inspects one named entry of a held day directory. Production
+// uses stampedCandidateInfo; tests may wrap it to inject failures.
+type stampedInspector func(dir *os.File,name string) (os.FileInfo,error)
+
 // Unparseable counts .mp4 names in scanned day folders that are not a valid stamped
 // name for that folder. They are never probed and never returned as intervals.
-type stampedScan struct {Intervals []recordingInterval;Unparseable int}
+type stampedScan struct {Intervals []recordingInterval;Unparseable int;Stats stampedScanStats;inspect stampedInspector}
 
 // Name-only selection: no ffprobe or media reads. Only the UTC day folders that
 // can hold overlapping recordings are opened, with no-follow descriptors. Any
 // candidate inspection failure discards the entire result, not just that entry.
 func collectStampedIntervals(ctx context.Context,cameras []timelineCamera,window timelineWindow) (stampedScan,error) {
- if err:=ctx.Err();err!=nil {return stampedScan{},err}
- days,err:=stampedScanDays(window.Start,window.End);if err!=nil {return stampedScan{},err}
+ scan,_,err:=collectStampedIntervalsObserved(ctx,cameras,window,nil)
+ return scan,err
+}
+
+// collectStampedIntervalsObserved is collectStampedIntervals with an optional
+// inspector and the work counters returned even when the call fails. The scan
+// itself is empty on failure: counters are the only thing a failed call reports.
+func collectStampedIntervalsObserved(ctx context.Context,cameras []timelineCamera,window timelineWindow,inspect stampedInspector) (stampedScan,stampedScanStats,error) {
  var scan stampedScan
+ if inspect==nil {inspect=stampedCandidateInfo}
+ scan.inspect=inspect
+ if err:=ctx.Err();err!=nil {return stampedScan{},scan.Stats,err}
+ days,err:=stampedScanDays(window.Start,window.End);if err!=nil {return stampedScan{},scan.Stats,err}
  scan.Intervals=make([]recordingInterval,0)
  for _,cam:=range cameras {
-  if err:=ctx.Err();err!=nil {return stampedScan{},err}
-  if err:=scanStampedCamera(ctx,cam,days,window,&scan);err!=nil {return stampedScan{},err}
+  if err:=ctx.Err();err!=nil {return stampedScan{},scan.Stats,err}
+  if err:=scanStampedCamera(ctx,cam,days,window,&scan);err!=nil {return stampedScan{},scan.Stats,err}
  }
  sort.Slice(scan.Intervals,func(i,j int) bool {
   a,b:=scan.Intervals[i],scan.Intervals[j]
   if a.Start.Equal(b.Start) {return a.Path<b.Path}
   return a.Start.Before(b.Start)
  })
- if err:=ctx.Err();err!=nil {return stampedScan{},err}
- return scan,nil
+ if err:=ctx.Err();err!=nil {return stampedScan{},scan.Stats,err}
+ scan.inspect=nil
+ return scan,scan.Stats,nil
 }
 
 func scanStampedCamera(ctx context.Context,cam timelineCamera,days []string,window timelineWindow,scan *stampedScan) error {
@@ -71,17 +94,22 @@ func stampedCandidateInfo(dir *os.File,name string) (os.FileInfo,error) {
 }
 
 func scanStampedDay(ctx context.Context,cam timelineCamera,root *os.File,day string,window timelineWindow,scan *stampedScan) error {
+ inspect:=scan.inspect
+ if inspect==nil {inspect=stampedCandidateInfo}
+ scan.Stats.DayLookups++
  dir,err:=openCameraDeleteDirectory(int(root.Fd()),day)
  // Missing, symlinked or non-directory day entries are skipped, never followed.
  if errors.Is(err,os.ErrNotExist) || errors.Is(err,unix.ELOOP) || errors.Is(err,unix.ENOTDIR) {return nil}
  if err!=nil {return errRecordingMetadata}
  defer dir.Close()
+ scan.Stats.DaysOpened++
  seen:=0
  for {
   if err:=ctx.Err();err!=nil {return err}
   names,readErr:=dir.Readdirnames(256)
   for _,name:=range names {
-   seen++;if seen>maxStampedFolderEntries {return errRecordingScanLimit}
+   seen++;scan.Stats.EntriesRead++
+   if seen>maxStampedFolderEntries {return errRecordingScanLimit}
    if err:=ctx.Err();err!=nil {return err}
    if !strings.HasSuffix(name,".mp4") {continue}
    stamp,err:=parseStampedName(name)
@@ -91,7 +119,8 @@ func scanStampedDay(ctx context.Context,cam timelineCamera,root *os.File,day str
    // candidate aborts the call, so this length is the call-wide candidate count.
    // Check before inspecting candidate 20,001, across all cameras and day folders.
    if len(scan.Intervals)>=maxStampedCandidates {return errRecordingScanLimit}
-   info,err:=stampedCandidateInfo(dir,name)
+   scan.Stats.MetadataCalls++
+   info,err:=inspect(dir,name)
    if err!=nil {return err}
    if err:=ctx.Err();err!=nil {return err}
    path:=filepath.Join(cam.Dir,day,name)
