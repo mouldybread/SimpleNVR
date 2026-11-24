@@ -72,15 +72,15 @@ func awaitExportPhase(t *testing.T,marker,real string) int {
 }
 
 func TestAuthenticatedExportPhaseCancellationAndFullServerShutdown(t *testing.T) {
- // Selection now trusts stamped ends; only profile inspection and rendering
- // launch media children. Duration-probe cancellation stays tested separately.
+ // Selection trusts stamped ends. Profile inspection and rendering still
+ // launch real children; output-duration probe cancellation is tested below.
  for _,phase:=range []string{"profile","render"} {for _,shutdown:=range []bool{false,true} {t.Run(fmt.Sprintf("%s/shutdown=%t",phase,shutdown),func(t *testing.T){
   f:=newExportNetworkFixture(t,true);enlargeExportRenderFixture(t,f)
   marker,real:=installExportPhaseFixture(t,phase)
   result,cancelRequest:=startPreheaderTrimRequest(t,f);defer cancelRequest()
   pid:=awaitExportPhase(t,marker,real)
   if len(f.pool.slots)!=1 {t.Fatal("unexpected export admission phase",phase,len(f.pool.slots))}
-  if phase=="profile" && len(recordingDurations.slots)!=1 {t.Fatal("profile probe admission not occupied")}
+  if phase=="profile" && len(exportProbeSlots)!=1 {t.Fatal("profile probe admission not occupied")}
   if phase=="render" {
    assertAnonymousTrimPresent(t,f.pool.tempDir)
    awaitActiveRecorder(t,"renderer did not write anonymous output before cancellation",func()bool{
@@ -109,7 +109,7 @@ func TestAuthenticatedExportPhaseCancellationAndFullServerShutdown(t *testing.T)
   if persisted.Load() {t.Fatal("persisted before tracked handler cleanup release")}
   if _,err:=os.Stat(fmt.Sprintf("/proc/%d",pid));!os.IsNotExist(err) {t.Fatal("media child not reaped",err)}
   f.assertResourcesClosed(t)
-  if len(recordingDurations.slots)!=0 {t.Fatal("profile probe slot leaked")}
+  if len(exportProbeSlots)!=0 {t.Fatal("profile probe slot leaked")}
   f.releaseCleanup();awaitExportNetwork(t,f.handlerDone,"phase handler did not join")
   if shutdown {
    select {case err:=<-done:if err!=nil {t.Fatal(err)};case <-time.After(6*time.Second):t.Fatal("full HTTP phase shutdown did not join")}
@@ -126,19 +126,26 @@ func TestAuthenticatedExportPhaseCancellationAndFullServerShutdown(t *testing.T)
  })}}
 }
 
-func TestCanceledDurationProbeReleasesAdmissionSlot(t *testing.T) {
+func TestCanceledExportOutputDurationProbeReapsChild(t *testing.T) {
  f:=newExportNetworkFixture(t,false)
  marker,real:=installExportPhaseFixture(t,"duration")
- cache:=newDurationCache(1,1,probeVideoDuration)
+ file,err:=os.Open(f.source);if err!=nil {t.Fatal(err)};defer file.Close()
  ctx,cancel:=context.WithCancel(context.Background());defer cancel()
  done:=make(chan error,1)
- go func(){_,_,err:=cache.duration(ctx,f.source);done<-err}()
+ go func(){_,err:=probeVideoDuration(ctx,file);done<-err}()
  joined:=false
  defer func(){cancel();if !joined {select {case <-done:case <-time.After(7*time.Second):t.Error("duration cleanup did not join")}}}()
  pid:=awaitExportPhase(t,marker,real)
- if len(cache.slots)!=1 {t.Fatal("duration probe admission not occupied")}
  cancel()
  select {case err:=<-done:joined=true;if !errors.Is(err,context.Canceled) {t.Fatal(err)};case <-time.After(3*time.Second):t.Fatal("duration probe did not cancel")}
- if len(cache.slots)!=0 {t.Fatal("duration admission slot leaked")}
  if _,err:=os.Stat(fmt.Sprintf("/proc/%d",pid));!os.IsNotExist(err) {t.Fatal("duration child not reaped",err)}
+}
+
+func TestExportProbeAdmissionBoundAndCanceledWaiter(t *testing.T) {
+ if cap(exportProbeSlots)!=2 {t.Fatal("export probe concurrency bound changed")}
+ a,err:=acquireExportProbe(context.Background());if err!=nil {t.Fatal(err)};defer a()
+ b,err:=acquireExportProbe(context.Background());if err!=nil {t.Fatal(err)};defer b()
+ ctx,cancel:=context.WithTimeout(context.Background(),20*time.Millisecond);defer cancel()
+ if release,err:=acquireExportProbe(ctx);!errors.Is(err,context.DeadlineExceeded) {if release!=nil {release()};t.Fatal("full admission did not respect cancellation",err)}
+ if len(exportProbeSlots)!=2 {t.Fatal("canceled waiter changed admission occupancy")}
 }

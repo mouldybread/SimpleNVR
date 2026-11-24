@@ -52,7 +52,7 @@ func decodeTrimProfile(raw []byte) (trimProfile,error) {
 func inspectTrimProfile(parent context.Context,file *os.File) (trimProfile,error) {
  ctx,cancel:=context.WithTimeout(parent,5*time.Second);defer cancel()
  if err:=ctx.Err();err!=nil {return trimProfile{},err}
- select {case recordingDurations.slots<-struct{}{}:defer func(){<-recordingDurations.slots}();case <-ctx.Done():return trimProfile{},ctx.Err()}
+ release,err:=acquireExportProbe(ctx);if err!=nil {return trimProfile{},err};defer release()
  if err:=ctx.Err();err!=nil {return trimProfile{},err}
  cmd:=exec.CommandContext(ctx,"ffprobe","-v","error","-protocol_whitelist","file,pipe","-f","mov","-i","/proc/self/fd/3","-show_entries","stream=codec_type,width,height,pix_fmt,r_frame_rate,avg_frame_rate:stream_tags=rotate:stream_side_data=rotation","-of","json")
  cmd.ExtraFiles=[]*os.File{file};cmd.WaitDelay=2*time.Second
