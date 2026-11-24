@@ -21,8 +21,8 @@ func privateDayFixture(t *testing.T) (string,*NVR,string) {
  return root,n,"/recordings/a/20261110/"+privateDayFile
 }
 
-func TestPrivateDayMediaGetHeadAndRange(t *testing.T) {
- root,n,path:=privateDayFixture(t)
+func assertPrivateDayMediaGetHeadAndRange(t *testing.T,root string,n *NVR,path string) {
+ t.Helper()
  for _,method:=range []string{"GET","HEAD"} {for _,ranged:=range []bool{false,true} {
   request:=httptest.NewRequest(method,path,nil)
   code,length,body:=200,"16","0123456789abcdef"
@@ -33,6 +33,47 @@ func TestPrivateDayMediaGetHeadAndRange(t *testing.T) {
   if ranged && w.Header().Get("Content-Range")!="bytes 2-5/16" {t.Fatal(w.Header())}
   if w.Header().Get("Cache-Control")!="private, no-store" || w.Header().Get("X-Content-Type-Options")!="nosniff" {t.Fatal("private headers lost",w.Header())}
  }}
+}
+
+func TestPrivateDayMediaGetHeadAndRange(t *testing.T) {
+ root,n,path:=privateDayFixture(t)
+ assertPrivateDayMediaGetHeadAndRange(t,root,n,path)
+}
+
+func TestPrivateDayMediaCrossMidnightAndPublishedPartial(t *testing.T) {
+ for _,name:=range []string{
+  "20261110_235958_E20261111_000006_fixture.mp4",
+  "20261110_120000_E20261110_120008_fixture_partial.mp4",
+  "20261110_235958_E20261111_000006_fixture_partial.mp4",
+ } {t.Run(name,func(t *testing.T){
+  root,n,_:=privateDayFixture(t)
+  if err:=os.WriteFile(filepath.Join(root,"a","20261110",name),[]byte("0123456789abcdef"),0600);err!=nil {t.Fatal(err)}
+  assertPrivateDayMediaGetHeadAndRange(t,root,n,"/recordings/a/20261110/"+name)
+ })}
+}
+
+func TestPrivateDayMediaRejectsRealFilesInWrongDay(t *testing.T) {
+ for _,tc:=range []struct{day,name string}{
+  {"20261111",privateDayFile},
+  {"20261111","20261110_235958_E20261111_000006_fixture.mp4"},
+  {"20261111","20261110_235958_E20261111_000006_fixture_partial.mp4"},
+ } {t.Run(tc.name,func(t *testing.T){
+  root,n,_:=privateDayFixture(t)
+  stamp,err:=parseStampedName(tc.name)
+  if err!=nil || stamp.inDay(tc.day) {t.Fatal("wrong-day fixture must have a valid stamp and mismatching day",err)}
+  day:=filepath.Join(root,"a",tc.day)
+  if err:=os.Mkdir(day,0700);err!=nil {t.Fatal(err)}
+  target:=filepath.Join(day,tc.name)
+  if err:=os.WriteFile(target,[]byte("must not serve"),0600);err!=nil {t.Fatal(err)}
+  if info,err:=os.Stat(target);err!=nil || !info.Mode().IsRegular() {t.Fatal("wrong-day fixture is not a real regular file",err)}
+  for _,method:=range []string{"GET","HEAD"} {for _,ranged:=range []bool{false,true} {
+   request:=httptest.NewRequest(method,"/recordings/a/"+tc.day+"/"+tc.name,nil)
+   if ranged {request.Header.Set("Range","bytes=2-5")}
+   w:=httptest.NewRecorder();servePrivateRecordingAt(w,request,n,root)
+   if w.Code!=404 {t.Fatal("wrong-day real file served",method,ranged,w.Code)}
+   if w.Header().Get("Cache-Control")!="private, no-store" || w.Header().Get("X-Content-Type-Options")!="nosniff" {t.Fatal("private error headers lost",w.Header())}
+  }}
+ })}
 }
 
 func TestPrivateDayMediaRejectsOtherDirectoriesAndTraversal(t *testing.T) {
@@ -63,13 +104,21 @@ func TestPrivateDayMediaRejectsOtherDirectoriesAndTraversal(t *testing.T) {
 
 func TestPrivateDayMediaRejectsSymlinksAndSpecialFiles(t *testing.T) {
  root,n,_:=privateDayFixture(t);day:=filepath.Join(root,"a","20261110")
+ // The requested day and name must validate so rejection exercises O_NOFOLLOW.
+ symlinkName:="20261111_120000_E20261111_120008_fixture.mp4"
+ if !privateMediaParts([]string{"20261111",symlinkName}) {t.Fatal("day symlink fixture fails path validation")}
+ if err:=os.WriteFile(filepath.Join(day,symlinkName),[]byte("must not serve"),0600);err!=nil {t.Fatal(err)}
  if err:=os.Symlink("20261110",filepath.Join(root,"a","20261111"));err!=nil {t.Fatal(err)}
- w:=httptest.NewRecorder();servePrivateRecordingAt(w,httptest.NewRequest("GET","/recordings/a/20261111/"+privateDayFile,nil),n,root)
+ w:=httptest.NewRecorder();servePrivateRecordingAt(w,httptest.NewRequest("GET","/recordings/a/20261111/"+symlinkName,nil),n,root)
  if w.Code!=404 {t.Fatal("day symlink followed",w.Code)}
- if err:=os.Symlink(privateDayFile,filepath.Join(day,"link.mp4"));err!=nil {t.Fatal(err)}
- if err:=os.Mkdir(filepath.Join(day,"directory.mp4"),0700);err!=nil {t.Fatal(err)}
- fifo:=filepath.Join(day,"fifo.mp4");if err:=unix.Mkfifo(fifo,0600);err!=nil {t.Fatal(err)}
- for _,name:=range []string{"link.mp4","directory.mp4","fifo.mp4"} {
+ linkName:="20261110_120000_E20261110_120008_link.mp4"
+ directoryName:="20261110_120000_E20261110_120008_directory.mp4"
+ fifoName:="20261110_120000_E20261110_120008_fifo.mp4"
+ if err:=os.Symlink(privateDayFile,filepath.Join(day,linkName));err!=nil {t.Fatal(err)}
+ if err:=os.Mkdir(filepath.Join(day,directoryName),0700);err!=nil {t.Fatal(err)}
+ fifo:=filepath.Join(day,fifoName);if err:=unix.Mkfifo(fifo,0600);err!=nil {t.Fatal(err)}
+ for _,name:=range []string{linkName,directoryName,fifoName} {
+  if !privateMediaParts([]string{"20261110",name}) {t.Fatal("special-file fixture fails path validation",name)}
   done:=make(chan int,1)
   go func(){w:=httptest.NewRecorder();servePrivateRecordingAt(w,httptest.NewRequest("GET","/recordings/a/20261110/"+name,nil),n,root);done<-w.Code}()
   select {case code:=<-done:if code!=404 {t.Fatal("special day member served",name,code)};case <-time.After(time.Second):
