@@ -2,6 +2,10 @@
 
 The HTTP planner and browser use prepared Copy and Accurate exports. Copy is the default and never silently changes to re-encoding. A single complete source is copied byte for byte into prepared storage. Compatible complete sources are remuxed with compressed audio/video payloads preserved. This is not zero-copy original-file delivery.
 
+## Recording selection
+
+Source recordings are selected from UTC start-day folders using stamped start/end filenames, not duration probes. Timeline and export interval selection trust the stamped end. `/api/download` reports `X-Recording-Duration-Policy: name-end`. Profile and keyframe inspection remain separate export-rendering checks. A wrong stamped end can therefore give a wrong timeline or export range. Clients must use timeline `file_path` values including their day segment; `/api/recordings/list` is retired (410 Gone). See [recording layout and window selection](RECORDING_LAYOUT.md) for the filename format, API bounds, skipped-name reporting and retention rules.
+
 ## Subsection copy and range extension
 
 Copy of part of a recording supports non-reordered video with usable keyframe timestamps. The server moves the video start earlier and the end later to the nearest safe keyframe or file boundaries, by at most 30 seconds per end, and rechecks the expanded range for gaps/overlaps. There is no approval step: the first create request is accepted with `202`, and the job reports the range it will save as `saved_start` and `saved_end`. The browser shows that saved range and marks it when it is wider than the request.
