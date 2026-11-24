@@ -22,9 +22,11 @@ const (
 // stampedScanStats counts the work done by one call. It travels with the call's
 // accumulator and is never global, so concurrent scans cannot disturb each other.
 // DayLookups counts day directories requested, whether or not they exist.
-// EntriesRead counts names read from opened day directories, malformed ones too.
+// EntriesRead counts all names returned by Readdirnames, including batch read-ahead
+// on early failure. It is not the number of names processed before failure.
 // MetadataCalls counts candidate inspections started; only valid overlapping
-// names are inspected.
+// names are inspected. On success len(Intervals) is the accepted candidate count;
+// on failure the result is discarded, while these counters remain observable.
 type stampedScanStats struct {DayLookups,DaysOpened,EntriesRead,MetadataCalls int}
 
 // stampedInspector inspects one named entry of a held day directory. Production
@@ -107,8 +109,9 @@ func scanStampedDay(ctx context.Context,cam timelineCamera,root *os.File,day str
  for {
   if err:=ctx.Err();err!=nil {return err}
   names,readErr:=dir.Readdirnames(256)
+  scan.Stats.EntriesRead+=len(names)
   for _,name:=range names {
-   seen++;scan.Stats.EntriesRead++
+   seen++
    if seen>maxStampedFolderEntries {return errRecordingScanLimit}
    if err:=ctx.Err();err!=nil {return err}
    if !strings.HasSuffix(name,".mp4") {continue}
