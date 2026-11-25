@@ -46,8 +46,15 @@ func TestRetention34CameraWorkIgnoresSkippedContents(t *testing.T) {
   if err!=nil || result.Count!=1 || work.Stats!=before[c] {t.Fatal("retained content changed work",c,result,before[c],work.Stats,err)}
   assertPublicationBytes(t,filepath.Join(dir,stampedDayName(cutoff),stampedFileName(cutoff.Add(-time.Hour),cutoff,"equal")),"fixture")
  }
- // The remaining physical fixture has 24,752 files, not 1.79 million.
- if cameras*(retainedDays*2+2)<=20000 {t.Fatal("fixture does not exceed 20,000 files")}
+ // Count the physical fixture on disk instead of trusting the constants: the
+ // grown tree must really exceed 20,000 files (24,752 expected), not 1.79 million.
+ files:=0
+ if err:=filepath.WalkDir(root,func(_ string,d os.DirEntry,err error) error {
+  if err!=nil {return err}
+  if d.Type().IsRegular() {files++}
+  return nil
+ }) ;err!=nil {t.Fatal(err)}
+ if want:=cameras*(retainedDays*2+2);files!=want || files<=20000 {t.Fatal("physical fixture size",files,want)}
 }
 
 func TestDeletionExactDayFolderBounds(t *testing.T) {
