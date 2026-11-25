@@ -15,8 +15,10 @@ import (
  "golang.org/x/sys/unix"
 )
 
-// Every failure below must discard the whole result: no partial interval list, no
-// partial timeline body, no export started. Four valid candidates sit in the window.
+// Downloads, exports and the strict scan fail closed: every failure below must discard
+// the whole result, with no partial interval list and no export started. The timeline
+// is the one caller that degrades instead; see the skip-and-report tests further down.
+// Four valid candidates sit in the window.
 
 type stampedFailFixture struct {cam,day string;base time.Time;window timelineWindow}
 
@@ -123,15 +125,81 @@ func stampedFailNVR(t *testing.T) (*NVR,stampedFailFixture) {
  return n,bad
 }
 
-func TestFailClosedTimelineHasNoPartialResult(t *testing.T) {
+// The timeline degrades instead of failing: the unusable recording is left out and
+// counted, so one corrupt file cannot hide every other recording. Both cameras'
+// good segments (four each) are returned.
+func TestTimelineSkipsUnreadableCandidateAndReportsCount(t *testing.T) {
  n,f:=stampedFailNVR(t)
  query:=url.Values{"start_time":{f.window.Start.Format(time.RFC3339)},"end_time":{f.window.End.Format(time.RFC3339)}}
  response:=httptest.NewRecorder()
  serveTimelineRecordings(response,httptest.NewRequest("GET","/api/timeline/recordings?"+query.Encode(),nil),n)
  body:=response.Body.String()
- if response.Code!=503 || response.Header().Get("X-Recording-Metadata-Status")!="unavailable" || response.Header().Get("X-Timeline-Unparseable-Count")!="" || strings.Contains(body,"file_path") || strings.HasPrefix(strings.TrimSpace(body),"[") {
-  t.Fatal("failed scan produced a partial timeline",response.Code,response.Header(),body)
+ if response.Code!=200 || response.Header().Get("X-Timeline-Unreadable-Count")!="1" || response.Header().Get("X-Timeline-Unparseable-Count")!="0" || response.Header().Get("X-Recording-Metadata-Status")!="" || strings.Count(body,"\"file_path\"")!=8 {
+  t.Fatal("timeline did not skip and report the unreadable recording",response.Code,response.Header(),body)
  }
+}
+
+func TestTimelineScanSkipsEveryKindOfUnusableCandidate(t *testing.T) {
+ for _,kind:=range []string{"empty file","directory","symlink","fifo"} {t.Run(kind,func(t *testing.T) {
+  f:=newStampedFailFixture(t);start,end:=f.badName();bad:=filepath.Join(f.day,stampedFileName(start,end,"bad"))
+  switch kind {
+  case "empty file":stampedPutFile(t,f.day,start,end,"bad",false)
+  case "directory":if err:=os.Mkdir(bad,0755);err!=nil {t.Fatal(err)}
+  case "symlink":
+   target:=filepath.Join(f.day,stampedFileName(f.base.Add(7*time.Hour),f.base.Add(7*time.Hour+10*time.Minute),"good0"))
+   if err:=os.Symlink(target,bad);err!=nil {t.Fatal(err)}
+  case "fifo":if err:=unix.Mkfifo(bad,0600);err!=nil {t.Fatal(err)}
+  }
+  scan,err:=collectTimelineIntervals(context.Background(),scanCam(f.cam),f.window)
+  if err!=nil || len(scan.Intervals)!=4 || scan.Unreadable!=1 || scan.Unparseable!=0 {t.Fatal(len(scan.Intervals),scan.Unreadable,scan.Unparseable,err)}
+  _,stats,err:=collectStampedIntervalsWith(context.Background(),scanCam(f.cam),f.window,nil,stampedScanOptions{SkipUnreadable:true})
+  if err!=nil || stats.RelevantCandidates!=5 || stats.MetadataCalls!=5 {t.Fatal("skipped candidate was not counted and inspected",stats,err)}
+ })}
+}
+
+// Only an unusable recording is skipped. Cancellation and any other error still fail
+// the whole call, as do folder-level failures.
+func TestTimelineScanStillFailsOnOtherErrors(t *testing.T) {
+ t.Run("other inspection error",func(t *testing.T) {
+  f:=newStampedFailFixture(t)
+  inspect:=func(*os.File,string) (os.FileInfo,error) {return nil,os.ErrPermission}
+  scan,_,err:=collectStampedIntervalsWith(context.Background(),scanCam(f.cam),f.window,inspect,stampedScanOptions{SkipUnreadable:true})
+  if !errors.Is(err,os.ErrPermission) || len(scan.Intervals)!=0 || scan.Unreadable!=0 {t.Fatal(scan,err)}
+ })
+ t.Run("canceled while skipping",func(t *testing.T) {
+  f:=newStampedFailFixture(t);ctx,cancel:=context.WithCancel(context.Background());defer cancel()
+  inspect:=func(*os.File,string) (os.FileInfo,error) {cancel();return nil,errRecordingMetadata}
+  scan,_,err:=collectStampedIntervalsWith(ctx,scanCam(f.cam),f.window,inspect,stampedScanOptions{SkipUnreadable:true})
+  if !errors.Is(err,context.Canceled) || len(scan.Intervals)!=0 {t.Fatal(scan,err)}
+ })
+ t.Run("folder over its entry bound",func(t *testing.T) {
+  f:=newStampedFailFixture(t)
+  for i:=0;i<maxStampedFolderEntries;i++ {
+   if err:=os.WriteFile(filepath.Join(f.day,fmt.Sprintf("%05d.mp4",i)),nil,0600);err!=nil {t.Fatal(err)}
+  }
+  scan,err:=collectTimelineIntervals(context.Background(),scanCam(f.cam),f.window)
+  if !errors.Is(err,errRecordingScanLimit) || len(scan.Intervals)!=0 || scan.Unreadable!=0 {t.Fatal(scan,err)}
+ })
+}
+
+// Skipped candidates spend the call-wide candidate budget. Four cameras of 5,001
+// empty (skippable) in-window files are 20,004 candidates, so the call must fail at
+// candidate 20,001 even though every one of them could have been skipped.
+func TestTimelineScanCountsSkippedCandidatesAgainstTheBudget(t *testing.T) {
+ root:=t.TempDir();base:=scanTime("20261110","000000")
+ window:=timelineWindow{Start:base.Add(6*time.Hour),End:base.Add(18*time.Hour)}
+ const cameras,each=4,maxStampedCandidates/4+1
+ cams:=make([]timelineCamera,cameras)
+ for c:=range cams {
+  id:=fmt.Sprintf("cam%d",c);dir:=filepath.Join(root,id);cams[c]=timelineCamera{id,id,dir}
+  today:=stampedDayDir(t,dir,base)
+  for i:=0;i<each;i++ {
+   start:=window.Start.Add(time.Duration(i)*time.Second)
+   stampedPutFile(t,today,start,start.Add(time.Minute),"c",false)
+  }
+ }
+ scan,stats,err:=collectStampedIntervalsWith(context.Background(),cams,window,nil,stampedScanOptions{SkipUnreadable:true})
+ if !errors.Is(err,errRecordingScanLimit) || len(scan.Intervals)!=0 || scan.Unreadable!=0 || stats.RelevantCandidates!=maxStampedCandidates+1 || stats.MetadataCalls!=maxStampedCandidates {t.Fatal(scan,stats,err)}
 }
 
 func TestFailClosedDownloadStartsNoExport(t *testing.T) {

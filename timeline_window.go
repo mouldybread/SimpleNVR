@@ -46,7 +46,9 @@ type timelineCamera struct {ID,Name,Dir string}
 func timelineRecordingsHandler(w http.ResponseWriter,r *http.Request) {serveTimelineRecordings(w,r,nvr)}
 
 // Intervals come from stamped names only. Optional repeated camera_id limits
-// the result; an unknown id is a 404, an empty one a 400.
+// the result; an unknown id is a 404, an empty one a 400. An unusable in-window
+// recording is left out and counted in X-Timeline-Unreadable-Count instead of
+// failing the request; downloads and exports remain strict.
 func serveTimelineRecordings(w http.ResponseWriter,r *http.Request,n *NVR) {
  if r.Method!=http.MethodGet && r.Method!=http.MethodHead {w.Header().Set("Allow","GET, HEAD");http.Error(w,"Method not allowed",405);return}
  window,err:=parseTimelineWindow(r.URL.Query(),time.Now())
@@ -73,9 +75,10 @@ func serveTimelineRecordings(w http.ResponseWriter,r *http.Request,n *NVR) {
  mode:="absolute";if window.Legacy {mode="legacy-hkt"}
  w.Header().Set("X-Timeline-Window-Mode",mode);w.Header().Set("X-Timeline-Duration-Policy","name-end")
  ctx,cancel:=context.WithTimeout(r.Context(),recordingMetadataBudget);defer cancel()
- scan,err:=collectStampedIntervals(ctx,cameras,window)
+ scan,err:=collectTimelineIntervals(ctx,cameras,window)
  if err!=nil {writeRecordingIntervalError(w,r,err);return}
  w.Header().Set("X-Timeline-Unparseable-Count",strconv.Itoa(scan.Unparseable))
+ w.Header().Set("X-Timeline-Unreadable-Count",strconv.Itoa(scan.Unreadable))
  segments:=make([]TimelineSegment,0,len(scan.Intervals))
  for _,clip:=range scan.Intervals {
   day:=filepath.Base(filepath.Dir(clip.Path))

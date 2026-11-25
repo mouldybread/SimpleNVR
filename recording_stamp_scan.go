@@ -36,7 +36,14 @@ type stampedInspector func(dir *os.File,name string) (os.FileInfo,error)
 
 // Unparseable counts .mp4 names in scanned day folders that are not a valid stamped
 // name for that folder. They are never probed and never returned as intervals.
-type stampedScan struct {Intervals []recordingInterval;Unparseable int;Stats stampedScanStats;inspect stampedInspector}
+// Unreadable counts valid in-window candidates that could not be used (empty, not a
+// regular file, or gone before inspection) and were skipped; it is only ever non-zero
+// for a scan started with SkipUnreadable, which only the timeline uses.
+type stampedScan struct {Intervals []recordingInterval;Unparseable,Unreadable int;Stats stampedScanStats;inspect stampedInspector;skipUnreadable bool}
+
+// stampedScanOptions selects how an unusable in-window candidate is handled. The
+// zero value is strict: the whole call fails. Downloads and exports must stay strict.
+type stampedScanOptions struct {SkipUnreadable bool}
 
 // Name-only selection: no ffprobe or media reads. Only the UTC day folders that
 // can hold overlapping recordings are opened, with no-follow descriptors. Any
@@ -46,13 +53,27 @@ func collectStampedIntervals(ctx context.Context,cameras []timelineCamera,window
  return scan,err
 }
 
+// The timeline degrades instead of failing on one unusable recording: the file is left
+// out of the result, counted in Unreadable and reported to the client. Cancellation,
+// every other error, a folder that cannot be read completely and all scan bounds still
+// fail the whole call, and skipped candidates still count toward the candidate bound.
+func collectTimelineIntervals(ctx context.Context,cameras []timelineCamera,window timelineWindow) (stampedScan,error) {
+ scan,_,err:=collectStampedIntervalsWith(ctx,cameras,window,nil,stampedScanOptions{SkipUnreadable:true})
+ return scan,err
+}
+
 // collectStampedIntervalsObserved is collectStampedIntervals with an optional
 // inspector and the work counters returned even when the call fails. The scan
 // itself is empty on failure: counters are the only thing a failed call reports.
 func collectStampedIntervalsObserved(ctx context.Context,cameras []timelineCamera,window timelineWindow,inspect stampedInspector) (stampedScan,stampedScanStats,error) {
+ return collectStampedIntervalsWith(ctx,cameras,window,inspect,stampedScanOptions{})
+}
+
+func collectStampedIntervalsWith(ctx context.Context,cameras []timelineCamera,window timelineWindow,inspect stampedInspector,options stampedScanOptions) (stampedScan,stampedScanStats,error) {
  var scan stampedScan
  if inspect==nil {inspect=stampedCandidateInfo}
  scan.inspect=inspect
+ scan.skipUnreadable=options.SkipUnreadable
  if err:=ctx.Err();err!=nil {return stampedScan{},scan.Stats,err}
  days,err:=stampedScanDays(window.Start,window.End);if err!=nil {return stampedScan{},scan.Stats,err}
  scan.Intervals=make([]recordingInterval,0)
@@ -120,13 +141,18 @@ func scanStampedDay(ctx context.Context,cam timelineCamera,root *os.File,day str
    if err!=nil || !stamp.inDay(day) {scan.Unparseable++;continue}
    if !stampedInWindow(stamp,window.Start,window.End) {continue}
    scan.Stats.RelevantCandidates++
-   // Every previously accepted candidate has exactly one interval. Any rejected
-   // candidate aborts the call, so this length is the call-wide candidate count.
-   // Check before inspecting candidate 20,001, across all cameras and day folders.
-   if len(scan.Intervals)>=maxStampedCandidates {return errRecordingScanLimit}
+   // One call-wide budget across all cameras and day folders. Skipped candidates
+   // count too, so tolerating unreadable files can never hide an oversized scan.
+   // Check before inspecting candidate 20,001.
+   if scan.Stats.RelevantCandidates>maxStampedCandidates {return errRecordingScanLimit}
    scan.Stats.MetadataCalls++
    info,err:=inspect(dir,name)
-   if err!=nil {return err}
+   if err!=nil {
+    // Only an unusable recording is skipped, and only when the caller allows it.
+    // Cancellation and every other error still fail the call.
+    if scan.skipUnreadable && errors.Is(err,errRecordingMetadata) {scan.Unreadable++;continue}
+    return err
+   }
    if err:=ctx.Err();err!=nil {return err}
    path:=filepath.Join(cam.Dir,day,name)
    scan.Intervals=append(scan.Intervals,recordingInterval{cam.ID,cam.Name,path,stamp.Start,stamp.End,info.Size(),info})
