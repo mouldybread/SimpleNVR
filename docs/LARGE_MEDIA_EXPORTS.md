@@ -13,6 +13,18 @@ SimpleNVR prepares exports on the server and serves finished files through authe
 - Navigation leaves jobs to expire rather than cancelling a download during browser handoff. Jobs do not survive restart.
 - Copy and Accurate are explicit choices. Copy never silently falls back to re-encoding. See [export rendering](EXPORT_RENDERING.md).
 
+## Source recordings
+
+A job, and the direct `GET /api/download`, read their sources from the camera's UTC start-day folders, `/recordings/<camera>/<YYYYMMDD>/<start>_E<end>_<label>.mp4`, and choose them by file name alone. See [recording layout](RECORDING_LAYOUT.md) for the name format and the full selection rules.
+
+- A recording is a source when it starts before the requested end and ends after the requested start; recordings that only touch the range do not count. No file is opened to measure its duration. A published partial recording keeps its stamped start and end, with `_partial` before `.mp4`, so the same rule selects it.
+- The end comes from the stamped name. A wrong stamped end gives a wrong range, or a false gap or overlap, rather than an error. Copy extension and keyframe cuts still read the real media, so a wrong name can also move a cut. Recording files must still open and match the planned input when the job pins them, or the job fails.
+- Names that are not valid stamped names for their folder are left out without an error. Only the timeline reports how many were skipped, in `X-Timeline-Unparseable-Count`.
+- Recordings written directly in a camera folder by older versions are not read.
+- Each scan is bounded: at most 400 day folders per camera (a very long range can reach this), 8,192 names read in any one day folder (every name counts, valid or not), and 20,000 matching recordings across the whole scan. A scan that exceeds a bound, meets a matching recording that is empty, not a regular file, unreadable or gone, runs out of its 30 second budget or is canceled fails as a whole and returns nothing partial. Job creation then returns `503` (`504` when the budget ran out) with `X-Recording-Metadata-Status: unavailable`.
+- A Copy export that has to cut inside a recording scans a second time over the extended range, and that scan has the same bounds.
+- The direct download reports `X-Recording-Duration-Policy: name-end`.
+
 ## Configure export storage
 
 Mount a trusted, private, disk-backed directory outside `/recordings` and every camera directory, for example `/exports`, and set:
