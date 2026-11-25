@@ -16,6 +16,16 @@ const diskUsageUnavailable="Unavailable"
 const diskUsageEntryLimit=8192
 const diskUsageReadBatch=64
 
+// A render waits at most this long in total; slower cameras show unavailable while
+// their inspection keeps running in the background and fills the cache.
+const diskUsageRenderDeadline=10*time.Second
+
+// One inspection is abandoned after this long, independently of any request.
+const diskUsageComputeTimeout=2*time.Minute
+
+// At most this many cameras are inspected at once across all renders.
+const diskUsageSlots=4
+
 // A cached day must be older than the scan by more than the filesystem timestamp
 // granularity, so a change in the same tick as the scan can never be cached.
 const diskUsageTimestampMargin=2*time.Second
@@ -79,18 +89,25 @@ func (entry diskUsageDay) matches(stat *unix.Stat_t) bool {
  return stat.Mode&unix.S_IFMT==unix.S_IFDIR && entry.dev==uint64(stat.Dev) && entry.ino==uint64(stat.Ino) && entry.mtim==stat.Mtim && entry.ctim==stat.Ctim
 }
 
+// The cache is keyed by camera record directory. Every eviction bumps the
+// directory's generation; an inspection that began before the eviction cannot
+// store into, or prune, the newer state.
 type diskUsageCache struct {
  mu sync.Mutex
  dirs map[string]map[string]diskUsageDay
+ gens map[string]uint64
 }
 
 func newDiskUsageCache() *diskUsageCache {
- return &diskUsageCache{dirs:make(map[string]map[string]diskUsageDay)}
+ return &diskUsageCache{dirs:make(map[string]map[string]diskUsageDay),gens:make(map[string]uint64)}
 }
 
-// The production cache is keyed by camera record directory. Eviction on camera
-// deletion is wired in a later slice; until then entries are bounded by cameras x 400.
 var recordingDiskUsageCache=newDiskUsageCache()
+
+func (c *diskUsageCache) generation(dir string) uint64 {
+ c.mu.Lock();defer c.mu.Unlock()
+ return c.gens[dir]
+}
 
 func (c *diskUsageCache) lookup(dir,day string,stat *unix.Stat_t) (int64,bool) {
  c.mu.Lock();defer c.mu.Unlock()
@@ -99,16 +116,18 @@ func (c *diskUsageCache) lookup(dir,day string,stat *unix.Stat_t) (int64,bool) {
  return entry.bytes,true
 }
 
-func (c *diskUsageCache) store(dir,day string,stat *unix.Stat_t,total int64) {
+func (c *diskUsageCache) store(dir string,gen uint64,day string,stat *unix.Stat_t,total int64) {
  c.mu.Lock();defer c.mu.Unlock()
+ if c.gens[dir]!=gen {return}
  days:=c.dirs[dir]
  if days==nil {days=make(map[string]diskUsageDay);c.dirs[dir]=days}
  days[day]=diskUsageDay{dev:uint64(stat.Dev),ino:uint64(stat.Ino),mtim:stat.Mtim,ctim:stat.Ctim,bytes:total}
 }
 
 // retain drops cached days that no longer exist in the camera directory.
-func (c *diskUsageCache) retain(dir string,present map[string]bool) {
+func (c *diskUsageCache) retain(dir string,gen uint64,present map[string]bool) {
  c.mu.Lock();defer c.mu.Unlock()
+ if c.gens[dir]!=gen {return}
  for day:=range c.dirs[dir] {
   if !present[day] {delete(c.dirs[dir],day)}
  }
@@ -116,7 +135,20 @@ func (c *diskUsageCache) retain(dir string,present map[string]bool) {
 
 func (c *diskUsageCache) evict(dir string) {
  c.mu.Lock();defer c.mu.Unlock()
+ c.gens[dir]++
  delete(c.dirs,dir)
+}
+
+// pruneExcept evicts every cached directory that is not currently registered, which
+// also covers a camera whose record directory changed.
+func (c *diskUsageCache) pruneExcept(active map[string]bool) {
+ c.mu.Lock();defer c.mu.Unlock()
+ for dir:=range c.dirs {
+  if !active[dir] {
+   c.gens[dir]++
+   delete(c.dirs,dir)
+  }
+ }
 }
 
 func (c *diskUsageCache) size(dir string) int {
@@ -223,6 +255,7 @@ func (w *diskUsageWork) sumStaging(ctx context.Context,parent int,name string,de
 func computeDiskUsage(ctx context.Context,cache *diskUsageCache,dir string,work *diskUsageWork) (int64,error) {
  if work==nil {work=newDiskUsageWork()}
  if cache==nil {cache=newDiskUsageCache()}
+ gen:=cache.generation(dir)
  scanStart:=work.now()
  if err:=ctx.Err();err!=nil {return 0,err}
  root,err:=openCameraDeleteDirectory(unix.AT_FDCWD,dir)
@@ -284,7 +317,7 @@ func computeDiskUsage(ctx context.Context,cache *diskUsageCache,dir string,work 
   if err!=nil {return 0,err}
   total+=dayTotal
   if sameDiskUsageStamp(&listing.stat,&after) && diskUsageCacheable(listing.name,scanStart,&after) {
-   cache.store(dir,listing.name,&after,dayTotal)
+   cache.store(dir,gen,listing.name,&after,dayTotal)
    work.Stats.CacheStores++
   }
  }
@@ -294,7 +327,7 @@ func computeDiskUsage(ctx context.Context,cache *diskUsageCache,dir string,work 
   if err!=nil {return 0,err}
   total+=sub
  }
- cache.retain(dir,present)
+ cache.retain(dir,gen,present)
  return total,nil
 }
 
@@ -304,8 +337,101 @@ func diskUsageText(ctx context.Context,cache *diskUsageCache,dir string) string 
  return formatBytes(total)
 }
 
-// Compatibility wrapper for the camera list: an incomplete inspection is shown as
-// unavailable instead of a silently smaller number.
+// Direct, single-call wrapper kept for callers outside the camera list render.
 func calculateDiskUsage(recordDir string) string {
  return diskUsageText(context.Background(),recordingDiskUsageCache,recordDir)
+}
+
+// One inspection of one camera directory. Waiters share its result.
+type diskUsageCall struct {
+ done chan struct{}
+ total int64
+ err error
+}
+
+func (call *diskUsageCall) text() string {
+ if call.err!=nil {return diskUsageUnavailable}
+ return formatBytes(call.total)
+}
+
+// wait returns the shared result, or unavailable when the caller's own context ends
+// first. The inspection itself is not cancelled by a caller giving up.
+func (call *diskUsageCall) wait(ctx context.Context) string {
+ select {
+ case <-call.done:
+  return call.text()
+ default:
+ }
+ select {
+ case <-call.done:
+  return call.text()
+ case <-ctx.Done():
+  return diskUsageUnavailable
+ }
+}
+
+// The tracker runs at most one inspection per camera directory at a time and at most
+// len(slots) overall. Inspections run detached from requests with their own timeout
+// so a slow first render still warms the cache for the next one.
+type diskUsageTracker struct {
+ mu sync.Mutex
+ calls map[string]*diskUsageCall
+ slots chan struct{}
+ cache *diskUsageCache
+ compute func(context.Context,*diskUsageCache,string)(int64,error)
+ timeout time.Duration
+}
+
+func newDiskUsageTracker(cache *diskUsageCache,slots int,timeout time.Duration,compute func(context.Context,*diskUsageCache,string)(int64,error)) *diskUsageTracker {
+ if slots<1 {slots=1}
+ if compute==nil {
+  compute=func(ctx context.Context,cache *diskUsageCache,dir string)(int64,error){return computeDiskUsage(ctx,cache,dir,nil)}
+ }
+ return &diskUsageTracker{calls:make(map[string]*diskUsageCall),slots:make(chan struct{},slots),cache:cache,compute:compute,timeout:timeout}
+}
+
+var recordingDiskUsage=newDiskUsageTracker(recordingDiskUsageCache,diskUsageSlots,diskUsageComputeTimeout,nil)
+
+// start returns the inspection in flight for dir, or begins one without blocking.
+func (t *diskUsageTracker) start(dir string) *diskUsageCall {
+ t.mu.Lock();defer t.mu.Unlock()
+ if call:=t.calls[dir];call!=nil {return call}
+ call:=&diskUsageCall{done:make(chan struct{})}
+ t.calls[dir]=call
+ go t.run(dir,call)
+ return call
+}
+
+func (t *diskUsageTracker) run(dir string,call *diskUsageCall) {
+ t.slots<-struct{}{}
+ ctx,cancel:=context.WithTimeout(context.Background(),t.timeout)
+ total,err:=t.compute(ctx,t.cache,dir)
+ cancel()
+ <-t.slots
+ t.mu.Lock()
+ call.total,call.err=total,err
+ delete(t.calls,dir)
+ t.mu.Unlock()
+ close(call.done)
+}
+
+// render returns one display string per directory, in order. It first drops cached
+// directories that are no longer registered, starts every inspection so slow cameras
+// keep working after the deadline, then waits for each up to the render deadline.
+func (t *diskUsageTracker) render(ctx context.Context,dirs []string) []string {
+ active:=make(map[string]bool,len(dirs))
+ for _,dir:=range dirs {active[dir]=true}
+ t.cache.pruneExcept(active)
+ calls:=make([]*diskUsageCall,len(dirs))
+ for i,dir:=range dirs {calls[i]=t.start(dir)}
+ ctx,cancel:=context.WithTimeout(ctx,diskUsageRenderDeadline)
+ defer cancel()
+ out:=make([]string,len(dirs))
+ for i,call:=range calls {out[i]=call.wait(ctx)}
+ return out
+}
+
+// Called after a camera is removed from the registry.
+func evictCameraDiskUsage(dir string) {
+ recordingDiskUsage.cache.evict(dir)
 }

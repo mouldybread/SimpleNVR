@@ -102,7 +102,11 @@ func camerasHandler(w http.ResponseWriter,r *http.Request) {
   cameras=append(cameras,CameraView{ID:cam.ID,Name:cam.Name,RTSPUrl:cam.RTSPUrl,RecordDir:cam.RecordDir,IsRecording:cam.IsRecording,RecordingMode:cam.RecordingMode,RetentionDisplay:days,ModeDisplay:mode,RecordingHealth:health})
  }
  nvr.mu.RUnlock()
- for i:=range cameras {cameras[i].DiskUsage=calculateDiskUsage(cameras[i].RecordDir)}
+ // Disk usage is computed outside nvr.mu, bounded by a render deadline and by the
+ // request context; a slow camera shows unavailable and keeps warming the cache.
+ dirs:=make([]string,len(cameras))
+ for i:=range cameras {dirs[i]=cameras[i].RecordDir}
+ for i,usage:=range recordingDiskUsage.render(r.Context(),dirs) {cameras[i].DiskUsage=usage}
  if err:=templates.ExecuteTemplate(w,"cameras.html",cameras);err!=nil {http.Error(w,err.Error(),500)}
 }
 

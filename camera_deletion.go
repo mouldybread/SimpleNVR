@@ -88,6 +88,9 @@ func deleteManagedCameras(ctx context.Context,n *NVR,selection []string,deps cam
    for _,id:=range n.cameraOrder {if id!=item.id {order=append(order,id)}}
    n.cameraOrder=order
    n.mu.Unlock()
+   // The camera is gone from the registry: drop its cached disk usage so a camera
+   // later registered at the same path cannot see stale day totals.
+   evictCameraDiskUsage(item.dir)
    // Keep ownership through final persistence, independently of NVR.mu.
    // No rollback can restore already-unlinked recordings on save failure.
    if err:=deps.persist();err!=nil {return fmt.Errorf("%w: camera removed in memory but final save failed: %w",errCameraDeletePersistence,err),true}
