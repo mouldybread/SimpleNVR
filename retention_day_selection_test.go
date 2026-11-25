@@ -13,9 +13,15 @@ import (
  "golang.org/x/sys/unix"
 )
 
+// All cutoffs below are instants on UTC day 20261110. The two offset cutoffs have a
+// local calendar date that differs from the UTC date (20261111 and 20261109), so a
+// classifier that used the local date instead of the UTC day would fail them.
 func TestRetentionDayClassificationUTC(t *testing.T) {
  base:=scanTime("20261110","000000")
- for _,cutoff:=range []time.Time{base,base.Add(12*time.Hour),base.In(time.FixedZone("east",8*3600))} {
+ east:=time.FixedZone("east",8*3600);west:=time.FixedZone("west",-8*3600)
+ cutoffs:=[]time.Time{base,base.Add(12*time.Hour),base.In(east),base.Add(20*time.Hour).In(east),base.Add(2*time.Hour).In(west)}
+ if cutoffs[3].Format("20060102")!="20261111" || cutoffs[4].Format("20060102")!="20261109" {t.Fatal("offset cutoffs do not differ from the UTC date")}
+ for _,cutoff:=range cutoffs {
   for day,want:=range map[string]retentionDayClass{"20261108":retentionOldDay,"20261109":retentionBoundaryDay,"20261110":retentionBoundaryDay,"20261111":retentionRetainedDay} {
    if got:=classifyRetentionDay(day,cutoff);got!=want {t.Fatal(day,cutoff,got,want)}
   }
