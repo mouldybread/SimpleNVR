@@ -100,8 +100,8 @@ func deleteManagedCameras(ctx context.Context,n *NVR,selection []string,deps cam
 }
 
 // A stamped day folder is pinned by an open no-follow descriptor and identity. Its
-// regular .mp4 members are planned individually; the folder itself is removed only
-// by an atomic empty-directory rmdir after them.
+// regular, valid stamped members matching the UTC start day are planned individually;
+// the folder itself is removed only by an atomic empty-directory rmdir after them.
 type cameraDeleteDay struct {name string;file *os.File;id unix.Stat_t;deleted bool}
 type cameraDeleteEntry struct {name string;stat unix.Stat_t;directory bool;parent *cameraDeleteDay;dayRemoval bool}
 func sameCameraDeleteEntry(a,b *unix.Stat_t) bool {
@@ -113,11 +113,11 @@ func openCameraDeleteDirectory(parent int,name string) (*os.File,error) {
  return os.NewFile(uintptr(fd),"camera-delete-directory"),nil
 }
 
-// Only direct regular .mp4 files, stamped day folders holding only regular .mp4 files,
-// and EMPTY buffer/temp directories are eligible. No recursive traversal/removal and
-// no symlink following. Inspection is bounded (8,192 entries per folder, 400 day
-// folders) and completes before the first unlink; late changes may still cause partial
-// deletion, but nonempty directories cannot be recursively destroyed.
+// Only direct regular .mp4 files, day folders holding only regular stamped files
+// matching the folder's UTC start day, and EMPTY buffer/temp directories are eligible.
+// No recursive traversal/removal or symlink following. Inspection is bounded
+// (8,192 entries per folder, 400 day folders) and completes before the first unlink;
+// late changes may cause partial deletion but never recursive directory destruction.
 func removeCameraDirectory(ctx context.Context,dir string,guard func() error) error {
  return removeCameraDirectoryWithUnlink(ctx,dir,guard,unix.Unlinkat)
 }
@@ -182,7 +182,8 @@ func removeCameraDirectoryWithIO(ctx context.Context,dir string,guard func() err
        members++;if members>cameraDeleteEntryLimit {return errCameraDeleteBlocked}
        item:=cameraDeleteEntry{name:member,parent:day}
        if err:=unix.Fstatat(int(file.Fd()),member,&item.stat,unix.AT_SYMLINK_NOFOLLOW);err!=nil {return err}
-       if item.stat.Mode&unix.S_IFMT!=unix.S_IFREG || filepath.Ext(member)!=".mp4" {return errCameraDeleteBlocked}
+       stamp,stampErr:=parseStampedName(member)
+       if item.stat.Mode&unix.S_IFMT!=unix.S_IFREG || stampErr!=nil || !stamp.inDay(entry) {return errCameraDeleteBlocked}
        plan=append(plan,item)
       }
       if childErr==io.EOF {break};if childErr!=nil {return childErr}

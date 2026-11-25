@@ -88,5 +88,5 @@ func (budget *orphanInspectionBudget) inspect(dir string) (bool,error) {
   retained,err:=budget.stagingPresent(filepath.Join(dir,name))
   if retained || err!=nil {return true,err}
  }
- return false,nil
+ return budget.inspectDays(dir,entries)
 }
