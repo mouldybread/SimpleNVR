@@ -33,6 +33,12 @@ timing benchmark is claimed.
   completes without limit and within loose read/entry bounds that per-file whole
   camera inspection would exceed; late evidence stops removal at the 64-file batch
   boundary and is preserved; root .tmp evidence stops removal at the 16-day recheck.
+- retention_wiring_bounds_test.go (review follow-up): the time-based production
+  entry point cleanupExpiredPublishedLeased applies the retention day-skip policy
+  (a misplaced expired file in today's folder survives while a correctly placed
+  old file is deleted); the retention root bound accepts exactly 8,192 root
+  entries, counting a skipped day folder, and refuses the 8,193rd before any
+  deletion.
 
 ## Changed tests
 
@@ -84,8 +90,6 @@ confinement. Evidence rechecks are batched, so late evidence is seen at a 64-fil
 batch or 16-day boundary. A camera with legacy root files and day folders still
 inspects fully once per root file. Retention's option-2 exception delays
 malformed/misplaced-file cleanup in skipped newer days. Root enumeration is still
-charged; retained file contents, not root day-name work, are skipped. Known test
-gaps: no test asserts that the production retention tick applies the skip policy
-through its time-based entry point, and the root-level 8,192/8,193 retention
-boundary has no new test. Final acceptance must reconcile this inventory and
-inspect relevant CI evidence on the exact final SHA.
+charged; retained file contents, not root day-name work, are skipped. Final
+acceptance must reconcile this inventory and inspect relevant CI evidence on the
+exact final SHA.
