@@ -4,8 +4,6 @@ import (
  "encoding/json"
  "fmt"
  "net/http"
- "os"
- "path/filepath"
 )
 
 func addCameraHandler(w http.ResponseWriter,r *http.Request) {
@@ -106,17 +104,6 @@ func camerasHandler(w http.ResponseWriter,r *http.Request) {
  nvr.mu.RUnlock()
  for i:=range cameras {cameras[i].DiskUsage=calculateDiskUsage(cameras[i].RecordDir)}
  if err:=templates.ExecuteTemplate(w,"cameras.html",cameras);err!=nil {http.Error(w,err.Error(),500)}
-}
-
-func calculateDiskUsage(recordDir string) string {
- var totalSize int64
- err:=filepath.Walk(recordDir,func(path string,info os.FileInfo,err error) error {
-  if err!=nil || info==nil {return nil}
-  if !info.IsDir() && filepath.Ext(path)==".mp4" {totalSize+=info.Size()}
-  return nil
- })
- if err!=nil {return "0 B"}
- return formatBytes(totalSize)
 }
 
 func formatBytes(bytes int64) string {
