@@ -59,11 +59,13 @@ The production cleanup tick calls cleanupRetentionSnapshot, which admits the
 media lease and invokes cleanupExpiredPublishedLeased. That function now chooses
 the retention-specific day policy. Explicit deletion uses deleteAllPublishedLeased
 and the generic shared engine without the policy. The older glob cleanup helper
-is not the production tick path. Stop/join and persistence ordering are unchanged.
+(`cleanupOldRecordings`) was test-only and has been removed; its tests now run the
+production cleanup tick. Stop/join and persistence ordering are unchanged.
 
 Focused regressions cover UTC classification, midnight/equality/cross-day cutoff,
 delayed malformed/misplaced cleanup, unchanged generic/delete-all behavior,
 constant work when skipped contents grow, the skipped-day budget and read failure
-observation. They are committed coverage, not an execution claim. Broader scale,
-race/failure evidence, camera/orphan work and final acceptance remain separate
-checkpoint 5 slices. No CI is requested by this documentation.
+observation. Checkpoint 5 was accepted on
+`fa6f7854574c1378b029c37774fa31711b43c50a`, run 45676664390, with all eight
+required checks successful (check-run verification only; job logs were not
+inspected). See [CHECKPOINT5_READINESS.md](CHECKPOINT5_READINESS.md).

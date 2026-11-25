@@ -1,9 +1,11 @@
 # Camera disk usage (checkpoint 6)
 
-The camera list shows one disk usage figure per camera. This describes the final
-checkpoint 6 implementation. It is committed source, not an execution claim, and
-checkpoint 6 stays acceptance-pending until its CI run. See
-[readiness](CHECKPOINT6_READINESS.md) and the [test inventory](CHECKPOINT6_TEST_INVENTORY.md).
+The camera list shows one disk usage figure per camera. This describes the
+checkpoint 6 implementation. Checkpoint 6 was accepted on
+`d5f9665cc964d47daf4769dd4e774bad9d55f406`, run 45686302269, with all eight
+required checks successful (check-run verification only; job logs were not
+inspected). See [readiness](CHECKPOINT6_READINESS.md) and the
+[test inventory](CHECKPOINT6_TEST_INVENTORY.md).
 
 ## What is counted
 
@@ -93,7 +95,7 @@ engine and the same cache; the camera list no longer calls it.
 
 No run at 1.79 million files is claimed, and cold-start time is unmeasured. The
 tests are source-level: focused cases, a cached-versus-fresh differential, counter
-assertions at 34 cameras x 365 day folders and the staging bounds. The race
-detector result and the interaction with existing camera list tests are known only
-after the checkpoint's CI run. Nothing here has been compiled or run by the
-assistant.
+assertions at 34 cameras x 365 day folders and the staging bounds. They passed in
+the checkpoint's CI run, which was read as check results only: the tracker race
+output and the duration of the 34-camera fixture were not read from job logs. The
+assistant has not compiled or run this code itself.
