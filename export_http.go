@@ -153,7 +153,7 @@ func planExistingExportJob(parent context.Context,n *NVR,_ string,req exportCrea
  start,_:=time.Parse(time.RFC3339Nano,req.Start);end,_:=time.Parse(time.RFC3339Nano,req.End)
  n.mu.RLock();cam:=n.cameras[req.CameraID];var camera timelineCamera;if cam!=nil{camera=timelineCamera{cam.ID,cam.Name,cam.RecordDir}};n.mu.RUnlock();if cam==nil{return nil,&exportPlanHTTPError{404,"Camera not found"}}
  ctx,cancel:=context.WithTimeout(parent,recordingMetadataBudget);defer cancel()
- clips,err:=collectRecordingIntervals(ctx,[]timelineCamera{camera},timelineWindow{Start:start.UTC(),End:end.UTC()},recordingDurations);if err!=nil{return nil,err}
+ clips,err:=collectRecordingIntervals(ctx,[]timelineCamera{camera},timelineWindow{Start:start.UTC(),End:end.UTC()});if err!=nil{return nil,err}
  requested,err:=buildExportPlan(clips,timelineWindow{Start:start.UTC(),End:end.UTC()});if err!=nil{return nil,err};plan:=requested
  pins,err:=exportInputPins.prepare(ctx,requested.clips());if err!=nil{return nil,err};defer pins.Close()
  profiles:=make([]preparedMediaProfile,len(pins.files));for i,file:=range pins.files{profiles[i],err=inspectPreparedMediaProfile(ctx,file);if err!=nil{return nil,err}}
@@ -164,7 +164,7 @@ func planExistingExportJob(parent context.Context,n *NVR,_ string,req exportCrea
   plan,indices,err=planKeyframeCopy(ctx,pins,requested);if err!=nil{return nil,err}
   // Reinspect expanded coverage, so overlapping media outside the original
   // selection cannot become an implicit source choice.
-  expanded,err:=collectRecordingIntervals(ctx,[]timelineCamera{camera},timelineWindow{Start:plan.Start,End:plan.End},recordingDurations);if err!=nil{return nil,err};checked,err:=buildExportPlan(expanded,timelineWindow{Start:plan.Start,End:plan.End});if err!=nil{return nil,err}
+  expanded,err:=collectRecordingIntervals(ctx,[]timelineCamera{camera},timelineWindow{Start:plan.Start,End:plan.End});if err!=nil{return nil,err};checked,err:=buildExportPlan(expanded,timelineWindow{Start:plan.Start,End:plan.End});if err!=nil{return nil,err}
   if len(checked.Parts)!=len(plan.Parts){return nil,errRecordingChanged};for i:=range checked.Parts{if checked.Parts[i].Clip.Path!=plan.Parts[i].Clip.Path || !sameMediaFile(checked.Parts[i].Clip.identity,plan.Parts[i].Clip.identity){return nil,errRecordingChanged}}
  }
  if req.Mode=="copy"{for i:=1;i<len(profiles);i++{if !compatiblePreparedCopy(profiles[0],profiles[i]){return nil,errPreparedMediaProfile}}}else{if _,err:=preparedAccurateArguments(profiles,plan);err!=nil{return nil,err}}

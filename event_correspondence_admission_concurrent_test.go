@@ -78,7 +78,8 @@ func TestCorrAdmissionConcurrentContentionMatrix(t *testing.T) {
    corrStreamAssertJoined(t,r.report)
    if cancelOwner {
     children:=2;if phase<2 {children=phase}
-    if !errors.Is(r.err,context.Canceled) || r.report.ChildrenStarted!=children {t.Fatal("owner cancellation",r.report,r.err)}
+    // Diagnostic detail only: the failing assertion is unchanged.
+    if !errors.Is(r.err,context.Canceled) || r.report.ChildrenStarted!=children {t.Fatalf("owner cancellation: phase=%d prefix=%t returnedErr=%v errIsCanceled=%t ctxErrAfterReturn=%v childrenStarted=%d wantChildren=%d childrenJoined=%d elapsed=%s report=%+v",phase,prefix,r.err,errors.Is(r.err,context.Canceled),ctx.Err(),r.report.ChildrenStarted,children,r.report.ChildrenJoined,r.report.Elapsed,r.report)}
    } else if r.err!=nil || !r.report.Video.Equal || !r.report.Audio.Equal {t.Fatal("owner success",r.report,r.err)}
    if len(gate.slot)!=0 {t.Fatal("owner left admission occupied")}
    retry,retryErr:=gate.inspect(context.Background(),lease,evidence,corrStreamChildFactory(t,[]string{"normal","normal"},false),nil)

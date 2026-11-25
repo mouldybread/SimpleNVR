@@ -7,6 +7,7 @@ import (
  "net/http"
  "net/url"
  "path/filepath"
+ "strconv"
  "time"
 )
 
@@ -43,24 +44,45 @@ type TimelineSegment struct {
 
 type timelineCamera struct {ID,Name,Dir string}
 func timelineRecordingsHandler(w http.ResponseWriter,r *http.Request) {serveTimelineRecordings(w,r,nvr)}
-func serveTimelineRecordings(w http.ResponseWriter,r *http.Request,n *NVR) {serveTimelineWithDurations(w,r,n,recordingDurations)}
-func serveTimelineWithDurations(w http.ResponseWriter,r *http.Request,n *NVR,cache *durationCache) {
+
+// Intervals come from stamped names only. Optional repeated camera_id limits
+// the result; an unknown id is a 404, an empty one a 400. An unusable in-window
+// recording is left out and counted in X-Timeline-Unreadable-Count instead of
+// failing the request; downloads and exports remain strict.
+func serveTimelineRecordings(w http.ResponseWriter,r *http.Request,n *NVR) {
  if r.Method!=http.MethodGet && r.Method!=http.MethodHead {w.Header().Set("Allow","GET, HEAD");http.Error(w,"Method not allowed",405);return}
  window,err:=parseTimelineWindow(r.URL.Query(),time.Now())
  if err!=nil {http.Error(w,err.Error(),400);return}
- w.Header().Set("X-Timeline-Window-Start",window.Start.Format(time.RFC3339Nano));w.Header().Set("X-Timeline-Window-End",window.End.Format(time.RFC3339Nano))
- mode:="absolute";if window.Legacy {mode="legacy-hkt"}
- w.Header().Set("X-Timeline-Window-Mode",mode);w.Header().Set("X-Timeline-Duration-Policy","probed-media")
+ ids:=r.URL.Query()["camera_id"]
+ for _,id:=range ids {if id=="" {http.Error(w,"camera_id must not be empty",400);return}}
  n.mu.RLock()
  cameras:=make([]timelineCamera,0,len(n.cameras))
- for _,cam:=range n.cameras {cameras=append(cameras,timelineCamera{cam.ID,cam.Name,cam.RecordDir})}
+ missing:=false
+ if len(ids)==0 {
+  for _,cam:=range n.cameras {if cam!=nil {cameras=append(cameras,timelineCamera{cam.ID,cam.Name,cam.RecordDir})}}
+ } else {
+  seen:=make(map[string]bool,len(ids))
+  for _,id:=range ids {
+   if seen[id] {continue};seen[id]=true
+   cam:=n.cameras[id]
+   if cam==nil {missing=true;break}
+   cameras=append(cameras,timelineCamera{cam.ID,cam.Name,cam.RecordDir})
+  }
+ }
  n.mu.RUnlock()
+ if missing {http.Error(w,"Camera not found",404);return}
+ w.Header().Set("X-Timeline-Window-Start",window.Start.Format(time.RFC3339Nano));w.Header().Set("X-Timeline-Window-End",window.End.Format(time.RFC3339Nano))
+ mode:="absolute";if window.Legacy {mode="legacy-hkt"}
+ w.Header().Set("X-Timeline-Window-Mode",mode);w.Header().Set("X-Timeline-Duration-Policy","name-end")
  ctx,cancel:=context.WithTimeout(r.Context(),recordingMetadataBudget);defer cancel()
- intervals,err:=collectRecordingIntervals(ctx,cameras,window,cache)
+ scan,err:=collectTimelineIntervals(ctx,cameras,window)
  if err!=nil {writeRecordingIntervalError(w,r,err);return}
- segments:=make([]TimelineSegment,0,len(intervals))
- for _,clip:=range intervals {
-  segments=append(segments,TimelineSegment{CameraID:clip.CameraID,CameraName:clip.CameraName,StartTime:clip.Start,EndTime:clip.End,FilePath:"/recordings/"+url.PathEscape(clip.CameraID)+"/"+url.PathEscape(filepath.Base(clip.Path)),Size:clip.Size})
+ w.Header().Set("X-Timeline-Unparseable-Count",strconv.Itoa(scan.Unparseable))
+ w.Header().Set("X-Timeline-Unreadable-Count",strconv.Itoa(scan.Unreadable))
+ segments:=make([]TimelineSegment,0,len(scan.Intervals))
+ for _,clip:=range scan.Intervals {
+  day:=filepath.Base(filepath.Dir(clip.Path))
+  segments=append(segments,TimelineSegment{CameraID:clip.CameraID,CameraName:clip.CameraName,StartTime:clip.Start,EndTime:clip.End,FilePath:"/recordings/"+url.PathEscape(clip.CameraID)+"/"+url.PathEscape(day)+"/"+url.PathEscape(filepath.Base(clip.Path)),Size:clip.Size})
  }
  w.Header().Set("Content-Type","application/json")
  json.NewEncoder(w).Encode(segments)

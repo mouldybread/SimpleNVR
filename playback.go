@@ -4,30 +4,18 @@ import (
  "context"
  "errors"
  "net"
- "encoding/json"
  "fmt"
  "io"
  "log"
  "net/http"
  "os"
  "path/filepath"
- "sort"
  "time"
 )
 
-func listRecordingsHandler(w http.ResponseWriter,r *http.Request) {
- cameraID:=r.URL.Query().Get("camera_id")
- if cameraID=="" {http.Error(w,"Camera ID required",400);return}
- nvr.mu.RLock();cam,exists:=nvr.cameras[cameraID];nvr.mu.RUnlock()
- if !exists {http.Error(w,"Camera not found",404);return}
- files,err:=filepath.Glob(filepath.Join(cam.RecordDir,"*.mp4"))
- if err!=nil {http.Error(w,"Failed to list recordings",500);return}
- type Recording struct {Filename string `json:"filename"`;Path string `json:"path"`;Timestamp time.Time `json:"timestamp"`;Size int64 `json:"size"`}
- var recordings []Recording
- for _,file:=range files {info,err:=os.Stat(file);if err!=nil {continue};name:=filepath.Base(file);recordings=append(recordings,Recording{name,"/recordings/"+filepath.Join(filepath.Base(cam.RecordDir),name),info.ModTime(),info.Size()})}
- sort.Slice(recordings,func(i,j int) bool {return recordings[i].Timestamp.After(recordings[j].Timestamp)})
- w.Header().Set("Content-Type","application/json");json.NewEncoder(w).Encode(recordings)
-}
+// Retired: recordings are listed through /api/timeline/recordings, which scans the
+// stamped day folders by name. The route stays registered so callers get a clear answer.
+func listRecordingsHandler(w http.ResponseWriter,r *http.Request) {http.Error(w,"Gone: use /api/timeline/recordings",http.StatusGone)}
 
 func serveRecordingHandler(w http.ResponseWriter,r *http.Request) {
  path:=r.URL.Path[len("/recordings/"):];fullPath:=filepath.Join("/recordings",path)
@@ -41,8 +29,8 @@ func serveRecordingHandler(w http.ResponseWriter,r *http.Request) {
 
 func deleteAllRecordingsHandler(w http.ResponseWriter,r *http.Request) {serveManagedPublishedDeletion(w,r,nvr,deleteAllPublishedLeased)}
 
-func handleDownload(w http.ResponseWriter,r *http.Request) {serveDownload(w,r,nvr,recordingDurations,exportInputPins)}
-func serveDownload(w http.ResponseWriter,r *http.Request,n *NVR,cache *durationCache,pool *exportInputPool) {
+func handleDownload(w http.ResponseWriter,r *http.Request) {serveDownload(w,r,nvr,exportInputPins)}
+func serveDownload(w http.ResponseWriter,r *http.Request,n *NVR,pool *exportInputPool) {
  if r.Context().Err()!=nil {return}
  query:=r.URL.Query()
  if len(query["camera_id"])!=1 || len(query["start_time"])!=1 || len(query["end_time"])!=1 || query.Get("camera_id")=="" {http.Error(w,"One camera_id, start_time and end_time are required",400);return}
@@ -56,7 +44,7 @@ func serveDownload(w http.ResponseWriter,r *http.Request,n *NVR,cache *durationC
  if !exists {http.Error(w,"Camera not found",404);return}
  ctx,cancel:=context.WithTimeout(r.Context(),recordingMetadataBudget);defer cancel()
  window:=timelineWindow{Start:start.UTC(),End:end.UTC()}
- clips,err:=collectRecordingIntervals(ctx,[]timelineCamera{camera},window,cache)
+ clips,err:=collectRecordingIntervals(ctx,[]timelineCamera{camera},window)
  if err!=nil {writeRecordingIntervalError(w,r,err);return}
  if len(clips)==0 {http.Error(w,"No recordings found in time range",404);return}
  plan,err:=buildExportPlan(clips,window)
@@ -67,7 +55,7 @@ func serveDownload(w http.ResponseWriter,r *http.Request,n *NVR,cache *durationC
  name:=fmt.Sprintf("%s_%s.mp4",sanitizeFilename(camera.Name),start.UTC().Format("20060102_150405"))
  headers:=func(){
   w.Header().Set("Content-Type","video/mp4");w.Header().Set("Content-Disposition",fmt.Sprintf("attachment; filename=%q",name))
-  w.Header().Set("X-Recording-Duration-Policy","probed-media");w.Header().Set("X-Export-Input-Policy","pinned-descriptors");plan.setHeaders(w)
+  w.Header().Set("X-Recording-Duration-Policy","name-end");w.Header().Set("X-Export-Input-Policy","pinned-descriptors");plan.setHeaders(w)
  }
  if plan.NeedsTrim {
   output,err:=renderTrimmedExport(r.Context(),pins,plan,pool.tempDir,maxTrimBytes)

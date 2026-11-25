@@ -71,14 +71,15 @@ func TestExportPinCapacityAndCanceledAdmission(t *testing.T) {
  if len(pool.slots)!=2 {t.Fatal("admission bound changed")}
 }
 func TestIntervalSelectionCarriesExportIdentity(t *testing.T) {
- dir:=t.TempDir();clip:=exportClipFixture(t,dir,"20261110_000000_clip.mp4","original")
- cache:=newDurationCache(1,1,func(context.Context,*os.File)(time.Duration,error){return time.Second,nil})
- start:=time.Date(2026,11,10,0,0,0,0,time.UTC)
- clips,err:=collectRecordingIntervals(context.Background(),[]timelineCamera{{"front","Front",dir}},timelineWindow{Start:start,End:start.Add(time.Minute)},cache)
- if err!=nil || len(clips)!=1 || !sameMediaFile(clip.identity,clips[0].identity) {t.Fatal("selected identity missing",err)}
- replacement:=exportClipFixture(t,dir,"replacement","original")
- if err:=os.Chtimes(replacement.Path,clip.identity.ModTime(),clip.identity.ModTime());err!=nil {t.Fatal(err)}
- if err:=os.Rename(replacement.Path,clip.Path);err!=nil {t.Fatal(err)}
+ dir:=t.TempDir();start:=time.Date(2026,11,10,0,0,0,0,time.UTC)
+ path:=scanFixture(t,dir,start,start.Add(time.Second),"clip")
+ info,err:=os.Stat(path);if err!=nil {t.Fatal(err)}
+ clips,err:=collectRecordingIntervals(context.Background(),[]timelineCamera{{"front","Front",dir}},timelineWindow{Start:start,End:start.Add(time.Minute)})
+ if err!=nil || len(clips)!=1 || !sameMediaFile(info,clips[0].identity) {t.Fatal("selected identity missing",err)}
+ replacement:=filepath.Join(filepath.Dir(path),"replacement")
+ if err:=os.WriteFile(replacement,[]byte("fixture"),0600);err!=nil {t.Fatal(err)}
+ if err:=os.Chtimes(replacement,info.ModTime(),info.ModTime());err!=nil {t.Fatal(err)}
+ if err:=os.Rename(replacement,path);err!=nil {t.Fatal(err)}
  pool:=newExportInputPool(1,1)
  if pins,err:=pool.prepare(context.Background(),clips);!errors.Is(err,errRecordingChanged) {if pins!=nil {pins.Close()};t.Fatal("replacement passed identity verification",err)}
  if len(pool.slots)!=0 {t.Fatal("slot leaked")}
@@ -127,12 +128,11 @@ func TestCanceledFFmpegExportClosesPinsAfterRun(t *testing.T) {
  assertPinsClosed(t,pool,files)
 }
 func TestExportPinFailureDoesNotStartVideoResponse(t *testing.T) {
- dir:=t.TempDir();exportClipFixture(t,dir,"20261110_000000_clip.mp4","media")
+ dir:=t.TempDir();start:=time.Date(2026,11,10,0,0,0,0,time.UTC);scanFixture(t,dir,start,start.Add(time.Second),"clip")
  n:=&NVR{cameras:map[string]*Camera{"front":{ID:"front",Name:"Front",RecordDir:dir}}}
- cache:=newDurationCache(1,1,func(context.Context,*os.File)(time.Duration,error){return time.Second,nil})
  pool:=newExportInputPool(1,1);pool.open=func(string)(*os.File,error){return nil,os.ErrNotExist}
  query:="/api/download?camera_id=front&start_time=2026-11-10T00:00:00Z&end_time=2026-11-10T00:00:01Z"
- response:=httptest.NewRecorder();serveDownload(response,httptest.NewRequest("GET",query,nil),n,cache,pool)
+ response:=httptest.NewRecorder();serveDownload(response,httptest.NewRequest("GET",query,nil),n,pool)
  if response.Code!=503 || strings.HasPrefix(response.Header().Get("Content-Type"),"video/") || response.Header().Get("Content-Disposition")!="" {t.Fatal("pin failure started an export response",response.Code,response.Header())}
  if len(pool.slots)!=0 {t.Fatal("slot leaked")}
 }

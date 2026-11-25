@@ -83,7 +83,10 @@ func activeRecorderPIDs(t *testing.T,dir,real string,count int) []int {
 
 func assertActiveRecorderPartial(t *testing.T,dir string) {
  t.Helper()
- files,err:=filepath.Glob(filepath.Join(dir,"*_partial.mp4"));if err!=nil || len(files)!=1 {t.Fatal("expected one interrupted continuous output",files,err)}
+ files,err:=filepath.Glob(filepath.Join(dir,"????????","*_partial.mp4"));if err!=nil || len(files)!=1 {t.Fatal("expected one interrupted stamped day-folder output",files,err)}
+ stamp,err:=parseStampedName(filepath.Base(files[0]));if err!=nil {t.Fatal("interrupted output lacks valid stamp",err)}
+ if filepath.Base(filepath.Dir(files[0]))!=stampedDayName(stamp.Start) {t.Fatal("interrupted output in wrong day",files[0])}
+ loose,err:=filepath.Glob(filepath.Join(dir,"*_partial.mp4"));if err!=nil || len(loose)!=0 {t.Fatal("interrupted output published in camera root",loose,err)}
  temporary,err:=filepath.Glob(filepath.Join(dir,"*.tmp"));if err!=nil || len(temporary)!=0 {t.Fatal("synthetic continuous publication left temporary output",temporary,err)}
  ctx,cancel:=context.WithTimeout(context.Background(),10*time.Second);defer cancel()
  cmd:=exec.CommandContext(ctx,"ffmpeg","-nostdin","-v","error","-i",files[0],"-f","null","-")
@@ -203,5 +206,10 @@ func TestActiveEventAssemblyCancellationRetainsOriginalInputs(t *testing.T) {
  if _,err:=os.Stat(filepath.Join(job.dir,"concat.txt"));err!=nil {t.Fatal("assembly concat evidence lost",err)}
  m:=readRecoveryTest(t,job.dir)
  if m.State!="published" || !m.Partial || m.OutputPublished!=filepath.Base(final) {t.Fatalf("interrupted publication checkpoint incorrect: %+v",m)}
+ stamp,err:=parseStampedName(filepath.Base(final));if err!=nil {t.Fatal(err)}
+ if filepath.Dir(final)!=filepath.Join(bm.camera.RecordDir,stampedDayName(stamp.Start)) {t.Fatal("interrupted event output in wrong day",final)}
+ report:=inspectEventRecovery(context.Background(),bm.camera.RecordDir,bm.camera.ID,filepath.Base(job.dir))
+ observed:=false;for _,artifact:=range report.Artifacts {if artifact.Role=="published_output" {observed=artifact.Present}}
+ if !report.Complete || !observed {t.Fatalf("interrupted day-folder publication not observed: %+v",report)}
  assertActiveRecorderPartial(t,bm.camera.RecordDir)
 }

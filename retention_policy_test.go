@@ -4,6 +4,7 @@ import (
  "bytes"
  "context"
  "encoding/json"
+ "errors"
  "net/http"
  "net/http/httptest"
  "os"
@@ -81,7 +82,12 @@ func TestInvalidRuntimeRetentionPreservesEventsMediaAndStaging(t *testing.T) {
  }
 }
 
+// The production retention entry refuses a zero or negative duration before it touches
+// any file.
 func TestNonpositiveRetentionDurationCannotDeletePublishedMedia(t *testing.T) {
- dir:=t.TempDir();path:=filepath.Join(dir,"20000101_000000_old.mp4");putCleanupFixture(t,path,"published")
- for _,duration:=range []time.Duration{0,-time.Hour} {cleanupOldRecordingsContext(context.Background(),dir,duration);if _,err:=os.Stat(path);err!=nil {t.Fatal("invalid duration removed media")}}
+ lease:=publishedEngineLease(t);dir:=t.TempDir();path:=filepath.Join(dir,"20000101_000000_old.mp4");putCleanupFixture(t,path,"published")
+ for _,duration:=range []time.Duration{0,-time.Hour} {
+  if err:=cleanupExpiredPublishedLeased(context.Background(),lease,dir,duration,publishedEngineGuard);!errors.Is(err,errCameraRetention) {t.Fatal("nonpositive duration accepted",duration,err)}
+  if _,err:=os.Stat(path);err!=nil {t.Fatal("invalid duration removed media")}
+ }
 }

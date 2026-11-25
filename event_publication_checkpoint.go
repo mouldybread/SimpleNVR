@@ -4,6 +4,7 @@ import (
  "context"
  "errors"
  "os"
+ "path/filepath"
 )
 
 // Acquisition ownership may transfer to terminal release, never to a child or
@@ -13,6 +14,10 @@ type eventRecoveryBorrow struct {ctx context.Context;lease *mediaMutationLease;t
 
 func (bm *BufferManager) publishEventRecording(ctx,captureCtx context.Context,job *bufferEvent,temporary,final string,incomplete bool) error {
  return bm.publishEventRecordingWith(ctx,captureCtx,job,temporary,final,incomplete,func(ctx context.Context,lease *mediaMutationLease,from,to string)error{
+  if !eventPublishedPathInCamera(bm.camera.RecordDir,to) {return errPublicationOwnership}
+  if stamp,err:=parseStampedName(filepath.Base(to));err==nil {
+   if err:=ensureStampedDayDirLeased(ctx,lease,bm.camera.RecordDir,stampedDayName(stamp.Start));err!=nil {return err}
+  }
   err:=publishRecordingObservedLeased(ctx,lease,from,to,func(file,directory *os.File)error{
    borrowed:=job.recoveryBorrow
    if borrowed==nil || borrowed.lease!=lease || borrowed.output!=nil {return errPublicationOwnership}
@@ -35,7 +40,14 @@ func (bm *BufferManager) publishEventRecordingWith(ctx,captureCtx context.Contex
  job.keepStaging=true
  lease,err:=recordingMediaOwnership.acquire(ctx);if err!=nil {return err}
  transferred:=false
- defer func(){if !transferred {resultErr=errors.Join(resultErr,job.closePublishedOutput());job.recoveryBorrow=nil;lease.release()}}()
+ defer func(){
+  if !transferred {
+   // Join only a real close failure so the publisher's error keeps its identity.
+   if closeErr:=job.closePublishedOutput();closeErr!=nil {resultErr=errors.Join(resultErr,closeErr)}
+   job.recoveryBorrow=nil
+   lease.release()
+  }
+ }()
  if job.inventory!=nil {
   if job.inventory.path!=job.dir {return errStagingInventory}
   if err:=job.inventory.check(ctx,lease);err!=nil {return err}

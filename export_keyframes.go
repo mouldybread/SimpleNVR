@@ -59,7 +59,7 @@ func copyVideoOrigin(ctx context.Context,file *os.File)(float64,int,error){
 
 func inspectCopyFrames(parent context.Context,file *os.File)(copyFrameIndex,error){
  ctx,cancel:=context.WithTimeout(parent,15*time.Second);defer cancel()
- select{case recordingDurations.slots<-struct{}{}:defer func(){<-recordingDurations.slots}();case <-ctx.Done():return copyFrameIndex{},ctx.Err()}
+ release,err:=acquireExportProbe(ctx);if err!=nil{return copyFrameIndex{},err};defer release()
  origin,nalLength,err:=copyVideoOrigin(ctx,file);if err!=nil{return copyFrameIndex{},err}
  cmd:=exec.CommandContext(ctx,"ffprobe","-v","error","-protocol_whitelist","file,pipe","-format_whitelist","mov","-f","mov","-i","/proc/self/fd/3","-select_streams","v:0","-show_entries","packet=pts_time,dts_time,size,pos,flags","-of","compact=p=0")
  cmd.ExtraFiles=[]*os.File{file};cmd.WaitDelay=2*time.Second;var raw copyProbeOutput;cmd.Stdout=&raw;cmd.Stderr=io.Discard

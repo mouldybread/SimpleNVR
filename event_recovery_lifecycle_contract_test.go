@@ -95,9 +95,12 @@ func TestRecoveryContractProductionLifecycleAndPersistenceFailures(t *testing.T)
   if err:=bm.TriggerEvent(event);err!=nil {t.Fatal(err)};job:=<-bm.eventChan
   t.Cleanup(func(){if len(bm.slots)!=0 {bm.releaseJob(job)}})
   if initial:=recoveryContractReadback(t,bm,job.dir);initial.State!="pinned" || initial.Coverage!=nil {t.Fatal("setup invented processing coverage")}
-  expected:=filepath.Join(bm.camera.RecordDir,fmt.Sprintf("%s_%s_%s.mp4",job.preStart.UTC().Format("20060102_150405"),sanitizeFilename(event.Label),sanitizeFilename(event.ID)))
-  if tc.assemblyExit!=0 {expected=partialRecordingName(expected)}
-  if tc.collision {if err:=os.WriteFile(expected,[]byte("existing published evidence"),0600);err!=nil {t.Fatal(err)}}
+  expected,err:=stampedFinalPath(bm.camera.RecordDir,job.preStart,event.StartTime.Add(time.Duration(event.Duration)*time.Second),sanitizeFilename(event.Label)+"_"+sanitizeFilename(event.ID),tc.assemblyExit!=0)
+  if err!=nil {t.Fatal(err)}
+  if tc.collision {
+   if err:=os.MkdirAll(filepath.Dir(expected),0700);err!=nil {t.Fatal(err)}
+   if err:=os.WriteFile(expected,[]byte("existing published evidence"),0600);err!=nil {t.Fatal(err)}
+  }
   originalWriter:=job.recoveryWriter;injected:=errors.New("injected checkpoint failure")
   attempts,committed:=[]string{},[]string{};var failedDisk []byte
   job.recoveryWriter=func(dir string,data []byte)error{
@@ -120,6 +123,12 @@ func TestRecoveryContractProductionLifecycleAndPersistenceFailures(t *testing.T)
   }
   if tc.wantPublished {assertPublicationBytes(t,expected,"synthetic assembly evidence\n")}
   if tc.collision {assertPublicationBytes(t,expected,"existing published evidence")}
+  if tc.wantPublished || tc.collision {
+   report:=inspectEventRecovery(context.Background(),bm.camera.RecordDir,bm.camera.ID,filepath.Base(job.dir))
+   observed:=false;for _,artifact:=range report.Artifacts {if artifact.Role=="published_output" {observed=artifact.Present}}
+   if !report.Complete || !observed {t.Fatalf("day-folder output missing from inspection: %+v",report)}
+   if stored.OutputPublished!=filepath.Base(expected) {t.Fatal("publication intent disagrees with stamped destination")}
+  }
   if tc.name=="assembly_partial" && !stored.Partial {t.Fatal("partial output promoted")}
   before:=recoveryContractTree(t,bm.camera.RecordDir);coverage,err:=json.Marshal(stored.Coverage);if err!=nil {t.Fatal(err)}
   revision,attemptCount:=stored.Revision,len(attempts);inventory:=job.inventory
@@ -143,7 +152,7 @@ func TestRecoveryContractFailedPinInspectionReflectsActualPrefix(t *testing.T) {
  for _,firstMissing:=range []bool{false,true} {t.Run(fmt.Sprint(firstMissing),func(t *testing.T){
   bm:=bufferFixture(t);now:=time.Now().UTC();source:=filepath.Join(bm.camera.RecordDir,"source.mp4")
   if err:=os.WriteFile(source,bytes.Repeat([]byte("p"),2048),0600);err!=nil {t.Fatal(err)}
-  first,second:=source,filepath.Join(bm.camera.RecordDir,"missing.mp4");if firstMissing {first,second=second,source}
+  first,second:=source,filepath.Join(bm.camera.RecordDir,"missing.mp4");if firstMissing {first,second=second,first}
   bm.buffer=[]BufferSegment{{FilePath:first,StartTime:now.Add(-2*time.Second),EndTime:now.Add(-time.Second)},
    {FilePath:second,StartTime:now.Add(-time.Second),EndTime:now}}
   if err:=bm.TriggerEvent(bufferTestEvent("failed-pin-contract"));err==nil {t.Fatal("missing source accepted")}

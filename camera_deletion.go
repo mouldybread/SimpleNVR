@@ -88,6 +88,9 @@ func deleteManagedCameras(ctx context.Context,n *NVR,selection []string,deps cam
    for _,id:=range n.cameraOrder {if id!=item.id {order=append(order,id)}}
    n.cameraOrder=order
    n.mu.Unlock()
+   // The camera is gone from the registry: drop its cached disk usage so a camera
+   // later registered at the same path cannot see stale day totals.
+   evictCameraDiskUsage(item.dir)
    // Keep ownership through final persistence, independently of NVR.mu.
    // No rollback can restore already-unlinked recordings on save failure.
    if err:=deps.persist();err!=nil {return fmt.Errorf("%w: camera removed in memory but final save failed: %w",errCameraDeletePersistence,err),true}
@@ -99,7 +102,11 @@ func deleteManagedCameras(ctx context.Context,n *NVR,selection []string,deps cam
  return result
 }
 
-type cameraDeleteEntry struct {name string;stat unix.Stat_t;directory bool}
+// A stamped day folder is pinned by an open no-follow descriptor and identity. Its
+// regular, valid stamped members matching the UTC start day are planned individually;
+// the folder itself is removed only by an atomic empty-directory rmdir after them.
+type cameraDeleteDay struct {name string;file *os.File;id unix.Stat_t;deleted bool}
+type cameraDeleteEntry struct {name string;stat unix.Stat_t;directory bool;parent *cameraDeleteDay;dayRemoval bool}
 func sameCameraDeleteEntry(a,b *unix.Stat_t) bool {
  return a.Dev==b.Dev && a.Ino==b.Ino && a.Mode==b.Mode && a.Size==b.Size && a.Mtim==b.Mtim && a.Ctim==b.Ctim
 }
@@ -109,10 +116,11 @@ func openCameraDeleteDirectory(parent int,name string) (*os.File,error) {
  return os.NewFile(uintptr(fd),"camera-delete-directory"),nil
 }
 
-// Only direct regular .mp4 files and EMPTY buffer/temp directories are eligible.
-// No recursive traversal/removal and no symlink following. Inspection is bounded
-// and completes before the first unlink; late changes may still cause partial
-// deletion, but nonempty directories cannot be recursively destroyed.
+// Only direct regular .mp4 files, day folders holding only regular stamped files
+// matching the folder's UTC start day, and EMPTY buffer/temp directories are eligible.
+// No recursive traversal/removal or symlink following. Inspection is bounded
+// (8,192 entries per folder, 400 day folders) and completes before the first unlink;
+// late changes may cause partial deletion but never recursive directory destruction.
 func removeCameraDirectory(ctx context.Context,dir string,guard func() error) error {
  return removeCameraDirectoryWithUnlink(ctx,dir,guard,unix.Unlinkat)
 }
@@ -134,6 +142,8 @@ func removeCameraDirectoryWithIO(ctx context.Context,dir string,guard func() err
  // Successful child unlinks need a sync attempt even when a later check fails.
  dirty:=false
  defer func(){if dirty {resultErr=errors.Join(resultErr,syncRoot(root))}}()
+ var held []*cameraDeleteDay
+ defer func(){for _,day:=range held {if day.deleted {resultErr=errors.Join(resultErr,syncRoot(day.file))};resultErr=errors.Join(resultErr,day.file.Close())}}()
  var identity unix.Stat_t
  if err:=unix.Fstat(int(root.Fd()),&identity);err!=nil {return err}
  rootCheck:=func() error {
@@ -148,11 +158,12 @@ func removeCameraDirectoryWithIO(ctx context.Context,dir string,guard func() err
   return nil
  }
  var plan []cameraDeleteEntry
+ rootCount:=0
  for {
   if err:=rootCheck();err!=nil {return err}
   names,readErr:=root.Readdirnames(64)
   for _,entry:=range names {
-   if len(plan)>=cameraDeleteEntryLimit {return errCameraDeleteBlocked}
+   rootCount++;if rootCount>cameraDeleteEntryLimit {return errCameraDeleteBlocked}
    if err:=rootCheck();err!=nil {return err}
    next:=cameraDeleteEntry{name:entry}
    if err:=unix.Fstatat(int(root.Fd()),entry,&next.stat,unix.AT_SYMLINK_NOFOLLOW);err!=nil {return err}
@@ -160,16 +171,39 @@ func removeCameraDirectoryWithIO(ctx context.Context,dir string,guard func() err
    case unix.S_IFREG:
     if filepath.Ext(entry)!=".mp4" {return errCameraDeleteBlocked}
    case unix.S_IFDIR:
-    if entry!="buffer" && entry!="temp" {return errCameraDeleteBlocked}
-    child,err:=openCameraDeleteDirectory(int(root.Fd()),entry);if err!=nil {return err}
-    var opened unix.Stat_t
-    statErr:=unix.Fstat(int(child.Fd()),&opened)
-    children,childErr:=child.Readdirnames(1);closeErr:=child.Close()
-    if statErr!=nil {return statErr}
-    if !sameCameraDeleteEntry(&next.stat,&opened) || len(children)!=0 {return errCameraDeleteBlocked}
-    if childErr!=io.EOF {if childErr!=nil {return childErr};return errCameraDeleteBlocked}
-    if closeErr!=nil {return closeErr}
-    next.directory=true
+    if isStampedDayName(entry) {
+     if len(held)>=maxStampedScanDays {return errCameraDeleteBlocked}
+     file,err:=openCameraDeleteDirectory(int(root.Fd()),entry);if err!=nil {return err}
+     day:=&cameraDeleteDay{name:entry,file:file};held=append(held,day)
+     if err:=unix.Fstat(int(file.Fd()),&day.id);err!=nil {return err}
+     if day.id.Dev!=next.stat.Dev || day.id.Ino!=next.stat.Ino {return errCameraDeleteBlocked}
+     members:=0
+     for {
+      if err:=rootCheck();err!=nil {return err}
+      children,childErr:=file.Readdirnames(64)
+      for _,member:=range children {
+       members++;if members>cameraDeleteEntryLimit {return errCameraDeleteBlocked}
+       item:=cameraDeleteEntry{name:member,parent:day}
+       if err:=unix.Fstatat(int(file.Fd()),member,&item.stat,unix.AT_SYMLINK_NOFOLLOW);err!=nil {return err}
+       stamp,stampErr:=parseStampedName(member)
+       if item.stat.Mode&unix.S_IFMT!=unix.S_IFREG || stampErr!=nil || !stamp.inDay(entry) {return errCameraDeleteBlocked}
+       plan=append(plan,item)
+      }
+      if childErr==io.EOF {break};if childErr!=nil {return childErr}
+     }
+     next.directory=true;next.dayRemoval=true
+    } else {
+     if entry!="buffer" && entry!="temp" {return errCameraDeleteBlocked}
+     child,err:=openCameraDeleteDirectory(int(root.Fd()),entry);if err!=nil {return err}
+     var opened unix.Stat_t
+     statErr:=unix.Fstat(int(child.Fd()),&opened)
+     children,childErr:=child.Readdirnames(1);closeErr:=child.Close()
+     if statErr!=nil {return statErr}
+     if !sameCameraDeleteEntry(&next.stat,&opened) || len(children)!=0 {return errCameraDeleteBlocked}
+     if childErr!=io.EOF {if childErr!=nil {return childErr};return errCameraDeleteBlocked}
+     if closeErr!=nil {return closeErr}
+     next.directory=true
+    }
    default:return errCameraDeleteBlocked
    }
    plan=append(plan,next)
@@ -178,21 +212,36 @@ func removeCameraDirectoryWithIO(ctx context.Context,dir string,guard func() err
  }
  // Revalidate the whole plan before unlinking any entry, then each entry again
  // immediately before its unlink. Trusted directory ownership is still required:
- // stat/unlink is not an atomic compare-and-unlink operation.
+ // stat/unlink is not an atomic compare-and-unlink operation. A day folder's own
+ // timestamps change as its files go, so it is pinned by identity and kind instead.
  validate:=func(entry cameraDeleteEntry) error {
   if err:=rootCheck();err!=nil {return err}
+  fd:=int(root.Fd())
+  if entry.parent!=nil {
+   var listed unix.Stat_t
+   if err:=unix.Fstatat(fd,entry.parent.name,&listed,unix.AT_SYMLINK_NOFOLLOW);err!=nil {return err}
+   if listed.Dev!=entry.parent.id.Dev || listed.Ino!=entry.parent.id.Ino || listed.Mode&unix.S_IFMT!=unix.S_IFDIR {return errCameraDeleteBlocked}
+   fd=int(entry.parent.file.Fd())
+  }
   var current unix.Stat_t
-  if err:=unix.Fstatat(int(root.Fd()),entry.name,&current,unix.AT_SYMLINK_NOFOLLOW);err!=nil {return err}
+  if err:=unix.Fstatat(fd,entry.name,&current,unix.AT_SYMLINK_NOFOLLOW);err!=nil {return err}
+  if entry.dayRemoval {
+   if current.Dev!=entry.stat.Dev || current.Ino!=entry.stat.Ino || current.Mode&unix.S_IFMT!=unix.S_IFDIR {return errCameraDeleteBlocked}
+   return nil
+  }
   if !sameCameraDeleteEntry(&entry.stat,&current) {return errCameraDeleteBlocked}
   return nil
  }
  for _,entry:=range plan {if err:=validate(entry);err!=nil {return err}}
  for _,entry:=range plan {
   if err:=validate(entry);err!=nil {return err}
+  fd:=int(root.Fd());if entry.parent!=nil {fd=int(entry.parent.file.Fd())}
   flags:=0;if entry.directory {flags=unix.AT_REMOVEDIR}
-  if err:=unlink(int(root.Fd()),entry.name,flags);err!=nil {return err}
+  if err:=unlink(fd,entry.name,flags);err!=nil {return err}
   dirty=true
+  if entry.parent!=nil {entry.parent.deleted=true}
  }
+ for _,day:=range held {if day.deleted {if err:=syncRoot(day.file);err!=nil {return err};day.deleted=false}}
  if err:=syncRoot(root);err!=nil {return err}
  dirty=false
  if err:=rootCheck();err!=nil {return err}

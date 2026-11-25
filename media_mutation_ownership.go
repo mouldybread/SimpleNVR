@@ -13,6 +13,9 @@ var recordingMediaOwnership = newMediaMutationGate()
 
 type mediaMutationGate struct {
 	token chan struct{}
+	// waiting counts callers currently inside acquire. It is an observation seam for
+	// tests that must know a caller is blocked in admission; it never gates anything.
+	waiting atomic.Int32
 }
 
 type mediaMutationLease struct {
@@ -38,9 +41,12 @@ func (g *mediaMutationGate) acquire(ctx context.Context) (*mediaMutationLease, e
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	g.waiting.Add(1)
 	select {
 	case g.token <- struct{}{}:
+		g.waiting.Add(-1)
 	case <-ctx.Done():
+		g.waiting.Add(-1)
 		return nil, ctx.Err()
 	}
 	// A ready token can win select simultaneously with cancellation. Admission

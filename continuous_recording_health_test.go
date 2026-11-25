@@ -82,9 +82,14 @@ func TestContinuousPublicationOutcomes(t *testing.T) {
   err:=recordSegment(context.Background(),cam,1)
   if tc.code=="" {if err!=nil {t.Fatal(err)}} else if got:=noticeFrom(t,err);got.Code!=tc.code {t.Fatalf("%+v",got)}
   if err!=nil {noDiagnosticSecrets(t,err.Error())}
-  files,_:=filepath.Glob(filepath.Join(cam.RecordDir,"*_partial.mp4"))
-  if tc.partial && len(files)!=1 {t.Fatalf("partial not preserved: %v",files)}
-  if tc.code=="" {files,_=filepath.Glob(filepath.Join(cam.RecordDir,"*.mp4"));if len(files)!=1 {t.Fatal("normal output not published")}}
+  files,globErr:=filepath.Glob(filepath.Join(cam.RecordDir,"????????","*.mp4"));if globErr!=nil {t.Fatal(globErr)}
+  want:=0;if tc.partial || tc.code=="" {want=1}
+  if len(files)!=want {t.Fatalf("published outputs=%v, want %d",files,want)}
+  for _,file:=range files {
+   stamp,err:=parseStampedName(filepath.Base(file));if err!=nil {t.Fatal("unstamped output",err)}
+   if filepath.Base(filepath.Dir(file))!=stampedDayName(stamp.Start) || strings.HasSuffix(file,"_partial.mp4")!=tc.partial {t.Fatal("wrong day or partial flag",file)}
+  }
+  loose,globErr:=filepath.Glob(filepath.Join(cam.RecordDir,"*.mp4"));if globErr!=nil || len(loose)!=0 {t.Fatal("flat output published",loose,globErr)}
  })}
 }
 
@@ -151,6 +156,7 @@ func TestRecordSegmentFreezesCaptureOutcomeBeforePublication(t *testing.T) {
  if start<0 || end<=start {t.Fatal("recordSegment not found")}
  body:=source[start:end]
  if strings.Count(body,"segmentCtx.Err()")!=1 {t.Fatal("capture context must be observed exactly once, when FFmpeg returns")}
- if strings.Index(body,"captureErr:=segmentCtx.Err()")<0 || strings.Index(body,"captureErr:=segmentCtx.Err()")>strings.Index(body,"publishRecording(") {t.Fatal("capture outcome must be fixed before publication")}
+ captureAt,publishAt:=strings.Index(body,"captureErr:=segmentCtx.Err()"),strings.Index(body,"publishStampedRecordingLeased(")
+ if captureAt<0 || publishAt<0 || captureAt>publishAt {t.Fatal("capture outcome must be fixed before stamped publication")}
  if !strings.Contains(body,"continuousAttemptOutcome(ctx.Err(),captureErr,") || strings.Contains(body,"continuousAttemptResult(") {t.Fatal("recordSegment must classify with the frozen capture outcome")}
 }

@@ -6,7 +6,7 @@ work=$(mktemp -d "${RUNNER_TEMP:-/tmp}/simplenvr-runtime-export.XXXXXX")
 state=$work/state
 bin=$work/bin
 name=simplenvr-runtime-export-$$
-mkdir -p "$state/id_export/temp/retained-evidence" "$state/id_export/buffer" "$bin" "$evidence"
+mkdir -p "$state/id_export/20261110" "$state/id_export/temp/retained-evidence" "$state/id_export/buffer" "$bin" "$evidence"
 chmod 755 "$work" "$bin"
 cleanup() {
   status=$?
@@ -46,7 +46,7 @@ timeout --kill-after=5 60 docker run --rm --name "$name-generator" --network non
   -nostdin -v error -f lavfi -i testsrc2=size=512x288:rate=10 \
   -filter_threads 1 -vf noise=alls=100:allf=t+u -t 12 \
   -c:v libx264 -threads 1 -preset ultrafast -crf 0 -g 10 -pix_fmt yuv420p -an \
-  -movflags +faststart -y /recordings/id_export/20261110_130000_fixture.mp4
+  -movflags +faststart -y /recordings/id_export/20261110/20261110_130000_E20261110_130012_fixture.mp4
 printf 'synthetic retained input; not a complete recording\n' > "$state/id_export/temp/retained-evidence/event.mp4"
 printf 'synthetic invalid checkpoint; no recovery authorization\n' > "$state/id_export/temp/retained-evidence/recovery.json"
 printf 'synthetic unreported prebuffer\n' > "$state/id_export/buffer/retained-unreported.mp4"

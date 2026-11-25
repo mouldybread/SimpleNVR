@@ -98,6 +98,7 @@ func cleanupOrphanedWithIO(root string,validDirs map[string]bool,ops orphanClean
    result.Count++;result.Bytes+=info.Size()
   }
   if retained {continue}
+  if cleanupOrphanDays(dir,files,ops,readDir,preserve,stop,&result) {continue}
   if stop() {return result,nil}
   if preserve() {continue}
   if stop() {return result,nil}

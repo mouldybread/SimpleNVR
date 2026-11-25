@@ -7,6 +7,7 @@ import (
  "os"
  "path/filepath"
  "strings"
+ "time"
  "unicode"
  "unicode/utf8"
 
@@ -19,14 +20,36 @@ func privateMediaComponent(value string) bool {
  return true
 }
 
+// Only a direct filename or one UTC start day plus stamped filename is allowed.
+// Day folders must match the filename's UTC start date. Arbitrary subdirectories,
+// including buffer/temp, are never exposed by this route.
+func privateMediaParts(parts []string) bool {
+ if len(parts)!=1 && len(parts)!=2 {return false}
+ for _,part:=range parts {if !privateMediaComponent(part) {return false}}
+ if filepath.Ext(parts[len(parts)-1])!=".mp4" {return false}
+ if len(parts)==2 {
+  if len(parts[0])!=8 {return false}
+  if _,err:=time.Parse(stampDayLayout,parts[0]);err!=nil {return false}
+  stamp,err:=parseStampedName(parts[1])
+  if err!=nil || !stamp.inDay(parts[0]) {return false}
+ }
+ return true
+}
+
 // O_PATH observes type without opening a FIFO/device for data. The verified
 // regular inode is reopened through procfs, not a potentially replaced name.
-func openPrivateMediaAt(root,camera,name string) (*os.File,error) {
- if !privateMediaComponent(camera) || !privateMediaComponent(name) || filepath.Ext(name)!=".mp4" {return nil,errors.New("invalid private media path")}
+func openPrivateMediaAt(root,camera string,parts ...string) (*os.File,error) {
+ if !privateMediaComponent(camera) || !privateMediaParts(parts) {return nil,errors.New("invalid private media path")}
+ name:=parts[len(parts)-1]
  flags:=unix.O_PATH|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC
  rootFD,err:=unix.Open(root,flags,0);if err!=nil {return nil,err};defer unix.Close(rootFD)
  cameraFD,err:=unix.Openat(rootFD,camera,flags,0);if err!=nil {return nil,err};defer unix.Close(cameraFD)
- identityFD,err:=unix.Openat(cameraFD,name,unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC,0);if err!=nil {return nil,err};defer unix.Close(identityFD)
+ mediaFD:=cameraFD
+ if len(parts)==2 {
+  dayFD,err:=unix.Openat(cameraFD,parts[0],flags,0);if err!=nil {return nil,err};defer unix.Close(dayFD)
+  mediaFD=dayFD
+ }
+ identityFD,err:=unix.Openat(mediaFD,name,unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC,0);if err!=nil {return nil,err};defer unix.Close(identityFD)
  var before unix.Stat_t
  if err:=unix.Fstat(identityFD,&before);err!=nil {return nil,err}
  if before.Mode&unix.S_IFMT!=unix.S_IFREG {return nil,errors.New("private media is not regular")}
@@ -46,13 +69,13 @@ func servePrivateRecordingAt(w http.ResponseWriter,r *http.Request,n *NVR,root s
  if r.Context().Err()!=nil {return}
  if !strings.HasPrefix(r.URL.Path,"/recordings/") {http.NotFound(w,r);return}
  parts:=strings.Split(strings.TrimPrefix(r.URL.Path,"/recordings/"),"/")
- if len(parts)!=2 || !privateMediaComponent(parts[0]) || !privateMediaComponent(parts[1]) || filepath.Ext(parts[1])!=".mp4" {http.NotFound(w,r);return}
+ if (len(parts)!=2 && len(parts)!=3) || !privateMediaComponent(parts[0]) || !privateMediaParts(parts[1:]) {http.NotFound(w,r);return}
  n.mu.RLock()
  cam:=n.cameras[parts[0]]
  valid:=cam!=nil && cam.ID==parts[0] && cam.RecordDir==filepath.Join(root,parts[0])
  n.mu.RUnlock()
  if !valid {http.NotFound(w,r);return}
- file,err:=openPrivateMediaAt(root,parts[0],parts[1]);if err!=nil {http.NotFound(w,r);return};defer file.Close()
+ file,err:=openPrivateMediaAt(root,parts[0],parts[1:]...);if err!=nil {http.NotFound(w,r);return};defer file.Close()
  info,err:=file.Stat();if err!=nil || !info.Mode().IsRegular() {http.NotFound(w,r);return}
  if r.Context().Err()!=nil {return}
  w.Header().Set("Content-Type","video/mp4")

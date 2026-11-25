@@ -1,6 +1,7 @@
 package main
 
 import (
+ "context"
  "os"
  "path/filepath"
  "testing"
@@ -15,6 +16,14 @@ func putCleanupFixture(t *testing.T,path,content string) {
  if err:=os.Chtimes(path,old,old);err!=nil {t.Fatal(err)}
 }
 
+// Runs one production cleanup tick for a camera whose record directory is dir, with one
+// day of retention. This is the same path the 5-minute cleanup routine takes.
+func runProductionRetentionTick(dir string) {
+ n:=&NVR{cameras:map[string]*Camera{"a":{ID:"a",Name:"A",RecordDir:dir,RetentionDays:1}}}
+ ticks:=make(chan time.Time,1);ticks<-time.Now();close(ticks)
+ runCleanupTicks(context.Background(),n,ticks)
+}
+
 func TestPeriodicCleanupPreservesAllStaging(t *testing.T) {
  dir:=t.TempDir()
  fixtures:=map[string]string{
@@ -26,7 +35,7 @@ func TestPeriodicCleanupPreservesAllStaging(t *testing.T) {
  expired:=filepath.Join(dir,"20000101_000000_expired.mp4")
  partial:=filepath.Join(dir,"20000101_000000_expired_partial.mp4")
  putCleanupFixture(t,expired,"published");putCleanupFixture(t,partial,"published partial")
- cleanupTempFiles(dir);cleanupOldRecordings(dir,24*time.Hour)
+ cleanupTempFiles(dir);runProductionRetentionTick(dir)
  for name,data:=range fixtures {
   raw,err:=os.ReadFile(filepath.Join(dir,name))
   if err!=nil || string(raw)!=data {t.Fatalf("staging changed: %s: %v",name,err)}
@@ -66,7 +75,7 @@ func TestCleanupDoesNotFollowSymlinkedStagingOrMedia(t *testing.T) {
  putCleanupFixture(t,filepath.Join(staged,"saved.mp4"),"preserve")
  result,err:=cleanupOrphanedAt(root,nil)
  if err!=nil || result.Count!=0 || result.SkippedRecoveryDirs!=1 {t.Fatalf("unexpected result: %+v %v",result,err)}
- cleanupOldRecordings(plain,time.Hour)
+ runProductionRetentionTick(plain)
  if raw,err:=os.ReadFile(target);err!=nil || string(raw)!="outside media" {t.Fatal("outside file changed")}
  if _,err:=os.Lstat(filepath.Join(plain,"20000101_000000_link.mp4"));err!=nil {t.Fatal("media symlink removed")}
 }

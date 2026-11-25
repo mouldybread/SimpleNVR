@@ -1,13 +1,20 @@
 name: Prepared export Go verification
 
 on:
-  push:
-    branches: [fix/large-media-exports]
-  pull_request:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      checkpoint_sha:
+        description: Immutable commit selected by the checkpoint caller
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
+
+env:
+  CHECKPOINT_SHA: ${{ inputs.checkpoint_sha || github.sha }}
 
 jobs:
   go:
@@ -19,6 +26,9 @@ jobs:
       SIMPLENVR_REQUIRE_FFMPEG: '1'
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CHECKPOINT_SHA }}
+          persist-credentials: false
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -37,7 +47,7 @@ jobs:
           git diff --exit-code -- go.mod go.sum
           go build ./...
       - name: Full race-enabled Go suite including Node and native media tests
-        run: bash tests/core-ci-evidence.sh "$RUNNER_TEMP/prepared-export-go"
+        run: GITHUB_SHA="$CHECKPOINT_SHA" bash tests/core-ci-evidence.sh "$RUNNER_TEMP/prepared-export-go"
       - name: Static analysis
         if: always()
         run: go vet ./...
@@ -45,7 +55,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: prepared-export-go-${{ github.sha }}-${{ github.run_attempt }}
+          name: prepared-export-go-${{ env.CHECKPOINT_SHA }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/prepared-export-go
           if-no-files-found: warn
           retention-days: 14

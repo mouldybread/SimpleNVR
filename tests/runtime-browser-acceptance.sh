@@ -7,7 +7,7 @@ state=$work/state
 bin=$work/bin
 scratch=$work/exports
 name=simplenvr-runtime-browser-$$
-mkdir -p "$state/id_browser" "$bin" "$scratch" "$evidence"
+mkdir -p "$state/id_browser/20261110" "$bin" "$scratch" "$evidence"
 chmod 755 "$work" "$bin"
 chmod 700 "$scratch"
 cleanup() {
@@ -21,19 +21,20 @@ timeout --kill-after=2 20 python3 -m unittest discover -s tests -p 'test_browser
 # Deterministic non-reordered video exercises the supported subsection-copy path.
 # The Go suite separately retains reordered-video refusal and accurate rendering.
 for stamp in 120000 120008; do
+  case "$stamp" in 120000) endstamp=120008;; 120008) endstamp=120016;; esac
   docker run --rm --network none --entrypoint /usr/bin/ffmpeg \
     --mount "type=bind,src=$state,dst=/recordings" "$image" \
     -nostdin -v error -f lavfi -i testsrc2=size=256x144:rate=10 \
     -t 8 -c:v libx264 -threads 1 -bf 0 -g 10 -sc_threshold 0 \
     -pix_fmt yuv420p -an -movflags +faststart \
-    -y "/recordings/id_browser/20261110_${stamp}_fixture.mp4"
+    -y "/recordings/id_browser/20261110/20261110_${stamp}_E20261110_${endstamp}_fixture.mp4"
 done
 docker run --rm --network none --entrypoint /usr/bin/ffmpeg \
   --mount "type=bind,src=$state,dst=/recordings" "$image" \
   -nostdin -v error -f lavfi -i testsrc2=size=256x144:rate=10 \
   -f lavfi -i sine=frequency=440:sample_rate=48000 -t 4 \
   -c:v libx264 -threads 1 -g 10 -pix_fmt yuv420p -c:a aac -movflags +faststart \
-  -y /recordings/id_browser/20261110_123000_audio.mp4
+  -y /recordings/id_browser/20261110/20261110_123000_E20261110_123004_audio.mp4
 python3 - "$state/cameras.json" <<'PY'
 import json,sys
 cam={'id':'id_browser','name':'Browser fixture','rtsp_url':'rtsp://unused-fixture/stream','record_dir':'/recordings/id_browser','is_recording':False,'retention_days':365,'recording_mode':'no_recording'}

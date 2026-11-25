@@ -173,6 +173,8 @@ func inspectEventRecovery(ctx context.Context,rootPath,cameraID,stagingID string
  if !recoveryStagingName.MatchString(stagingID) || ctx.Err()!=nil {return report}
  fd,err:=unix.Open(rootPath,unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC,0);if err!=nil {return report}
  root:=os.NewFile(uintptr(fd),"recovery-camera");defer func(){if err:=root.Close();err!=nil {report.Complete=false;report.Errors=append(report.Errors,"descriptor_close_failed")}}()
+ var published *recoveryPublishedLocation
+ defer func(){if err:=published.close();err!=nil {report.Complete=false;report.Errors=append(report.Errors,"descriptor_close_failed")}}()
  temp,tempStat,err:=openRecoveryChild(root,"temp");if err!=nil {return report};defer func(){if err:=temp.Close();err!=nil {report.Complete=false;report.Errors=append(report.Errors,"descriptor_close_failed")}}()
  staging,stagingStat,err:=openRecoveryChild(temp,stagingID);if err!=nil {return report};defer func(){if err:=staging.Close();err!=nil {report.Complete=false;report.Errors=append(report.Errors,"descriptor_close_failed")}}()
  data,missing,err:=readRecoverySnapshot(ctx,staging)
@@ -195,7 +197,12 @@ func inspectEventRecovery(ctx context.Context,rootPath,cameraID,stagingID string
   for i,input:=range m.Inputs {index:=i;targets=append(targets,target{parent:staging,name:input.Name,role:"prebuffer",index:&index})}
   if m.OutputTemporary!="" {targets=append(targets,target{parent:root,name:m.OutputTemporary,role:"temporary_output"},target{parent:root,name:m.OutputPublished,role:"published_output"})}
   for _,target:=range targets {
-   observation,err:=observeRecoveryArtifact(ctx,target.parent,target.name,target.role,target.index)
+   var observation recoveryArtifactObservation
+   var err error
+   if target.role=="published_output" {
+    published,err=openRecoveryPublishedLocation(root,target.name)
+    if err==nil {observation,err=published.observe(ctx,target.name)}
+   } else {observation,err=observeRecoveryArtifact(ctx,target.parent,target.name,target.role,target.index)}
    if err!=nil {report.Errors=append(report.Errors,"artifact_observation_incomplete");return report}
    report.Artifacts=append(report.Artifacts,observation)
   }
@@ -205,6 +212,6 @@ func inspectEventRecovery(ctx context.Context,rootPath,cameraID,stagingID string
  var tempNow,stagingNow unix.Stat_t
  e1:=unix.Fstatat(int(root.Fd()),"temp",&tempNow,unix.AT_SYMLINK_NOFOLLOW)
  e2:=unix.Fstatat(int(temp.Fd()),stagingID,&stagingNow,unix.AT_SYMLINK_NOFOLLOW)
- if err!=nil || missingAgain!=missing || !bytes.Equal(data,again) || e1!=nil || e2!=nil || !sameRecoveryObject(&tempStat,&tempNow) || !sameRecoveryObject(&stagingStat,&stagingNow) || ctx.Err()!=nil {report.Errors=append(report.Errors,"inspection_changed_or_canceled");return report}
+ if err!=nil || missingAgain!=missing || !bytes.Equal(data,again) || e1!=nil || e2!=nil || !sameRecoveryObject(&tempStat,&tempNow) || !sameRecoveryObject(&stagingStat,&stagingNow) || published.current()!=nil || ctx.Err()!=nil {report.Errors=append(report.Errors,"inspection_changed_or_canceled");return report}
  report.Complete=true;return report
 }

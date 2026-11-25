@@ -57,10 +57,11 @@ func TestDecodedTrimMatchesSourceFramesAcrossClips(t *testing.T) {
 }
 func TestTrimLimitsCancellationAndHandlerPolicy(t *testing.T) {
  dir:=t.TempDir();clips:=syntheticExportClips(t,dir)
- for index,name:=range []string{"20261110_000000_a.mp4","20261110_000002_b.mp4"} {if err:=os.Rename(clips[index].Path,filepath.Join(dir,name));err!=nil {t.Fatal(err)}}
+ day:=filepath.Join(dir,"20261110");if err:=os.MkdirAll(day,0755);err!=nil {t.Fatal(err)}
+ for index,name:=range []string{"20261110_000000_E20261110_000002_a.mp4","20261110_000002_E20261110_000004_b.mp4"} {if err:=os.Rename(clips[index].Path,filepath.Join(day,name));err!=nil {t.Fatal(err)}}
  base:=time.Date(2026,11,10,0,0,0,0,time.UTC);ctx,cancel:=context.WithTimeout(context.Background(),30*time.Second);defer cancel()
- cache:=newDurationCache(2,2,probeVideoDuration);camera:=timelineCamera{"front","Front",dir};window:=timelineWindow{Start:base.Add(500*time.Millisecond),End:base.Add(3500*time.Millisecond)}
- selected,err:=collectRecordingIntervals(ctx,[]timelineCamera{camera},window,cache);if err!=nil {t.Fatal(err)}
+ camera:=timelineCamera{"front","Front",dir};window:=timelineWindow{Start:base.Add(500*time.Millisecond),End:base.Add(3500*time.Millisecond)}
+ selected,err:=collectRecordingIntervals(ctx,[]timelineCamera{camera},window);if err!=nil {t.Fatal(err)}
  plan,err:=buildExportPlan(selected,window);if err!=nil {t.Fatal(err)}
  pool:=newExportInputPool(1,2);pool.tempDir=t.TempDir();pins,err:=pool.prepare(ctx,plan.clips());if err!=nil {t.Fatal(err)};defer pins.Close()
  if output,err:=renderTrimmedExport(ctx,pins,plan,pool.tempDir,1);!errors.Is(err,errTrimLimit) {if output!=nil {output.Close()};t.Fatal("output limit not enforced",err)}
@@ -70,7 +71,7 @@ func TestTrimLimitsCancellationAndHandlerPolicy(t *testing.T) {
  pins.Close()
  n:=&NVR{cameras:map[string]*Camera{"front":{ID:"front",Name:"Front",RecordDir:dir}}}
  request:=httptest.NewRequest("GET","/api/download?camera_id=front&start_time=2026-11-10T00:00:00.5Z&end_time=2026-11-10T00:00:03.5Z",nil).WithContext(ctx)
- response:=httptest.NewRecorder();serveDownload(response,request,n,cache,pool)
+ response:=httptest.NewRecorder();serveDownload(response,request,n,pool)
  if response.Code!=200 || response.Header().Get("X-Export-Range-Policy")!="decoded-video-frame-window" || response.Header().Get("X-Export-Trim-Applied")!="true" || response.Header().Get("X-Export-Media-End")!="" || response.Header().Get("X-Export-Audio-Policy")!="video-only-inputs" {t.Fatal(response.Code,response.Header(),response.Body.String())}
  if !bytes.Contains(response.Body.Bytes(),[]byte("ftyp")) || len(pool.slots)!=0 {t.Fatal("trim response or cleanup failed")}
  rejected:=httptest.NewRecorder();writeTrimError(rejected,request,errTrimUnsupported)

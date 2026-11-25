@@ -3,9 +3,9 @@ import asyncio
 import time
 from urllib.parse import urlsplit
 
-FIRST = "/recordings/id_browser/20261110_120000_fixture.mp4"
-SECOND = "/recordings/id_browser/20261110_120008_fixture.mp4"
-AUDIO = "/recordings/id_browser/20261110_123000_audio.mp4"
+FIRST = "/recordings/id_browser/20261110/20261110_120000_E20261110_120008_fixture.mp4"
+SECOND = "/recordings/id_browser/20261110/20261110_120008_E20261110_120016_fixture.mp4"
+AUDIO = "/recordings/id_browser/20261110/20261110_123000_E20261110_123004_audio.mp4"
 CASES = ("metadata-pause-resume", "metadata-retarget", "paused-native-end-resume", "autoplay-denial-retry")
 EVENT_SCRIPT = r"""(() => {
  if (window.__nvrEdgeObserver?.installed===true) return;
