@@ -51,6 +51,10 @@ The `exports` directory holds temporary prepared video files. Keep it private, w
 
 Keep your existing recordings, certificates, and credentials. Add the `/exports` mount and `NVR_EXPORT_SCRATCH_DIR` setting to your existing Compose service, create the host export directory with suitable permissions, then pull the image and recreate the service. Do not reset the password as part of a routine upgrade. Prepared export jobs are lost on restart; recording files are not export scratch storage.
 
+### Recordings from versions before day folders
+
+Earlier versions wrote recordings directly into each camera folder. Newer versions write them into day folders (see [Recording storage, retention and disk usage](#recording-storage-retention-and-disk-usage)). Recordings left directly in a camera folder stay on disk but are not shown by the timeline or exports, and nothing migrates them. They are still counted in Disk Usage, are still expired by the retention cleanup using the date at the start of the file name (or the file's modification time when the name has no usable date; very short names are kept), and are removed together with the camera.
+
 ## Session timeouts
 
 A session ends after 20 minutes without a request, or 8 hours after sign-in, whichever comes first. To change either limit, click the lock button in the dashboard header, enter the new values in minutes, and choose Save and restart (click twice to confirm). SimpleNVR saves the values to `settings.json` in the same directory as the credentials file (`/recordings/.auth/settings.json` by default), shuts down gracefully, and relies on the container's restart policy to start it again. Keep `restart: unless-stopped` (or `always`) in your Compose file: with `on-failure` or no policy the container stays stopped until you start it. The restart stops live views and exports, pauses recording until SimpleNVR is back, and ends all current sessions. Nothing restarts if the saved values already match the running ones.
@@ -63,7 +67,15 @@ The idle timeout must be between 1 minute and 24 hours, and the maximum session 
 - Live preview requires go2rtc on the host in the camera's RTSP URL, with its HTTP API on port `1984`. The camera name must be unique and match the go2rtc stream name. Direct-camera preview and custom go2rtc HTTP ports are not supported.
 - Use the timeline to find recordings and events. Playback does not automatically skip gaps. Use Export range to export video; see below.
 - Known continuous-recording failures appear as "Recording failed" or "Recording failed — retrying", with the recording setting and reason shown separately. "Recording enabled" is a setting, not proof that footage is being captured.
-- Removing a camera can delete its published recordings. If removal fails or the result is unclear, refresh and check the camera and its recordings before retrying.
+- Removing a camera can delete its published recordings. Removal is refused, with an error and the camera left registered and stopped, when the camera's folder holds anything SimpleNVR does not recognise as published recordings or empty staging folders, for example leftover capture files or event staging that is not empty. If removal fails or the result is unclear, refresh and check the camera and its recordings before retrying.
+
+## Recording storage, retention and disk usage
+
+- **Layout.** Published recordings are stored as `/recordings/<camera>/<YYYYMMDD>/<start>_E<end>_<label>.mp4`. The folder is the UTC date on which the recording started, not your local date, and the file name carries the UTC start and end. A recording cut short is published with `_partial` before `.mp4`. A recording that crosses midnight stays in the folder of its start day. See [recording layout](docs/RECORDING_LAYOUT.md).
+- **Finding footage.** The timeline and exports choose recordings by reading file names, not by opening the media: a recording is included when it starts before the end of the requested range and ends after its start. Because the end time comes from the name, a wrongly stamped name gives a wrong range, not an error. Files whose names are not valid stamped names are left out and counted. If a folder cannot be read completely within its limits, the request fails with a 503 or 504 response instead of returning a smaller timeline.
+- **Retention.** The retention setting (1 to 365 days per camera; the default shown is 7) is applied by a cleanup that runs every 5 minutes. A recording expires only when its stamped end is before the cutoff; one ending exactly at the cutoff is kept. Day folders after the cutoff day are not opened, so an expired file that is misplaced or misnamed in a newer folder is cleaned up later, once that folder is old enough to be inspected. See [retention selection](docs/RETENTION_SELECTION.md).
+- **Disk usage.** The Disk Usage figure for each camera adds up its published recordings, loose `.mp4` files in the camera folder and the `.mp4` files in its recording buffers. It does not count symbolic links, other file types or `.mp4` files in any other folder. "Unavailable" means the folders could not be read completely or a limit was exceeded; it is never a smaller number. After a restart the first page load has to read every day folder once, and a camera that takes longer than about 10 seconds shows "Unavailable" until you refresh. See [disk usage](docs/DISK_USAGE.md).
+- **Playback across clips.** Playback continues from one clip into the next only when the next clip starts exactly when the previous one ended. Stamped times are wall-clock times and often differ slightly, so playback can stop at a clip boundary. This is a known limit.
 
 ## Export video
 
@@ -74,7 +86,7 @@ Select the cameras to export in the Cameras selector, move the playhead to the t
 
 Choose Queue exports for selected cameras. SimpleNVR queues one job per camera and prepares them on the server in order. The Export queue lists every export from your session. When one is ready, click Download to save it through your browser. Release a prepared file, or use Clear all, to free server space; an already-started transfer may continue. The page cannot verify that your browser saved the file to disk.
 
-Prepared files expire, normally 30 minutes after preparation finishes, and do not survive a restart. Exports require complete recording coverage: gaps are never skipped silently. A Copy export that has to cut inside a single recording file longer than about two hours is refused; choose Accurate instead. See [export rendering](docs/EXPORT_RENDERING.md) for supported media and timing limitations.
+Prepared files expire, normally 30 minutes after preparation finishes, and do not survive a restart. Exports require complete recording coverage: gaps are never skipped silently. Source recordings are chosen by their file names, as described under [Recording storage, retention and disk usage](#recording-storage-retention-and-disk-usage). A Copy export that has to cut inside a single recording file longer than about two hours is refused; choose Accurate instead. See [export rendering](docs/EXPORT_RENDERING.md) for supported media and timing limitations.
 
 ## Home Assistant events
 
