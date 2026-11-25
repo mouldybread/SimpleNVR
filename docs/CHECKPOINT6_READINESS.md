@@ -16,7 +16,13 @@ pass. No CI is requested before the checkpoint's final acceptance request.
 - `ea0ce2b6a7ce37ab001c74ae1a2e4476d5bb57f6` (slice C): cached-versus-fresh
   differential, same-tick, 34-camera scale and staging bound regressions, and the
   test inventory. Tests only.
-- Slice D (the commit containing this file): documentation reconciliation.
+- `2dae116e728bd76e9f69428c2b75e79b2ba3f102` (slice D): documentation
+  reconciliation.
+- `69da10c68c772a14843a24c4b712b1d00a10ccb5` (checkpoint 5 follow-up): waiter counter
+  on the shared media ownership gate and a stronger publication serialization test.
+  This is a production change outside the disk usage code and postdates the
+  checkpoint 5 acceptance run, so this checkpoint's run is its first verification.
+- The commit containing this file: checkpoint 5 documentation reconciliation.
 
 ## Requirement reconciliation
 
@@ -30,7 +36,7 @@ pass. No CI is requested before the checkpoint's final acceptance request.
 | Bounded and non-recursive | 8,192 entries per directory, 400 day folders, staging at the existing 8,192-entry and depth-4 limits; exact-limit tests; exceeding a bound is incomplete | Coverage committed; not run |
 | Request cost and failure | Per-render 10 s deadline and request context; detached two-minute inspections; one inspection per camera, four overall; incomplete or late figures show "Unavailable" | Implemented; timing-sensitive tests are marked in the inventory |
 | Existing safety tests and flat fixtures | No existing assertion changed; the only existing caller (`camerasHandler`) changed and its template inputs are unchanged | Must still pass final CI |
-| Documentation and status | `docs/DISK_USAGE.md`, `docs/CHECKPOINT6_TEST_INVENTORY.md` and this document; PR description updated separately after this commit | Documentation committed; PR update requires its own approved write |
+| Documentation and status | `docs/DISK_USAGE.md`, `docs/CHECKPOINT6_TEST_INVENTORY.md` and this document; PR description updated separately after the final documentation commit | Documentation committed; PR update requires its own approved write |
 
 ## Behavior changes and limits
 
@@ -57,7 +63,8 @@ No 1.79-million-file or production-scale qualification is claimed.
 
 Checkpoint 5 was recorded complete on `fa6f7854574c1378b029c37774fa31711b43c50a`,
 run [45676664390](https://github.com/mouldybread/SimpleNVR/actions/runs/45676664390),
-all eight required checks successful. That result does not cover checkpoint 6.
+all eight required checks successful. That result does not cover checkpoint 6 or
+the later commits above.
 
 After the final documentation or code commit, read PR #13's actual head SHA and use
 that immutable value as the acceptance target. Do not use a review baseline, an older
@@ -79,7 +86,8 @@ the following to complete successfully against that same final head:
 Record the source SHA and run URL. Inspect relevant job logs or state plainly that
 they could not be inspected. Pay particular attention to any camera list or camera
 registration test that exercises `camerasHandler`, to the race detector on the
-tracker tests, and to test duration of the 34-camera fixture. Queued, skipped,
+tracker tests, to test duration of the 34-camera fixture, and to the publication
+serialization test and other users of the media ownership gate. Queued, skipped,
 canceled, failed or missing checks do not qualify. A green summary alone must not
 be described as individual job-evidence inspection. Any later code or docs commit
 requires fresh acceptance on its new head. See [CI procedure](CHECKPOINT_CI.md).

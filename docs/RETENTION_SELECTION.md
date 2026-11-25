@@ -9,6 +9,13 @@ The name's maximum 24-hour span allows start-day classification:
 - The preceding day and cutoff day are inspected as boundary/lookback days.
 - Days strictly after the cutoff day are conservatively skipped by retention.
 
+Only the third group changes behavior. Old and boundary days are handled
+identically: both are opened and every file in them goes through the per-file
+predicate, identity preflight and immediate revalidation, because a folder date
+alone is never proof about its children. The classifier names all three groups and
+the tests assert them, but there is no cheaper path for wholly old days, so "old"
+and "boundary" do not differ in the work done.
+
 Classification never authorizes a whole-directory recursive deletion. All files
 in inspected days still pass the original per-file predicate, identity preflight
 and immediate revalidation. Files are individually unlinked; only empty day

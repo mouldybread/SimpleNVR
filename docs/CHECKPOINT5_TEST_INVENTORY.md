@@ -1,11 +1,10 @@
 # Checkpoint 5 regression inventory
 
 Slice C baseline: f733b3933516a413aa73d6836c1e85aeaec68f51. Slice C added tests
-only; it changed or deleted no production code or existing assertion. A later review
-fix changed orphan day evidence rechecks and two orphan test cases; they are listed
-under "Changed tests". Coverage below describes committed source, not execution.
-CI remains deferred until the checkpoint's final head. No 1.79-million-file or
-timing benchmark is claimed.
+only. Later review follow-ups changed a few tests and added others; every change is
+listed under "Changed tests". Checkpoint 5 was accepted on
+fa6f7854574c1378b029c37774fa31711b43c50a; changes after that head are marked.
+No 1.79-million-file or timing benchmark is claimed.
 
 ## New evidence
 
@@ -13,7 +12,7 @@ timing benchmark is claimed.
   real expired-file deletion in both passes; doubling skipped contents leaves
   every work counter unchanged. Root day enumeration remains visible: each pass
   observes 365 day names and three inspected member names per camera. The grown
-  fixture leaves 24,752 physical files. Exact 400/401 days and 8,192/8,193 valid
+  fixture is counted on disk (24,752 files). Exact 400/401 days and 8,192/8,193 valid
   day members are checked through published deletion, camera deletion and orphan
   evidence inspection. Camera admission uses a sentinel first-unlink error, not
   thousands of fake successful deletions; overflow must refuse before any unlink.
@@ -25,10 +24,11 @@ timing benchmark is claimed.
   camera day replacement after first unlink; orphan camera/day replacement before
   removal with replacement bytes preserved.
 - retention_publication_serialization_test.go: a publisher requesting shared
-  ownership while retention holds it cannot enter publication until retention
-  finishes and releases. Retention removes an old empty day; publication recreates
-  it under ownership and publishes without loss. Channels control ordering;
-  timeouts are deadlock watchdogs only.
+  ownership while retention holds it is observed blocked in admission through the
+  gate's waiter counter, is still waiting when retention finishes, and cannot enter
+  publication until the lease is released. Retention removes an old empty day;
+  publication recreates it under ownership and publishes without loss. Timeouts
+  are deadlock watchdogs only.
 - orphan_day_recheck_test.go (review fix): a 365-day, 1,095-file orphan camera
   completes without limit and within loose read/entry bounds that per-file whole
   camera inspection would exceed; late evidence stops removal at the 64-file batch
@@ -54,7 +54,22 @@ timing benchmark is claimed.
   empty-day read, so both files are removed, the day is retained, LimitReached is
   set and one failure is counted. Reason: the former value depended on the removed
   per-file inspections. The wanted counts for the other cases are unchanged.
-- All other cases in that file and the flat orphan tests are unchanged.
+- retention_scale_evidence_test.go, TestRetention34CameraWorkIgnoresSkippedContents,
+  final assertion (accepted head). Before: a comparison of constants that could not
+  fail. After: the tree is walked and regular files are counted. Reason: the stated
+  24,752-file fixture size was never checked.
+- retention_day_selection_test.go, TestRetentionDayClassificationUTC (accepted head).
+  Before: the only non-UTC cutoff had the same local and UTC date, so a classifier
+  using local dates would also pass. After: two offset cutoffs whose local date
+  differs from the UTC date, with a guard that checks they do. Reason: make the test
+  discriminate. Expected classifications are unchanged.
+- retention_publication_serialization_test.go (after the accepted head, `69da10c`).
+  Before: a `started` channel closed before the publisher called acquire, so the test
+  could pass without the publisher ever waiting. After: it waits for the gate's waiter
+  counter to show the publisher blocked, and asserts it is still waiting after
+  retention. Reason: establish the ordering instead of assuming it. This needs the
+  waiting counter added to media_mutation_ownership.go in the same commit.
+- All other cases in those files and the flat orphan tests are unchanged.
 
 ## Preserved earlier evidence
 
@@ -90,6 +105,6 @@ confinement. Evidence rechecks are batched, so late evidence is seen at a 64-fil
 batch or 16-day boundary. A camera with legacy root files and day folders still
 inspects fully once per root file. Retention's option-2 exception delays
 malformed/misplaced-file cleanup in skipped newer days. Root enumeration is still
-charged; retained file contents, not root day-name work, are skipped. Final
-acceptance must reconcile this inventory and inspect relevant CI evidence on the
-exact final SHA.
+charged; retained file contents, not root day-name work, are skipped. Old and
+boundary day classes are handled identically; the classification is tested but only
+the retained class changes behavior.
