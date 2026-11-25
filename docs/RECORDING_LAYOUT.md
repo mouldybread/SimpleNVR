@@ -24,7 +24,11 @@ Use `GET /api/timeline/recordings` with one `start_time` and one `end_time`, enc
 as RFC3339 timestamps. The end is exclusive; the window must be positive and no
 longer than 26 hours. Optional repeated `camera_id` parameters select cameras.
 Duplicates are deduplicated, an unknown ID returns 404, and an empty ID returns
-400. Omitting `camera_id` scans all registered cameras.
+400. Omitting `camera_id` scans all registered cameras. The playback page sends one
+`camera_id` for each camera selected for playback and makes no request when none is
+selected, so a problem in one camera's files does not affect another camera's view.
+It does this from `static/js/timeline-camera-filter.js`, a small script that wraps
+the page's timeline request, because `playback.js` itself is unchanged.
 
 A recording overlaps the window exactly when `start < windowEnd` and
 `end > windowStart`. Touching edges do not overlap. The scanner opens only UTC
@@ -44,11 +48,17 @@ Response headers include:
 - `X-Timeline-Duration-Policy: name-end`.
 - `X-Timeline-Unparseable-Count`: invalid or misplaced stamped `.mp4` names found
   in the scanned day folders, not a whole-storage audit.
+- `X-Timeline-Unreadable-Count`: valid in-window recordings that the timeline left
+  out because they were empty, not regular files or gone before inspection. See
+  [failure handling](#failure-handling).
 - `X-Timeline-Window-Start`, `X-Timeline-Window-End` and `X-Timeline-Window-Mode`.
 
 Unparseable names are excluded from timeline coverage and returned segment sizes,
 and interval selection never probes them. The older `date` query remains an HKT
 calendar-day compatibility interface; the browser uses explicit absolute bounds.
+
+The playback page shows a warning when `X-Timeline-Unreadable-Count` is above zero,
+because a skipped recording otherwise looks like a gap in the footage.
 
 `/api/recordings/list` is retired and returns 410 Gone. Use the timeline API.
 
@@ -61,7 +71,7 @@ direct download, or one export planning pass) is bounded in three ways:
 | --- | --- | --- | --- |
 | Day folders per camera | 400 | Folders the window needs. A window of up to 26 hours needs at most four. | The call fails. A very long export range can hit this. |
 | Physical entries per opened folder | 8,192 | Every name read in one folder: valid, malformed, non-`.mp4` and out-of-window alike. | The whole call fails. The bound is per folder, not per call. |
-| Relevant candidates per call | 20,000 | Valid stamped names, in the folder matching their start day, that overlap the window, across all cameras and folders. | The whole call fails before the 20,001st candidate is inspected. |
+| Relevant candidates per call | 20,000 | Valid stamped names, in the folder matching their start day, that overlap the window, across all cameras and folders. Candidates the timeline skips as unreadable still count. | The whole call fails before the 20,001st candidate is inspected. |
 
 Only the folders the window can overlap are looked up, so the work of a call grows
 with the requested window and the number of cameras, not with how many days are
@@ -79,15 +89,26 @@ Each relevant candidate within the budget gets one inspection, relative to the
 already-held day-directory descriptor with no-follow semantics (`O_PATH`,
 `O_NOFOLLOW`). Candidate 20,001 is refused without inspection. A FIFO or device is
 never opened for data, and a symlink is seen as a symlink. The candidate must be a
-regular, non-empty file. The inspection keeps the file identity that export
-pinning later compares (`sameMediaFile`).
+regular, non-empty file; otherwise it is unusable (see
+[failure handling](#failure-handling)). The inspection keeps the file identity that
+export pinning later compares (`sameMediaFile`).
 
-### Failure is all or nothing
+### Failure handling
 
-If any relevant candidate is empty, is not a regular file, vanishes after
-enumeration, cannot be inspected, or the call is canceled or times out, the entire
-scan fails. No partial interval list or timeline JSON result is returned, and
-previously accumulated healthy-camera intervals are discarded too.
+An unusable candidate is a relevant candidate that is empty, is not a regular file,
+vanishes after enumeration or cannot be inspected.
+
+Downloads and prepared-export planning are strict. Any unusable candidate, or a
+cancellation or timeout, fails the entire scan. No partial interval list is returned,
+and previously accumulated healthy-camera intervals are discarded too.
+
+The timeline is tolerant of an unusable candidate. The recording is left out of the
+result, counted in `X-Timeline-Unreadable-Count`, and the rest of the timeline is
+returned. The skipped recording appears as a gap. It is still inspected once and
+still counts towards the 20,000-candidate bound, so skipping cannot hide an oversized
+scan. Everything else still fails the whole timeline request with no partial JSON:
+cancellation or timeout, any other inspection error, a folder that cannot be read
+completely, and the three bounds above.
 
 While the request context is still active, timeline and download scan errors
 return 503 with `X-Recording-Metadata-Status: unavailable`, or 504 for a metadata
@@ -108,7 +129,8 @@ is counted in `X-Timeline-Unparseable-Count` and ignored. That covers names with
 a stamped end, a reversed or zero span, a span over 24 hours, and a valid name
 stored under the wrong day. It does not fail the call. Names without the `.mp4`
 suffix are ignored silently. A valid, in-window name that is not a regular file is
-not malformed: it is a failed candidate and fails the call.
+not malformed: it is an unusable candidate, which fails downloads and exports and is
+skipped and counted, as unreadable and not as unparseable, by the timeline.
 
 ### Work counters
 
@@ -215,6 +237,9 @@ Limits that remain:
 - Playback continues to the next clip only when its start equals the previous
   clip's end exactly. A wall-clock end will often differ slightly, so continuation
   across clips is not guaranteed. The playback script is unchanged.
+- The timeline skips an unusable recording and the playback page reports it only as
+  a transient warning, so the recording looks like a gap. Downloads and exports
+  still fail if they need that recording.
 - Opened folders are enumerated by name; repeated orphan evidence checks may
   exhaust whole-pass budgets and leave partial cleanup.
 - Old flat recordings are not read by timeline/export selection. Explicit deletion
@@ -222,12 +247,10 @@ Limits that remain:
 
 ## Acceptance status
 
-Checkpoint 4 (scan) was recorded complete on
-`bed8d53631b4f656b497596c6bd27e1d6e20e057`, run `45511972624` (all eight checks
-successful); that historical result does not validate checkpoint 5 changes.
-Checkpoint 5 is implemented with committed regression coverage and documentation,
-but final-head acceptance is pending. No local execution by the assistant or
-passing checkpoint 5 result is claimed. Require all eight checks on the exact
-final head and inspect relevant job evidence before recording completion. Any
-later code/docs commit requires a fresh run. CI is requested explicitly at the
-end, not per slice. See [checkpoint CI](CHECKPOINT_CI.md).
+Issue #11 records checkpoints 1 to 6 complete, each with all eight required checks
+successful on its own head; those results do not cover later commits. Checkpoint 7
+(documentation) was recorded complete without a CI run, by owner decision. The
+camera filter, the timeline's skip-and-report behavior and the unreadable-recording
+warning were committed afterwards and have no CI result, so no passing result is
+claimed for them. Any later code or docs commit requires a fresh run. CI is
+requested explicitly at the end, not per slice. See [checkpoint CI](CHECKPOINT_CI.md).
