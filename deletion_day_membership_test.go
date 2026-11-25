@@ -93,12 +93,16 @@ func TestOrphanDayBoundsChargeSharedBudget(t *testing.T) {
  }
 }
 
+// Evidence is inspected fully before deletion and rechecked per day and per batch,
+// not before every file. A late entry in a small day is therefore seen by the final
+// empty-only check (the day survives) rather than before the second removal; the
+// batch boundary behavior is covered in orphan_day_recheck_test.go.
 func TestOrphanDayPartialOutcomes(t *testing.T) {
  for _,kind:=range []string{"new-evidence","cancel","limit","unlink-failure","read-failure","late-rmdir"} {
   t.Run(kind,func(t *testing.T) {
    root,_,a,b:=orphanDayPair(t);day:=filepath.Dir(a)
    ctx,cancel:=context.WithCancel(context.Background());defer cancel()
-   budget:=newOrphanInspectionBudget(ctx);if kind=="limit" {budget.maxReads=7}
+   budget:=newOrphanInspectionBudget(ctx);if kind=="limit" {budget.maxReads=5}
    ops:=orphanBudgetOps(budget)
    if kind=="read-failure" {
     read:=ops.readDir
@@ -118,14 +122,15 @@ func TestOrphanDayPartialOutcomes(t *testing.T) {
    }
    result,err:=cleanupOrphanedWithIO(root,nil,ops)
    if err!=nil {t.Fatal(err)}
-   want:=1;if kind=="unlink-failure" || kind=="read-failure" {want=0};if kind=="late-rmdir" {want=2}
+   want:=2;if kind=="cancel" {want=1};if kind=="unlink-failure" || kind=="read-failure" {want=0}
    if result.Count!=want || result.Bytes!=int64(want*7) {t.Fatal(kind,result)}
    if kind=="cancel" && (!result.Interrupted || result.Failures!=1) {t.Fatal(result)}
    if kind=="limit" && (!result.LimitReached || result.Failures!=1) {t.Fatal(result)}
-   if kind=="new-evidence" && (result.SkippedRecoveryDirs!=1 || result.Failures!=0) {t.Fatal(result)}
+   if kind=="new-evidence" && (result.SkippedRecoveryDirs!=0 || result.Failures!=0) {t.Fatal(result)}
    if (kind=="unlink-failure" || kind=="read-failure" || kind=="late-rmdir") && result.Failures!=1 {t.Fatal(result)}
    if want<2 {assertPublicationBytes(t,b,"fixture")}
    if want==0 {assertPublicationBytes(t,a,"fixture")}
+   if kind=="new-evidence" {assertPublicationBytes(t,filepath.Join(day,"late.tmp"),"keep")}
    if _,err:=os.Lstat(day);err!=nil {t.Fatal("day removed after incomplete work",err)}
   })
  }

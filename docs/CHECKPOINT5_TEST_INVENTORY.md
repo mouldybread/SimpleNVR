@@ -1,9 +1,11 @@
-# Checkpoint 5 regression inventory (slice C)
+# Checkpoint 5 regression inventory
 
-Baseline: f733b3933516a413aa73d6836c1e85aeaec68f51. This slice adds tests only;
-no production code or existing test assertions are changed or deleted. Coverage
-below describes committed source, not execution. CI remains deferred until the
-checkpoint's final head. No 1.79-million-file or timing benchmark is claimed.
+Slice C baseline: f733b3933516a413aa73d6836c1e85aeaec68f51. Slice C added tests
+only; it changed or deleted no production code or existing assertion. A later review
+fix changed orphan day evidence rechecks and two orphan test cases; they are listed
+under "Changed tests". Coverage below describes committed source, not execution.
+CI remains deferred until the checkpoint's final head. No 1.79-million-file or
+timing benchmark is claimed.
 
 ## New evidence
 
@@ -27,6 +29,26 @@ checkpoint's final head. No 1.79-million-file or timing benchmark is claimed.
   finishes and releases. Retention removes an old empty day; publication recreates
   it under ownership and publishes without loss. Channels control ordering;
   timeouts are deadlock watchdogs only.
+- orphan_day_recheck_test.go (review fix): a 365-day, 1,095-file orphan camera
+  completes without limit and within loose read/entry bounds that per-file whole
+  camera inspection would exceed; late evidence stops removal at the 64-file batch
+  boundary and is preserved; root .tmp evidence stops removal at the 16-day recheck.
+
+## Changed tests
+
+- deletion_day_membership_test.go, TestOrphanDayPartialOutcomes, case new-evidence.
+  Before: late .tmp evidence stopped the second removal because every file was
+  preceded by a whole-camera inspection. After: the small day finishes its two
+  validated files and the final empty-only check keeps the day because the late
+  evidence is still there. Reason: the per-file whole-camera inspection was removed
+  because it made orphan cleanup cost grow with every removed file. The evidence is
+  still preserved; batch-boundary behavior is covered by the new tests.
+- Same test, case limit. Before: maxReads=7 stopped the pass after one removal
+  because each removal re-read the camera. After: maxReads=5 stops at the final
+  empty-day read, so both files are removed, the day is retained, LimitReached is
+  set and one failure is counted. Reason: the former value depended on the removed
+  per-file inspections. The wanted counts for the other cases are unchanged.
+- All other cases in that file and the flat orphan tests are unchanged.
 
 ## Preserved earlier evidence
 
@@ -58,9 +80,12 @@ checkpoint's final head. No 1.79-million-file or timing benchmark is claimed.
 
 Orphan cleanup retains the documented trusted-ancestor/pathname-race limitation;
 replacement tests demonstrate the explicit rechecks, not atomic descriptor
-confinement. Repeated day evidence scans can exhaust the whole-pass budget and
-must stop with accurate partial results. Retention's option-2 exception delays
+confinement. Evidence rechecks are batched, so late evidence is seen at a 64-file
+batch or 16-day boundary. A camera with legacy root files and day folders still
+inspects fully once per root file. Retention's option-2 exception delays
 malformed/misplaced-file cleanup in skipped newer days. Root enumeration is still
-charged; retained file contents, not root day-name work, are skipped. Final
-acceptance must reconcile this inventory and inspect relevant CI evidence on the
-exact final SHA after documentation/readiness work.
+charged; retained file contents, not root day-name work, are skipped. Known test
+gaps: no test asserts that the production retention tick applies the skip policy
+through its time-based entry point, and the root-level 8,192/8,193 retention
+boundary has no new test. Final acceptance must reconcile this inventory and
+inspect relevant CI evidence on the exact final SHA.
