@@ -1,8 +1,9 @@
 # Camera disk usage (checkpoint 6)
 
-The camera list shows one disk usage figure per camera. This describes slices A and
-B. It is committed source, not an execution claim, and the final documentation is
-reconciled in slice D.
+The camera list shows one disk usage figure per camera. This describes the final
+checkpoint 6 implementation. It is committed source, not an execution claim, and
+checkpoint 6 stays acceptance-pending until its CI run. See
+[readiness](CHECKPOINT6_READINESS.md) and the [test inventory](CHECKPOINT6_TEST_INVENTORY.md).
 
 ## What is counted
 
@@ -22,9 +23,10 @@ symlinks by their own size; these are deliberate behavior changes.
 
 An inspection lists the camera root once, stats each day folder entry, and opens
 only the day folders that cannot be served from the cache. Bounds: 8,192 entries per
-directory, 400 day folders per camera, and the existing event staging entry and
-depth limits for `buffer/` and `temp/`. Every read, stat and cache decision is
-counted per call; counters are internal and tests assert them instead of timing.
+directory, 400 day folders per camera, and the existing event staging limits of
+8,192 entries and depth 4 for `buffer/` and `temp/`. Exceeding any bound makes the
+inspection incomplete. Every read, stat and cache decision is counted per call;
+counters are internal and tests assert them instead of timing.
 
 ## Closed-day cache
 
@@ -38,10 +40,11 @@ A day's total is cached only when all of these hold at the time of the scan:
   scan could otherwise look unchanged.
 
 A cached day is used only while its device, inode, mtime and ctime are unchanged.
-New files, removals by retention and a replaced directory all change them, so the
-day is read again. File contents are not rechecked: published media is
-immutable (no-replace publication), which is the stated assumption. Days that
-vanish are dropped from the cache.
+New files, removals by retention, recovery publishing into an old day and a
+replaced directory all change them, so the day is read again. File contents are
+not rechecked: published media is immutable (no-replace publication), which is
+the stated assumption, and there is no periodic revalidation. Days that vanish are
+dropped from the cache.
 
 ## Rendering, concurrency and eviction
 
@@ -64,6 +67,15 @@ advances the directory's generation, so an inspection that began before the
 eviction cannot store into the state that follows it, and a camera later registered
 at the same path starts fresh.
 
+## Cold start
+
+The cache lives in memory. After a restart, or the first time a camera is listed,
+every day folder must be read once; for a camera with a year of 10-minute segments
+that is about 52,560 files, and for 34 cameras about 1.79 million. The time this
+takes on real storage has not been measured. Cameras that do not finish within the
+render deadline show "Unavailable" and are completed in the background; a later
+refresh shows their figures and then costs one stat per day folder.
+
 ## Failure
 
 If any directory cannot be read completely, a bound is exceeded, the inspection
@@ -71,8 +83,17 @@ times out or the render deadline passes, the figure is shown as "Unavailable"
 instead of a smaller number. A camera directory that does not exist yet shows
 "0 B".
 
+## Code paths
+
+The camera list uses the tracker (`recordingDiskUsage.render`). The older
+`calculateDiskUsage` function remains as a direct single-call wrapper over the same
+engine and the same cache; the camera list no longer calls it.
+
 ## Limits
 
-No run at 1.79 million files is claimed. Slices A and B have focused tests only; the
-scale, differential and race-detector evidence is slice C. Nothing here has been
-compiled or run by the assistant.
+No run at 1.79 million files is claimed, and cold-start time is unmeasured. The
+tests are source-level: focused cases, a cached-versus-fresh differential, counter
+assertions at 34 cameras x 365 day folders and the staging bounds. The race
+detector result and the interaction with existing camera list tests are known only
+after the checkpoint's CI run. Nothing here has been compiled or run by the
+assistant.
