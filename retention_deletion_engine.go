@@ -3,6 +3,8 @@ package main
 import (
  "context"
  "time"
+
+ "golang.org/x/sys/unix"
 )
 
 // A valid stamped name expires on its END time: it is deleted only when the end is
@@ -19,9 +21,17 @@ func publishedExpiredBefore(cutoff time.Time) func(string,time.Time) bool {
  }
 }
 
+// Pass an immutable cutoff for deterministic tests and one policy instant per pass.
+// Work belongs to this pass and must not be shared or reused between calls.
+func deleteExpiredPublishedLeasedAt(ctx context.Context,lease *mediaMutationLease,dir string,cutoff time.Time,guard func() error,work *publishedDeletionWork) (publishedDeleteResult,error) {
+ if work==nil {work=newPublishedDeletionWork()}
+ cutoff=cutoff.UTC();work.cutoff=&cutoff
+ return deletePublishedLeasedWithWork(ctx,lease,dir,publishedExpiredBefore(cutoff),guard,unix.Unlinkat,work)
+}
+
 // Borrow both the media lease and caller's policy guard. No nested acquisition.
 func cleanupExpiredPublishedLeased(ctx context.Context,lease *mediaMutationLease,dir string,retention time.Duration,guard func() error) error {
  if retention<=0 {return errCameraRetention}
- _,err:=deletePublishedLeased(ctx,lease,dir,publishedExpiredBefore(time.Now().UTC().Add(-retention)),guard)
+ _,err:=deleteExpiredPublishedLeasedAt(ctx,lease,dir,time.Now().UTC().Add(-retention),guard,nil)
  return err
 }

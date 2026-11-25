@@ -31,15 +31,21 @@ func deletePublishedLeased(ctx context.Context,lease *mediaMutationLease,dir str
  return deletePublishedLeasedWithUnlink(ctx,lease,dir,selectFile,guard,unix.Unlinkat)
 }
 
+func deletePublishedLeasedWithUnlink(ctx context.Context,lease *mediaMutationLease,dir string,selectFile func(string,time.Time) bool,guard func() error,unlink func(int,string,int) error) (publishedDeleteResult,error) {
+ return deletePublishedLeasedWithWork(ctx,lease,dir,selectFile,guard,unlink,nil)
+}
+
 // Fail fast; Count/Bytes describe successful unlinks, Failures=1 means this
 // pass ended with an error. Files are unlinked individually; a stamped day folder
 // is removed only by an atomic empty-directory rmdir after its files were deleted,
-// so a late entry keeps the folder. There is no recursive sweep.
-func deletePublishedLeasedWithUnlink(ctx context.Context,lease *mediaMutationLease,dir string,selectFile func(string,time.Time) bool,guard func() error,unlink func(int,string,int) error) (result publishedDeleteResult,resultErr error) {
+// so a late entry keeps the folder. There is no recursive sweep. A retention-only
+// work policy may skip newer-day contents; generic/delete-all callers pass none.
+func deletePublishedLeasedWithWork(ctx context.Context,lease *mediaMutationLease,dir string,selectFile func(string,time.Time) bool,guard func() error,unlink func(int,string,int) error,work *publishedDeletionWork) (result publishedDeleteResult,resultErr error) {
+ if work==nil {work=newPublishedDeletionWork()}
  defer func(){if resultErr!=nil {result.Failures=1}}()
  check:=func() error {
   if err:=ctx.Err();err!=nil {return err}
-  if !lease.held() || lease.gate!=recordingMediaOwnership || selectFile==nil || guard==nil || unlink==nil {return errPublishedDeletionRefused}
+  if !lease.held() || lease.gate!=recordingMediaOwnership || selectFile==nil || guard==nil || unlink==nil || work.readHook==nil || work.statHook==nil || work.statatHook==nil || work.syncHook==nil {return errPublishedDeletionRefused}
   return guard()
  }
  if err:=check();err!=nil {return result,err}
@@ -49,15 +55,15 @@ func deletePublishedLeasedWithUnlink(ctx context.Context,lease *mediaMutationLea
  defer func(){resultErr=errors.Join(resultErr,parent.Close())}()
  root,err:=openCameraDeleteDirectory(int(parent.Fd()),filepath.Base(dir));if err!=nil {return result,err}
  defer func(){resultErr=errors.Join(resultErr,root.Close())}()
- defer func(){if result.Count>0 {resultErr=errors.Join(resultErr,root.Sync())}}()
+ defer func(){if result.Count>0 {resultErr=errors.Join(resultErr,work.sync(root))}}()
  var parentID,rootID unix.Stat_t
- if err:=unix.Fstat(int(parent.Fd()),&parentID);err!=nil {return result,err}
- if err:=unix.Fstat(int(root.Fd()),&rootID);err!=nil {return result,err}
+ if err:=work.stat(int(parent.Fd()),&parentID);err!=nil {return result,err}
+ if err:=work.stat(int(root.Fd()),&rootID);err!=nil {return result,err}
  var days []*publishedDeletionDay
- defer func(){for _,day:=range days {if day.deleted>0 {resultErr=errors.Join(resultErr,day.file.Sync())};resultErr=errors.Join(resultErr,day.file.Close())}}()
+ defer func(){for _,day:=range days {if day.deleted>0 {resultErr=errors.Join(resultErr,work.sync(day.file))};resultErr=errors.Join(resultErr,day.file.Close())}}()
  sameDir:=func(fd int,name string,want unix.Stat_t) error {
   var current unix.Stat_t
-  if err:=unix.Fstatat(fd,name,&current,unix.AT_SYMLINK_NOFOLLOW);err!=nil {return err}
+  if err:=work.statat(fd,name,&current,unix.AT_SYMLINK_NOFOLLOW);err!=nil {return err}
   if current.Dev!=want.Dev || current.Ino!=want.Ino || current.Mode&unix.S_IFMT!=unix.S_IFDIR {return errPublishedDeletionRefused}
   return nil
  }
@@ -74,26 +80,30 @@ func deletePublishedLeasedWithUnlink(ctx context.Context,lease *mediaMutationLea
  seen:=0
  for {
   if err:=rootCheck();err!=nil {return result,err}
-  names,readErr:=root.Readdirnames(64)
+  names,readErr:=work.read(root,true)
   for _,name:=range names {
-   seen++;if seen>publishedDeletionEntryLimit {return result,errPublishedDeletionRefused}
+   seen++;work.Stats.EntriesProcessed++
+   if seen>publishedDeletionEntryLimit {return result,errPublishedDeletionRefused}
    if isStampedDayName(name) {
     if err:=rootCheck();err!=nil {return result,err}
     var listed unix.Stat_t
-    if err:=unix.Fstatat(int(root.Fd()),name,&listed,unix.AT_SYMLINK_NOFOLLOW);err!=nil {return result,err}
+    if err:=work.statat(int(root.Fd()),name,&listed,unix.AT_SYMLINK_NOFOLLOW);err!=nil {return result,err}
     // Symlinks and other non-directories named like a day are never followed.
     if listed.Mode&unix.S_IFMT!=unix.S_IFDIR {continue}
-    if len(days)>=maxStampedScanDays {return result,errPublishedDeletionRefused}
+    work.Stats.DayFolders++
+    if work.Stats.DayFolders>maxStampedScanDays {return result,errPublishedDeletionRefused}
+    if work.cutoff!=nil && classifyRetentionDay(name,*work.cutoff)==retentionRetainedDay {work.Stats.DaysSkipped++;continue}
     file,err:=openCameraDeleteDirectory(int(root.Fd()),name);if err!=nil {return result,err}
+    work.Stats.DaysOpened++
     day:=&publishedDeletionDay{name:name,file:file};days=append(days,day)
-    if err:=unix.Fstat(int(file.Fd()),&day.id);err!=nil {return result,err}
+    if err:=work.stat(int(file.Fd()),&day.id);err!=nil {return result,err}
     if day.id.Dev!=listed.Dev || day.id.Ino!=listed.Ino {return result,errPublishedDeletionRefused}
     continue
    }
    if filepath.Ext(name)!=".mp4" {continue}
    if err:=rootCheck();err!=nil {return result,err}
    entry:=publishedDeletionEntry{name:name}
-   if err:=unix.Fstatat(int(root.Fd()),name,&entry.stat,unix.AT_SYMLINK_NOFOLLOW);err!=nil {return result,err}
+   if err:=work.statat(int(root.Fd()),name,&entry.stat,unix.AT_SYMLINK_NOFOLLOW);err!=nil {return result,err}
    if entry.stat.Mode&unix.S_IFMT!=unix.S_IFREG {continue}
    if selectFile(name,time.Unix(entry.stat.Mtim.Sec,entry.stat.Mtim.Nsec)) {plan=append(plan,entry)}
   }
@@ -103,13 +113,14 @@ func deletePublishedLeasedWithUnlink(ctx context.Context,lease *mediaMutationLea
   count:=0
   for {
    if err:=dayCheck(day);err!=nil {return result,err}
-   names,readErr:=day.file.Readdirnames(64)
+   names,readErr:=work.read(day.file,false)
    for _,name:=range names {
-    count++;if count>publishedDeletionEntryLimit {return result,errPublishedDeletionRefused}
+    count++;work.Stats.EntriesProcessed++
+    if count>publishedDeletionEntryLimit {return result,errPublishedDeletionRefused}
     if filepath.Ext(name)!=".mp4" {continue}
     if err:=dayCheck(day);err!=nil {return result,err}
     entry:=publishedDeletionEntry{name:name,day:day}
-    if err:=unix.Fstatat(int(day.file.Fd()),name,&entry.stat,unix.AT_SYMLINK_NOFOLLOW);err!=nil {return result,err}
+    if err:=work.statat(int(day.file.Fd()),name,&entry.stat,unix.AT_SYMLINK_NOFOLLOW);err!=nil {return result,err}
     if entry.stat.Mode&unix.S_IFMT!=unix.S_IFREG {continue}
     if selectFile(name,time.Unix(entry.stat.Mtim.Sec,entry.stat.Mtim.Nsec)) {plan=append(plan,entry)}
    }
@@ -126,7 +137,7 @@ func deletePublishedLeasedWithUnlink(ctx context.Context,lease *mediaMutationLea
  validate:=func(entry publishedDeletionEntry) error {
   if entry.day==nil {if err:=rootCheck();err!=nil {return err}} else {if err:=dayCheck(entry.day);err!=nil {return err}}
   var current unix.Stat_t
-  if err:=unix.Fstatat(dirFD(entry),entry.name,&current,unix.AT_SYMLINK_NOFOLLOW);err!=nil {return err}
+  if err:=work.statat(dirFD(entry),entry.name,&current,unix.AT_SYMLINK_NOFOLLOW);err!=nil {return err}
   if !sameCameraDeleteEntry(&entry.stat,&current) {return errPublishedDeletionRefused}
   return nil
  }
@@ -135,7 +146,7 @@ func deletePublishedLeasedWithUnlink(ctx context.Context,lease *mediaMutationLea
  for _,entry:=range plan {if err:=validate(entry);err!=nil {return result,err}}
  for _,entry:=range plan {
   if err:=validate(entry);err!=nil {return result,err}
-  if err:=unlink(dirFD(entry),entry.name,0);err!=nil {return result,err}
+  if err:=work.remove(unlink,dirFD(entry),entry.name,0);err!=nil {return result,err}
   result.Count++;result.Bytes+=entry.stat.Size
   if entry.day!=nil {entry.day.deleted++}
  }
@@ -144,7 +155,7 @@ func deletePublishedLeasedWithUnlink(ctx context.Context,lease *mediaMutationLea
  for _,day:=range days {
   if day.deleted==0 {continue}
   if err:=dayCheck(day);err!=nil {return result,err}
-  if err:=unlink(int(root.Fd()),day.name,unix.AT_REMOVEDIR);err!=nil && !errors.Is(err,unix.ENOTEMPTY) && !errors.Is(err,unix.EEXIST) {return result,err}
+  if err:=work.remove(unlink,int(root.Fd()),day.name,unix.AT_REMOVEDIR);err!=nil && !errors.Is(err,unix.ENOTEMPTY) && !errors.Is(err,unix.EEXIST) {return result,err}
  }
  return result,nil
 }
