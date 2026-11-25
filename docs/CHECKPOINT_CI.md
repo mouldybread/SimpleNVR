@@ -99,6 +99,7 @@ release triggers are changed.
 Confirm the three suite workflows have no push or pull_request triggers, retain
 workflow_dispatch and workflow_call, and still contain their original tests.
 Confirm checkpoint-ci.yml accepts only labeled PR events or explicit dispatch,
-and only the exact run-checkpoint-ci label starts PR suites. Exercise the label
-and manual routes at the next checkpoint; this scheduling change alone does not
-claim that the existing Go failure is fixed or that any checkpoint passed.
+and only the exact run-checkpoint-ci label starts PR suites. The label route has
+been used for the checkpoint runs recorded in issue #11; no use of the manual
+dispatch route is recorded there. This document claims no checkpoint result
+itself; results are recorded in the issue and the checkpoint readiness documents.

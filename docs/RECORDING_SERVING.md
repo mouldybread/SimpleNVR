@@ -57,23 +57,17 @@ requiring 206, video/mp4 and the expected MP4 prefix. Anonymous private-media
 refusal and native playback assertions remain in place; these final serving
 slices do not modify browser scripts.
 
+## Source review
+
 Source review of implementation head `cd30e90bd31f019eed2d1c81a171a4e9d0856ed0`
 found no further serving implementation or targeted regression-test work in the
 agreed checkpoint 3 scope. This is a source-review assessment, not execution
 verification: the assistant has not compiled or run these changes.
 
-## Final acceptance remains pending
+## Acceptance
 
-The documentation commit containing this file becomes a new, unverified head.
-After documentation and PR-status updates, capture the exact final PR head and
-explicitly request the full [checkpoint CI](CHECKPOINT_CI.md) run. The user will
-trigger that run; this documentation change does not request it.
-
-Checkpoint 3 is not complete until all eight required checks succeed on that
-exact final head: safety core, both Chrome acceptance attempts, ordered-content
-resource measurements, safety aggregate Required checks, prepared_go, and both
-prepared_browser attempts. Queued, skipped, canceled or failed checks do not
-satisfy acceptance. Record the final SHA and run URL after inspecting the results.
-Any later commit requires another acceptance run. Older green results do not
-verify the new head. Keep PR #13 draft and issue #11 open; checkpoint 3 acceptance
-does not establish completion of the other Plan v2 checkpoints.
+Checkpoint 3 was accepted on `5887e1129f0e16dafe9c4771bf8c4d184a3fba4f`, run
+45427373922, with all eight required checks successful (check-run verification
+only; job logs were not inspected). That result covers only that head. See
+[checkpoint CI](CHECKPOINT_CI.md) and the
+[checkpoint 9 closeout record](CHECKPOINT9_CLOSEOUT.md) for the most recent full run.

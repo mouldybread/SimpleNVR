@@ -44,7 +44,7 @@ There are at most 400 day-shaped entries per orphan camera, 8,192 entries per
 opened directory, 262,144 observed entries and 4,096 directory-open/read requests
 per pass. Every inspection and recheck consumes those same budgets. A camera with
 365 days and three files per day completes well inside them. The existing
-flat-tree collector and call order are unchanged when no day entries exist. A
+flat-tree collector and call order are unchanged when no day folders exist. A
 budget or read failure cannot supply a partial listing as deletion evidence.
 
 Successful file-unlink count/bytes are reported separately from failures,
@@ -70,3 +70,16 @@ pass budget. A staging regression creates 365 day folders with more than 8,192
 published files and asserts exact root/staging counts. Existing flat budget tests
 remain unchanged. These tests have not been run by the assistant; the full
 checkpoint will be validated on its final head after all work is ready.
+
+## Acceptance status
+
+Plan v2 checkpoint 5 (retention and deletion) was accepted on
+`fa6f7854574c1378b029c37774fa31711b43c50a`, run 45676664390, all eight required
+checks successful. The checkpoint 5 tests and behavior above were included on
+that head. This is check-run verification; individual job logs were not inspected,
+and the assistant did not run the tests locally. The later documentation-only
+checkpoint 7 did not change these tests or behavior. Checkpoint 8 changes were
+accepted on `2e1b33bd4f6f23ca54339a423c0109517089cf1b`, run 45696730551, all eight
+required checks successful; it also does not change orphan cleanup. Later dead-code
+and frontend-test commits were not covered by that run. See the
+[checkpoint 9 closeout record](CHECKPOINT9_CLOSEOUT.md) for current final-head status.
