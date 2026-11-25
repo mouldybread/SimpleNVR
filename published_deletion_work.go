@@ -69,8 +69,3 @@ func classifyRetentionDay(day string,cutoff time.Time) retentionDayClass {
  if day>=stampedDayName(cutoffDay.AddDate(0,0,-1)) {return retentionBoundaryDay}
  return retentionOldDay
 }
-
-// Retention alone chooses option 2: newer day contents are conservatively left
-// untouched, including misplaced/malformed expired files, until their day ages in.
-// A nil work is convenient for production; a supplied work exposes this pass.
-func deleteExpiredPublishedAt(ctxContext interface{}) {}
