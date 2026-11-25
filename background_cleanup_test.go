@@ -45,8 +45,6 @@ func TestCanceledCleanupTickDoesNotMutateEventsOrRemoveMedia(t *testing.T) {
  awaitShutdownStep(t,done,"canceled cleanup worker did not exit")
  if len(n.events)!=1 {t.Fatal("canceled cleanup changed event metadata")}
  if _,err:=os.Stat(file);err!=nil {t.Fatalf("canceled cleanup removed media: %v",err)}
- cleanupOldRecordingsContext(ctx,dir,time.Hour)
- if _,err:=os.Stat(file);err!=nil {t.Fatalf("canceled retention removed media: %v",err)}
 }
 
 func TestManagedCleanupTickPreservesStagingAndRetainsPublishedPolicy(t *testing.T) {

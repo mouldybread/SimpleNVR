@@ -3,8 +3,6 @@ package main
 import (
  "context"
  "log"
- "os"
- "path/filepath"
  "time"
 )
 
@@ -68,31 +66,6 @@ func runCleanupTicks(ctx context.Context,n *NVR,ticks <-chan time.Time) {
     cleanupRetentionSnapshot(ctx,n,target)
    }
   }
- }
-}
-
-// Published .mp4 files, including published _partial.mp4 files, remain subject
-// to the existing camera retention policy. Opaque staging is never traversed.
-func cleanupOldRecordings(dir string,retention time.Duration) {
- cleanupOldRecordingsContext(context.Background(),dir,retention)
-}
-
-func cleanupOldRecordingsContext(ctx context.Context,dir string,retention time.Duration) {
- if ctx.Err()!=nil || retention<=0 {return}
- files,err:=filepath.Glob(filepath.Join(dir,"*.mp4"))
- if err!=nil {return}
- cutoff:=time.Now().UTC().Add(-retention)
- for _,file:=range files {
-  if ctx.Err()!=nil {return}
-  name:=filepath.Base(file)
-  if len(name)<15 {continue}
-  info,err:=os.Lstat(file)
-  if err!=nil || !info.Mode().IsRegular() {continue}
-  start,err:=time.ParseInLocation("20060102_150405",name[:15],time.UTC)
-  if err!=nil {start=info.ModTime().UTC()}
-  if !start.Before(cutoff) {continue}
-  if ctx.Err()!=nil {return}
-  if err:=os.Remove(file);err!=nil {log.Printf("Unable to remove expired recording %s",name)}
  }
 }
 

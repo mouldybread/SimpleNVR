@@ -9,7 +9,6 @@ import (
 )
 
 const recordingMetadataBudget=30*time.Second
-const maxRecordingScanEntries=8192
 var errRecordingMetadata=errors.New("recording metadata unavailable")
 var errRecordingChanged=errors.New("recording changed during inspection")
 var errRecordingScanLimit=errors.New("recording scan limit exceeded")
