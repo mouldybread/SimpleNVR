@@ -113,10 +113,11 @@ not malformed: it is a failed candidate and fails the call.
 ### Work counters
 
 Each call carries its own counters: day lookups, days opened, all names returned
-by directory reads (including batch read-ahead on failure), and candidate
-inspections actually started. Successful interval count gives accepted candidate
-count; candidate 20,001 fails before increasing the inspection count. Counters are
-internal, not HTTP response fields, and tests use them rather than timing.
+by directory reads (including batch read-ahead on failure), relevant candidates
+identified after name/day/overlap filtering and before admission, and metadata
+inspections actually started. Candidate 20,001 increases RelevantCandidates but
+not MetadataCalls. Counters are internal, not HTTP fields; tests use them rather
+than timing.
 
 ## Exports
 
@@ -152,33 +153,57 @@ remains in place; selection adds no further media-validity check.
 
 ## Retention and deletion
 
-For a valid stamped name, automatic retention expires the file only when its end
-is strictly before the cutoff; equality is retained. Unparseable names retain the
-existing fallback: a parseable start prefix is used first, otherwise mtime is used
-for names long enough for that fallback. Short names remain preserved by retention.
+In inspected folders, valid stamped names expire only when their end is strictly
+before the UTC cutoff; equality is retained. Unparseable names use a parseable
+start prefix first, otherwise mtime for sufficiently long names. Short names are
+preserved. Retention conservatively skips day folders strictly after the cutoff's
+UTC day. This agreed exception delays cleanup of malformed or misplaced expired
+entries inside those skipped folders until the folder ages into the inspected
+range. It does not broaden deletion eligibility. Direct-root fallback, generic
+selector behavior and delete-all selection are unchanged.
 
-Retention and camera deletion inspect at most 400 day folders per camera and
-8,192 entries per folder. Production mutation admission retains the shared
-`recordingMediaOwnership` lease. Day directories are opened no-follow; deletion
-uses pinned descriptors, fd-relative checks and individual unlinks, not recursive
-removal. Camera deletion refuses unexpected entries and nonempty staging or buffer
-directories. A day folder is removed only with an empty-directory rmdir, so late
-entries cannot be swept recursively. A failed pass can follow partial deletion;
-review the reported outcome before retrying.
+Root day-name enumeration remains necessary. Retention counts all real day
+folders, including skipped ones, toward 400; root and opened folders retain the
+8,192-entry processing bound. Skipped contents are not inspected for that bound.
+Inspected old/boundary folders still use individual-file selection, full candidate
+preflight and immediate identity revalidation, never deletion based only on the
+folder date. Shared ownership, policy/registry/shutdown guards, directory syncs,
+fd-relative no-follow operations and empty-only rmdir remain. See
+[retention selection](RETENTION_SELECTION.md).
+
+Camera deletion keeps the direct-root regular .mp4 compatibility rule. Inside a
+day folder, every member must be a regular valid stamped .mp4 with a UTC start day
+matching the folder. Unexpected/malformed/misplaced entries, symlinks, special
+files, nested content and nonempty staging/buffer block deletion before unlink.
+Stop/join/persist/lease sequencing is unchanged.
+
+Orphan cleanup skips registered and hidden camera directories and descends only
+one day level. Root/day .tmp evidence, nonempty or opaque temp/buffer, and invalid
+day members preserve associated media. Every repeated inspection spends the same
+pass budget: 8,192 entries per directory, 400 day-shaped entries per camera,
+262,144 observed entries and 4,096 directory-read/open requests per pass. Existing
+flat-tree budget behavior is retained. Staging scanning counts root day names but
+does not descend into published day contents; root .tmp and actual temp contents
+still count. See [camera/orphan cleanup](ORPHAN_DAY_CLEANUP.md).
+
+Deletion is not transactional: failure can follow successful unlinks. Published
+engine count/bytes report successful file unlinks; later unlink, guard or sync
+failure marks the pass incomplete without restoring files. Orphan cleanup also
+reports failures, interruption, budget exhaustion and skipped evidence directories;
+directory removal is not counted as deleted media. Empty-only rmdir preserves
+late entries. Inspect partial outcomes before retrying. The orphan path retains
+its trusted-ancestor/pathname-race limitation and does not claim full descriptor
+confinement.
 
 ## Test evidence and known limits
 
-Committed scanner regressions assert per-call counters, not timing: more than
-20,000 physical files with a narrow window; 34 cameras with a year of retained
-start-day folders and identical requested-window work before and after growth;
-exactly 20,000 and 20,001 candidates across cameras; two folders of exactly 8,192
-entries and one more; window-edge, 24-hour-span, midnight, misfiled-name and
-equivalent-offset cases; and fail-closed cases for empty, directory, symlink and
-FIFO candidates, vanished files, metadata errors and cancellation. Integration
-tests cover timeline and download failures and export planning without a renderer.
-Additional regressions check batch read-ahead on early inspection failure and an
-ordered healthy-then-failing camera scan that discards all accumulated intervals.
-These are source-level coverage descriptions, not claims of successful execution.
+Committed scanner regressions cover more than 20,000 physical files, 34 cameras,
+exact candidate/folder limits, boundaries, offsets, malformed/wrong-day names,
+metadata failures and cancellation. Checkpoint 5 adds 34-camera retention work
+comparisons, exact deletion bounds and day-level failure/preservation evidence.
+See the [test inventory](CHECKPOINT5_TEST_INVENTORY.md) and
+[readiness reconciliation](CHECKPOINT5_READINESS.md) for source-level mappings;
+these are not claims of successful execution on the current head.
 
 Limits that remain:
 
@@ -190,15 +215,19 @@ Limits that remain:
 - Playback continues to the next clip only when its start equals the previous
   clip's end exactly. A wall-clock end will often differ slightly, so continuation
   across clips is not guaranteed. The playback script is unchanged.
-- Folders that are opened are enumerated by name; the per-folder bound limits that
-  cost but does not remove it.
-- Old flat recordings are not read.
+- Opened folders are enumerated by name; repeated orphan evidence checks may
+  exhaust whole-pass budgets and leave partial cleanup.
+- Old flat recordings are not read by timeline/export selection. Explicit deletion
+  retains its documented direct-root compatibility behavior.
 
 ## Acceptance status
 
-Documentation describes the implementation, not a successful acceptance run.
-Checkpoint 3 (serving) is recorded complete in the issue on its own exact head.
-Checkpoint 4 (scan) may be recorded complete only when all eight required checks
-succeed on the exact final PR head; older results do not carry forward and any
-later commit needs a new run. CI is explicitly requested only at the end of the
-checkpoint. See [checkpoint CI](CHECKPOINT_CI.md).
+Checkpoint 4 (scan) was recorded complete on
+`bed8d53631b4f656b497596c6bd27e1d6e20e057`, run `45511972624` (all eight checks
+successful); that historical result does not validate checkpoint 5 changes.
+Checkpoint 5 is implemented with committed regression coverage and documentation,
+but final-head acceptance is pending. No local execution by the assistant or
+passing checkpoint 5 result is claimed. Require all eight checks on the exact
+final head and inspect relevant job evidence before recording completion. Any
+later code/docs commit requires a fresh run. CI is requested explicitly at the
+end, not per slice. See [checkpoint CI](CHECKPOINT_CI.md).
