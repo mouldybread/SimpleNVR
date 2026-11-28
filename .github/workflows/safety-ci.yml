@@ -227,7 +227,7 @@ jobs:
           go mod download
           go mod verify
           git diff --exit-code -- go.mod go.sum
-          go test -c -o "$RUNNER_TEMP/correspondence-resource.test" .
+          go test -c -o "$RUNNER_TEMP/correspondence-resource.test" ./cmd/simplenvr
       - name: Measure longer generated recordings and existing ceiling refusal
         timeout-minutes: 8
         shell: bash

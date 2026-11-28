@@ -150,7 +150,7 @@ func TestContinuousTimeoutOnlyReportsCaptureDeadline(t *testing.T) {
 }
 
 func TestRecordSegmentFreezesCaptureOutcomeBeforePublication(t *testing.T) {
- raw,err:=os.ReadFile("recorder.go");if err!=nil {t.Fatal(err)}
+ raw,err:=os.ReadFile("cmd/simplenvr/recorder.go");if err!=nil {t.Fatal(err)}
  source:=string(raw)
  start,end:=strings.Index(source,"func recordSegment("),strings.Index(source,"func sanitizeFilename(")
  if start<0 || end<=start {t.Fatal("recordSegment not found")}

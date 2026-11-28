@@ -35,7 +35,7 @@ These are required restrictions for the proposed supported profile, not claims o
 
 The opt-in Go test is skipped unless SIMPLENVR_DEPLOYMENT_TEST_ROOT names a real scratch parent on the intended filesystem. Example, using an operator-owned directory on that filesystem:
 
-    SIMPLENVR_DEPLOYMENT_TEST_ROOT=/operator-supplied/scratch go test -count=1 -v -run '^TestDeploymentFilesystemCompatibility$' .
+    SIMPLENVR_DEPLOYMENT_TEST_ROOT=/operator-supplied/scratch go test -count=1 -v -run '^TestDeploymentFilesystemCompatibility$' ./cmd/simplenvr
 
 It creates only a uniquely named synthetic scratch directory, then removes that test directory. It does not inspect or delete existing recordings. It checks actual no-replace rename/collision preservation, reopening an original inode through procfs after pathname replacement, and the application's publication boundary with an accepting synthetic probe. Save the exact commit, runtime/kernel/filesystem context and DEPLOYMENT_FILESYSTEM_COMPATIBILITY log. Run under the intended permissions and container procfs policy. This is not a media-decode, power-loss, fsync-durability or lost-mount test.
 

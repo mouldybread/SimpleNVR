@@ -5,7 +5,7 @@ mkdir -p "$evidence"
 evidence=$(cd "$evidence" && pwd)
 head=$(git rev-parse HEAD)
 expected_head=${GITHUB_SHA:?GitHub head required}
-package=$(go list .)
+package=$(go list ./cmd/simplenvr)
 media="$evidence/bframe-media"
 mkdir -p "$media/bin"
 helper=$(pwd)/tests/acceptance/capture-copy-media.py
