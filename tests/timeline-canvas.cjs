@@ -14,7 +14,7 @@ const ctx={fillRect(...a){rectangles.push(a);},fillText(s){labels.push(s);},meas
 const rect={left:10,top:20,width:500,height:170};
 const canvas={offsetWidth:1000,width:1000,height:85,style:{},getContext(){return ctx;},getBoundingClientRect(){return rect;},addEventListener(k,fn){listeners[k]=fn;}};
 const context=vm.createContext({console,document:{readyState:'loading',body,createElement:tag=>new Element(tag),addEventListener(){},getElementById:id=>id==='timeline-canvas'?canvas:null},window:{},setTimeout(fn,delay){const id=++timerID;timers.set(id,{fn,delay});return id;},clearTimeout(id){timers.delete(id);}});
-for(const file of ['static/js/events.js','static/js/timeline-geometry.js','static/js/playback.js']) vm.runInContext(fs.readFileSync(file,'utf8'),context,{filename:file});
+for(const file of ['static/js/events.js','static/js/timeline-geometry.js','static/js/playback-state.js','static/js/playback-camera-date.js','static/js/playback-timeline-load.js','static/js/playback-canvas.js','static/js/playback-seek-session.js','static/js/playback-video-controls.js']) vm.runInContext(fs.readFileSync(file,'utf8'),context,{filename:file});
 const run=code=>vm.runInContext(code,context);context.performSeek=time=>seeks.push(time.getTime());
 function flush(){for(const [id,timer] of [...timers])if(timer.delay===100){timers.delete(id);timer.fn();}}
 function click(f,y=80){listeners.click({clientX:rect.left+f*rect.width,clientY:rect.top+y*rect.height/canvas.height});flush();}
@@ -54,5 +54,5 @@ listeners.mousemove({clientX:rect.left,clientY:rect.top+rect.height});assert.equ
 hover(event);assert.equal(body.children.length,1);listeners.mouseleave();assert.equal(body.children.length,0);assert.equal(run('eventTooltip'),null);
 rect.width=0;const count=seeks.length;click(0.5);assert.equal(seeks.length,count);
 const page=fs.readFileSync('templates/index.html','utf8'),scripts=[...page.matchAll(/<script src="([^"]+)"><\/script>/g)].map(match=>match[1]);
-assert.equal(scripts.filter(src=>src==='/static/js/timeline-geometry.js').length,1);assert.ok(scripts.indexOf('/static/js/timeline-geometry.js')<scripts.indexOf('/static/js/playback.js'));
+assert.equal(scripts.filter(src=>src==='/static/js/timeline-geometry.js').length,1);assert.ok(scripts.indexOf('/static/js/timeline-geometry.js')<scripts.indexOf('/static/js/playback-state.js'));
 console.log('Real-script timeline canvas regressions passed in '+process.env.TZ);

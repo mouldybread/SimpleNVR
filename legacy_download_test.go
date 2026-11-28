@@ -23,7 +23,7 @@ func TestNoLegacyDownloadCallsInAssets(t *testing.T) {
   })
   if err!=nil {t.Fatal(err)}
  }
- playback,err:=os.ReadFile("static/js/playback.js");if err!=nil {t.Fatal(err)}
+ playback,err:=func()([]byte,error){var all []byte;for _,p:=range []string{"static/js/playback-state.js","static/js/playback-camera-date.js","static/js/playback-timeline-load.js","static/js/playback-canvas.js","static/js/playback-seek-session.js","static/js/playback-video-controls.js"}{b,e:=os.ReadFile(p);if e!=nil{return nil,e};all=append(all,b...)};return all,nil}();if err!=nil {t.Fatal(err)}
  if bytes.Contains(playback,[]byte("/api/download")) {t.Fatal("playback module must not retain a direct export-request path")}
  page,err:=os.ReadFile("templates/index.html");if err!=nil {t.Fatal(err)}
  if !bytes.Contains(page,[]byte(`onclick="startExportDownloads()"`)) {t.Fatal("monitored export entry point is not wired to the page")}

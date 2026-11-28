@@ -21,7 +21,7 @@ class Element {
 const list = new Element('div');
 const body = new Element('body');
 const context = vm.createContext({console,document:{readyState:'loading',body,addEventListener(){},createElement:tag => new Element(tag),getElementById:id => id === 'events-list' ? list : null},window:{}});
-for (const file of ['static/js/events.js','static/js/playback.js']) vm.runInContext(fs.readFileSync(file,'utf8'),context,{filename:file});
+for (const file of ['static/js/events.js','static/js/playback-state.js','static/js/playback-camera-date.js','static/js/playback-timeline-load.js','static/js/playback-canvas.js','static/js/playback-seek-session.js','static/js/playback-video-controls.js']) vm.runInContext(fs.readFileSync(file,'utf8'),context,{filename:file});
 const payload = `<img src=x onerror="globalThis.pwned=1"><svg onload="globalThis.pwned=2">& ' \\ </script>`;
 const camera = `front');globalThis.pwned=3;// ${payload}`;
 const timestamp = `');globalThis.pwned=4;//`;

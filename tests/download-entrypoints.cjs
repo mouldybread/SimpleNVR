@@ -2,7 +2,7 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const vm=require('node:vm');
 const context=vm.createContext({console,document:{readyState:'loading',addEventListener(){},getElementById(){return null;}},window:{addEventListener(){}}});
-vm.runInContext(fs.readFileSync('static/js/playback.js','utf8'),context,{filename:'static/js/playback.js'});
+vm.runInContext(['static/js/playback-state.js','static/js/playback-camera-date.js','static/js/playback-timeline-load.js','static/js/playback-canvas.js','static/js/playback-seek-session.js','static/js/playback-video-controls.js'].map(f=>fs.readFileSync(f,'utf8')).join(''),context,{filename:'static/js/playback.js'});
 assert.equal(vm.runInContext('typeof startDownload',context),'undefined');
 assert.equal(Object.prototype.hasOwnProperty.call(context,'startDownload'),false);
 // The old export modal and its separate camera checklist are gone; export uses the playback selection.
