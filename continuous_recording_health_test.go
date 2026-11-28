@@ -57,7 +57,7 @@ func TestContinuousUpstreamFailureAndCameraResponse(t *testing.T) {
  defer func(){nvr=oldNVR;templates=oldTemplates}()
  nvr=&NVR{cameras:map[string]*Camera{cam.ID:cam,other.ID:other},cameraOrder:[]string{cam.ID,other.ID}}
  var parseErr error
- templates,parseErr=template.ParseFiles("templates/cameras.html")
+ templates,parseErr=template.ParseFiles("web/templates/cameras.html")
  if parseErr!=nil {t.Fatal(parseErr)}
  w:=httptest.NewRecorder();camerasHandler(w,httptest.NewRequest("GET","https://nvr.test/api/cameras",nil))
  if w.Code!=200 || strings.Count(w.Body.String(),`class="camera-recording-error"`)!=1 || !strings.Contains(w.Body.String(),"DESCRIBE 404") {t.Fatalf("%d %s",w.Code,w.Body.String())}

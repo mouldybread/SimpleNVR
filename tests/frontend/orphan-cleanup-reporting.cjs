@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const { test } = require('node:test');
-const source = fs.readFileSync('static/js/cameras.js', 'utf8');
+const source = fs.readFileSync('web/static/js/cameras.js', 'utf8');
 const valid = {success:true,count:2,size_mb:1.25,skipped_recovery_dirs:0,failures:0,interrupted:false,limit_reached:false};
 
 function element() {

@@ -1,6 +1,6 @@
 'use strict';
 const assert = require('node:assert/strict');
-const g = require('../../static/js/timeline-geometry.js');
+const g = require('../../web/static/js/timeline-geometry.js');
 const expected = {'UTC':[24,24], 'Asia/Hong_Kong':[24,24], 'America/Chicago':[23,25]};
 assert.ok(expected[process.env.TZ], 'configured test timezone required');
 for (const [i, month] of [2,10].entries()) {

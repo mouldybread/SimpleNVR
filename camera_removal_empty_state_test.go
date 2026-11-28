@@ -16,7 +16,7 @@ import (
 // nonredirected HTTP 200 text/html fragment with no document-level tags, so the
 // served empty state must satisfy that contract rather than look ambiguous.
 func TestCameraListEmptyStateSatisfiesRemovalResponseContract(t *testing.T) {
-	parsed, err := template.ParseGlob("templates/*.html")
+	parsed, err := template.ParseGlob("web/templates/*.html")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path');
 const {environment, letterId, view, response} = require('./export-ui-fixture.cjs');
-const source = fs.readFileSync(path.join(__dirname, '../../static/js/export-ui.js'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '../../web/static/js/export-ui.js'), 'utf8');
 
 // Static security policy: no video buffering, no HTML sinks, no legacy approval flow.
 for (const banned of ['new Blob(', 'createObjectURL', '.blob()', 'arrayBuffer(', 'innerHTML', 'outerHTML', 'insertAdjacentHTML', 'document.write',

@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const { test } = require('node:test');
-const source = fs.readFileSync('static/js/recordings.js', 'utf8');
+const source = fs.readFileSync('web/static/js/recordings.js', 'utf8');
 const complete = {success:true,deleted:2,size_mb:1.25,failures:0};
 function element() {
     const classes = new Set();
@@ -31,7 +31,7 @@ function harness(options = {}) {
             return promise;
         }
     });
-    vm.runInContext(source,c,{filename:'static/js/recordings.js'}); ready.forEach(fn => fn());
+    vm.runInContext(source,c,{filename:'web/static/js/recordings.js'}); ready.forEach(fn => fn());
     const run = code => vm.runInContext(code,c);
     return {c,nodes,timers,calls,notices,run,get refreshes() { return refreshes; },
         advance(ms) { now += ms; },

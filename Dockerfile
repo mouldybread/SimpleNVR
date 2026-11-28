@@ -11,8 +11,8 @@ FROM alpine:3.24.4@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0
 RUN apk add --no-cache ffmpeg ca-certificates && ffmpeg -hide_banner -encoders 2>/dev/null | grep -q '[[:space:]]libx264[[:space:]]'
 WORKDIR /app
 COPY --from=builder /app/simplenvr /app/simplenvr
-COPY --from=builder /app/templates /app/templates
-COPY --from=builder /app/static /app/static
+COPY --from=builder /app/web/templates /app/web/templates
+COPY --from=builder /app/web/static /app/web/static
 EXPOSE 443
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["/app/simplenvr"]

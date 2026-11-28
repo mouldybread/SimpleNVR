@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const { test } = require('node:test');
-const source = fs.readFileSync('static/js/modals.js', 'utf8');
+const source = fs.readFileSync('web/static/js/modals.js', 'utf8');
 const origin = 'https://nvr.invalid:9443';
 const videoHTML = '<video id="liveVideo" controls autoplay muted style="width: 100%; max-height: 70vh;"></video>';
 function harness(onDemand=false) {
@@ -29,7 +29,7 @@ function harness(onDemand=false) {
         window:{},showError:message=>errors.push(message),console,
         fetch() {throw new Error('Live-name tests must not contact a server');}
     });
-    vm.runInContext(source,context,{filename:'static/js/modals.js'});
+    vm.runInContext(source,context,{filename:'web/static/js/modals.js'});
     return {context,nodes,errors,assignments,get creations() {return creations;},get rewrites() {return rewrites;},
         state:code=>vm.runInContext(code,context)};
 }

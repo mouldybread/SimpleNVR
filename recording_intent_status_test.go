@@ -8,7 +8,7 @@ import (
 )
 
 func TestCameraTemplateRecordingStatus(t *testing.T) {
- tmpl,err:=template.ParseFiles("templates/cameras.html")
+ tmpl,err:=template.ParseFiles("web/templates/cameras.html")
  if err!=nil {t.Fatal(err)}
  failure:=continuousRecordingNotice{Code:"upstream_rtsp_unavailable",Message:"Could not open upstream stream",Detail:"DESCRIBE 404",PublicationMessage:"Check recording storage",Retrying:true}
  notRetrying:=failure;notRetrying.Retrying=false
@@ -59,7 +59,7 @@ func TestCameraTemplateRecordingStatus(t *testing.T) {
 }
 
 func TestCameraTemplateRecordingRecoveryAndEscaping(t *testing.T) {
- tmpl,err:=template.ParseFiles("templates/cameras.html");if err!=nil {t.Fatal(err)}
+ tmpl,err:=template.ParseFiles("web/templates/cameras.html");if err!=nil {t.Fatal(err)}
  view:=map[string]interface{}{
   "ID":"test","Name":"Test camera","RTSPUrl":"","RecordDir":"/recordings/test","DiskUsage":"0 B",
   "IsRecording":true,"RecordingMode":ModeContinuous,"ModeDisplay":"Continuous","RetentionDisplay":7,

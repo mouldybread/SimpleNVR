@@ -21,7 +21,7 @@ type dashboardRoute struct {
 	path   string
 }
 
-// Requests the dashboard issues, taken from static/js/*.js and the routes
+// Requests the dashboard issues, taken from web/static/js/*.js and the routes
 // registered in main.go. /auth/session is covered by the probe tests.
 var dashboardRoutes = []dashboardRoute{
 	{"index", "GET", "/"},

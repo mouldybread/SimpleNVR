@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const { test } = require('node:test');
-const source = fs.readFileSync('static/js/cameras.js', 'utf8');
+const source = fs.readFileSync('web/static/js/cameras.js', 'utf8');
 const fragment = '<div class="camera-box">Current camera list</div>';
 function element(role, options) {
     const classes = new Set(); let html = '';
@@ -41,7 +41,7 @@ function harness(options = {}) {
             return promise;
         }
     });
-    vm.runInContext(source,c,{filename:'static/js/cameras.js'}); c.setupDeleteCamerasModal();
+    vm.runInContext(source,c,{filename:'web/static/js/cameras.js'}); c.setupDeleteCamerasModal();
     const state=code => vm.runInContext(code,c);
     return {c,nodes,timers,calls,notices,state,get refreshes() { return refreshes; },
         advance(ms) { now+=ms; },flush(delay) { for (const [id,t] of [...timers]) if(t.delay===delay) { timers.delete(id);t.fn(); } },

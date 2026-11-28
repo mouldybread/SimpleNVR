@@ -1,6 +1,6 @@
 'use strict';
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
-const source=['static/js/playback-state.js','static/js/playback-camera-date.js','static/js/playback-timeline-load.js','static/js/playback-canvas.js','static/js/playback-seek-session.js','static/js/playback-video-controls.js'].map(f=>fs.readFileSync(f,'utf8')).join('');
+const source=['web/static/js/playback-state.js','web/static/js/playback-camera-date.js','web/static/js/playback-timeline-load.js','web/static/js/playback-canvas.js','web/static/js/playback-seek-session.js','web/static/js/playback-video-controls.js'].map(f=>fs.readFileSync(f,'utf8')).join('');
 class Video {
  constructor(){this.listeners=new Map();this.style={};this.message={style:{}};this.parentElement={querySelector:()=>this.message};this.duration=60;this.currentTime=0;this.ended=false;this.assignments=[];this.plays=0;this.pauses=0;this.nextPlay=null;}
  addEventListener(name,fn){if(!this.listeners.has(name))this.listeners.set(name,new Set());this.listeners.get(name).add(fn);}
@@ -14,7 +14,7 @@ class Video {
 function harness(extra=[[60,120,'/second.mp4']]){
  const timers=new Map(),errors=[];let id=0;const video=new Video();
  const c=vm.createContext({console,testVideo:video,document:{readyState:'loading',addEventListener(){},getElementById(){return null;}},showError:message=>errors.push(message),setTimeout(fn,delay){const key=++id;timers.set(key,{fn,delay});return key;},clearTimeout(key){timers.delete(key);}});
- vm.runInContext(source,c,{filename:'static/js/playback.js'});const run=code=>vm.runInContext(code,c);
+ vm.runInContext(source,c,{filename:'web/static/js/playback.js'});const run=code=>vm.runInContext(code,c);
  run(`currentDate=new Date(2026,10,10);allCameras=[{id:'a',name:'A'}];selectedCameras=['a'];videoPlayers=[testVideo];`);
  const start=new Date(2026,10,10,12).getTime();
  const segment=(a,b,path)=>({camera_id:'a',start_time:new Date(start+a*1000).toISOString(),end_time:new Date(start+b*1000).toISOString(),file_path:path});

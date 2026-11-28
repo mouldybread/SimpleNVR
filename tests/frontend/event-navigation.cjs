@@ -5,7 +5,7 @@ const timers = new Map(), requests = [], errors = [], seeks = [];
 let nextTimer = 0;
 const picker = {value:''};
 const context = vm.createContext({console,AbortController,document:{readyState:'loading',addEventListener(){},getElementById:id=>id==='timeline-date-picker'?picker:null},window:{},localStorage:{getItem(){return null;},setItem(){}},showError:message=>errors.push(message),setTimeout(fn,delay){const id=++nextTimer;timers.set(id,{fn,delay});return id;},clearTimeout(id){timers.delete(id);},fetch(url,options){return new Promise((resolve,reject)=>requests.push({url,options,resolve,reject}));}});
-for (const file of ['static/js/events.js','static/js/playback-state.js','static/js/playback-camera-date.js','static/js/playback-timeline-load.js','static/js/playback-canvas.js','static/js/playback-seek-session.js','static/js/playback-video-controls.js']) vm.runInContext(fs.readFileSync(file,'utf8'),context,{filename:file});
+for (const file of ['web/static/js/events.js','web/static/js/playback-state.js','web/static/js/playback-camera-date.js','web/static/js/playback-timeline-load.js','web/static/js/playback-canvas.js','web/static/js/playback-seek-session.js','web/static/js/playback-video-controls.js']) vm.runInContext(fs.readFileSync(file,'utf8'),context,{filename:file});
 vm.runInContext(`allCameras=[{id:'front',name:'Front Door'},{id:'back',name:'Back Door'}]; selectedCameras=['back'];`,context);
 context.renderCameraSelector=()=>{}; context.renderTimeline=()=>{}; context.updateVideoGrid=()=>{};
 context.performSeek=time=>seeks.push(time.getTime());

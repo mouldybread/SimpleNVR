@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const { test } = require('node:test');
-const source = fs.readFileSync('static/js/toast.js', 'utf8');
+const source = fs.readFileSync('web/static/js/toast.js', 'utf8');
 
 class Element {
     constructor(tag) { this.tagName = tag; this.children = []; this.parentElement = null;
@@ -34,7 +34,7 @@ function harness(missing = false) {
         window:{}, setTimeout(fn, delay) { const id = ++next; timers.set(id, {fn,delay}); return id; },
         fetch() { throw new Error('Notifications must not make requests'); }
     });
-    vm.runInContext(source, context, {filename:'static/js/toast.js'});
+    vm.runInContext(source, context, {filename:'web/static/js/toast.js'});
     return {context,container,timers,get creations() { return creations; },
         flush(delay) { for (const [id, timer] of [...timers]) if (timer.delay === delay) { timers.delete(id); timer.fn(); } }
     };

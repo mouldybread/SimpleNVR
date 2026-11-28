@@ -1,12 +1,12 @@
 'use strict';
-// Regression tests for static/js/timeline-camera-filter.js: the camera_id filter on timeline
+// Regression tests for web/static/js/timeline-camera-filter.js: the camera_id filter on timeline
 // requests and the warning shown when the server leaves unreadable recordings out.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const { test } = require('node:test');
 
-const source = fs.readFileSync('static/js/timeline-camera-filter.js', 'utf8');
+const source = fs.readFileSync('web/static/js/timeline-camera-filter.js', 'utf8');
 const ORIGIN = 'https://nvr.test';
 const TIMELINE = '/api/timeline/recordings';
 const QUERY = 'start_time=2026-11-10T00%3A00%3A00.000Z&end_time=2026-11-11T00%3A00%3A00.000Z';
@@ -36,7 +36,7 @@ function harness({ selected, warn = true } = {}) {
     if (warn) sandbox.showWarning = (message, duration) => { warnings.push({ message, duration }); };
     const context = vm.createContext(sandbox);
     if (selected) vm.runInContext('var selectedCameras = ' + JSON.stringify(selected) + ';', context);
-    vm.runInContext(source, context, { filename: 'static/js/timeline-camera-filter.js' });
+    vm.runInContext(source, context, { filename: 'web/static/js/timeline-camera-filter.js' });
     return {
         context, calls, warnings, consoleWarnings,
         fetch: (input, init) => context.window.fetch(input, init),

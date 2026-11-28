@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const { test } = require('node:test');
-const source = fs.readFileSync('static/js/modals.js', 'utf8');
+const source = fs.readFileSync('web/static/js/modals.js', 'utf8');
 const cleared = {success:true,count:3};
 function element() {
     const classes=new Set();
@@ -31,7 +31,7 @@ function harness(options={}) {
             if(options.syncThrow) throw new Error('<img src=x onerror=bad()>');return promise;
         }
     });
-    vm.runInContext(source,c,{filename:'static/js/modals.js'});ready.forEach(fn=>fn());
+    vm.runInContext(source,c,{filename:'web/static/js/modals.js'});ready.forEach(fn=>fn());
     const state=code=>vm.runInContext(code,c);
     return {c,nodes,timers,calls,notices,state,get refreshes() { return refreshes; },
         advance(ms) { now+=ms; },flush(delay) { for(const [id,t] of [...timers]) if(t.delay===delay) {timers.delete(id);t.fn();} },

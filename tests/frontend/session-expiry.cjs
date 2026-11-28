@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const { test } = require('node:test');
-const source = fs.readFileSync('static/js/core.js', 'utf8');
+const source = fs.readFileSync('web/static/js/core.js', 'utf8');
 const ORIGIN = 'https://nvr.test';
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const response = (status, path) => ({ status, url: new URL(path, ORIGIN + '/').href });
@@ -28,7 +28,7 @@ function harness({ visibility = 'visible', responder = path => response(204, pat
         getElementById: () => null
     };
     const context = vm.createContext({ window, document, URL, AbortSignal, console, setTimeout: () => 0 });
-    vm.runInContext(source, context, { filename: 'static/js/core.js' });
+    vm.runInContext(source, context, { filename: 'web/static/js/core.js' });
     return {
         window, document, calls, replaced, intervals, state, bodyListeners,
         interval: () => intervals[0].fn(),

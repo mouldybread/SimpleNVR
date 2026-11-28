@@ -4,8 +4,8 @@
 // HTML sinks and inline handlers throw so any HTML injection path fails the tests.
 const fs = require('node:fs'), vm = require('node:vm'), path = require('node:path');
 const root = path.join(__dirname, '..', '..');
-const source = fs.readFileSync(path.join(root, 'static/js/export-ui.js'), 'utf8');
-const geometrySource = fs.readFileSync(path.join(root, 'static/js/timeline-geometry.js'), 'utf8');
+const source = fs.readFileSync(path.join(root, 'web/static/js/export-ui.js'), 'utf8');
+const geometrySource = fs.readFileSync(path.join(root, 'web/static/js/timeline-geometry.js'), 'utf8');
 const VIEW_START = Date.parse('2026-11-21T00:00:00Z'), VIEW_END = Date.parse('2026-11-22T00:00:00Z');
 
 function environment(fetcher, ids = ['front'], options = {}) {
@@ -60,12 +60,12 @@ function environment(fetcher, ids = ['front'], options = {}) {
     fetch(url, options) { requests.push({url, options}); return fetcher(url, options); },
     showSuccess(m) { notices.push(['success', m]); }, showError(m) { notices.push(['error', m]); },
   });
-  vm.runInContext(geometrySource, context, {filename: 'static/js/timeline-geometry.js'});
+  vm.runInContext(geometrySource, context, {filename: 'web/static/js/timeline-geometry.js'});
   const cameras = options.cameras || ids.map((id, i) => ({id, name: `Camera ${i + 1}`}));
   vm.runInContext(`let downloadStartTime=new Date('2026-11-21T00:00:00Z'),downloadEndTime=new Date('2026-11-21T00:01:00Z'),currentTimePosition=Date.parse('2026-11-21T12:00:00Z'),selectedCameras=${JSON.stringify(ids)},allCameras=${JSON.stringify(cameras)};
 function timelineViewport(){return {start:${VIEW_START},end:${VIEW_END}};}`, context);
   if (vm.runInContext('typeof TimelineGeometry', context) !== 'object') throw Error('timeline-geometry.js did not load');
-  vm.runInContext(source, context, {filename: 'static/js/export-ui.js'});
+  vm.runInContext(source, context, {filename: 'web/static/js/export-ui.js'});
   ready.forEach(fn => fn());
   const run = code => vm.runInContext(code, context);
   const flush = async () => { for (let i = 0; i < 12; i++) await new Promise(r => setImmediate(r)); };

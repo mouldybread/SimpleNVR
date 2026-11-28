@@ -5,7 +5,7 @@ const vm = require('node:vm');
 
 const sources = ['cameras.js', 'modals.js'].map(name => ({
   name,
-  text: fs.readFileSync(path.join(__dirname, '..', '..', 'static', 'js', name), 'utf8')
+  text: fs.readFileSync(path.join(__dirname, '..', '..', 'web', 'static', 'js', name), 'utf8')
 }));
 const html = '<div class="camera-box" data-camera-id="camera-test">Updated camera list</div>';
 const intentMessage = 'Recording enabled; footage capture is not yet verified.';

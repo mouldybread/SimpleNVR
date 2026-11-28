@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 
 class MarkupTests(unittest.TestCase):
     def test_actual_template_has_operable_control(self):
-        self.assertTrue(template_contract((ROOT / "templates/index.html").read_text()))
+        self.assertTrue(template_contract((ROOT / "web/templates/index.html").read_text()))
 
     def test_bad_markup_is_rejected(self):
         button = '<button id="play-pause" type="button" aria-label="Play recordings" aria-controls="video-grid" onclick="togglePlayPause()">Play</button>'

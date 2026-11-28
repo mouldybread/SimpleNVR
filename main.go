@@ -103,7 +103,7 @@ func main() {
  // Saving new session settings asks for the same graceful shutdown as SIGTERM;
  // the container's restart policy then starts the process again.
  auth.restart=stopSignals
- templates,err=template.ParseGlob("templates/*.html");if err!=nil {log.Fatal("Failed to load templates: ",err)}
+ templates,err=template.ParseGlob("web/templates/*.html");if err!=nil {log.Fatal("Failed to load templates: ",err)}
  if err=nvr.load();err!=nil {log.Fatal("Refusing startup with invalid camera configuration: ",err)}
  log.Printf("Loaded %d cameras from disk",len(nvr.cameras))
  recoverBeforeStartup(appCtx,nvr)
@@ -138,7 +138,7 @@ func main() {
  http.HandleFunc("/api/events/clear-all",clearAllEventsHandler)
  http.HandleFunc("/api/events/clear-camera",clearCameraEventsHandler)
  http.HandleFunc("/api/recordings/cleanup-orphaned",cleanupOrphanedRecordingsHandler)
- http.Handle("/static/",http.StripPrefix("/static/",http.FileServer(http.Dir("static"))))
+ http.Handle("/static/",http.StripPrefix("/static/",http.FileServer(http.Dir("web/static"))))
  http.HandleFunc("/",indexHandler)
  gate:=newShutdownGate(themedLoginPage(auth.Handler(exports.Handler(http.DefaultServeMux))))
  gate.startBackgroundJob(exports.runLifecycle)

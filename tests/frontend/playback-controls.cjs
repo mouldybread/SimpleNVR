@@ -1,6 +1,6 @@
 'use strict';
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
-const source=['static/js/playback-state.js','static/js/playback-camera-date.js','static/js/playback-timeline-load.js','static/js/playback-canvas.js','static/js/playback-seek-session.js','static/js/playback-video-controls.js'].map(f=>fs.readFileSync(f,'utf8')).join('');
+const source=['web/static/js/playback-state.js','web/static/js/playback-camera-date.js','web/static/js/playback-timeline-load.js','web/static/js/playback-canvas.js','web/static/js/playback-seek-session.js','web/static/js/playback-video-controls.js'].map(f=>fs.readFileSync(f,'utf8')).join('');
 class Video {
  constructor(){this.listeners=new Map();this.style={};this.message={style:{}};this.parentElement={querySelector:()=>this.message};this.duration=60;this.currentTime=0;this.ended=false;this.plays=0;this.pauses=0;this.nextPlay=null;this.assignments=[];}
  addEventListener(name,fn){if(!this.listeners.has(name))this.listeners.set(name,new Set());this.listeners.get(name).add(fn);}

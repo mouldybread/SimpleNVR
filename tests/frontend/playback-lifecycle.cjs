@@ -1,6 +1,6 @@
 'use strict';
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
-const source=['static/js/playback-state.js','static/js/playback-camera-date.js','static/js/playback-timeline-load.js','static/js/playback-canvas.js','static/js/playback-seek-session.js','static/js/playback-video-controls.js'].map(f=>fs.readFileSync(f,'utf8')).join('');
+const source=['web/static/js/playback-state.js','web/static/js/playback-camera-date.js','web/static/js/playback-timeline-load.js','web/static/js/playback-canvas.js','web/static/js/playback-seek-session.js','web/static/js/playback-video-controls.js'].map(f=>fs.readFileSync(f,'utf8')).join('');
 class Video {
  constructor(){this.listeners=new Map();this.assignments=[];this.style={};this.message={style:{}};this.duration=60;this.currentTime=0;this.playCount=0;this.pauseCount=0;this.parentElement={querySelector:()=>this.message};}
  addEventListener(name,fn){if(!this.listeners.has(name))this.listeners.set(name,new Set());this.listeners.get(name).add(fn);}
@@ -15,7 +15,7 @@ class Video {
 function harness(){
  const timers=new Map();let next=0;
  const c=vm.createContext({console,document:{readyState:'loading',addEventListener(){},getElementById(){return null;}},setTimeout(fn,delay){const id=++next;timers.set(id,{fn,delay});return id;},clearTimeout(id){timers.delete(id);}});
- vm.runInContext(source,c,{filename:'static/js/playback.js'});
+ vm.runInContext(source,c,{filename:'web/static/js/playback.js'});
  const run=code=>vm.runInContext(code,c);
  const video=new Video();c.testVideo=video;
  run(`allCameras=[{id:'a',name:'A'}];selectedCameras=['a'];videoPlayers=[testVideo];timelineSegments=[{camera_id:'a',start_time:'2026-11-10T12:00:00Z',end_time:'2026-11-10T12:01:00Z',file_path:'/first.mp4'}];`);
