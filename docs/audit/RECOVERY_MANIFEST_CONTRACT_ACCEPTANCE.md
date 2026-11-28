@@ -85,7 +85,7 @@ no identity on error, camera binding, no positive diagnostic authority and stabl
 canonical marshal/parse/marshal. Ordinary required Go test discovery executes the
 seed corpus; it is NOT an extended fuzz campaign. Optional separately reviewed run:
 
-go test -run '^$' -fuzz '^FuzzRecoveryContractStrictManifest$' -fuzztime=20s -parallel=2 -timeout=45s .
+go test -run '^$' -fuzz '^FuzzRecoveryContractStrictManifest$' -fuzztime=20s -parallel=2 -timeout=45s ./cmd/simplenvr
 
 ## Evidence and limitations
 

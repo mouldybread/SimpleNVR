@@ -6,30 +6,7 @@ SimpleNVR records RTSP cameras with FFmpeg. Use the web interface to manage came
 
 Use the image from GitHub Container Registry. The example defaults to `v0.2.2`, which includes built-in authentication and server-prepared exports. An image's release workflow must finish publishing before it can be pulled.
 
-Save as `compose.yaml`:
-
-```yaml
-services:
-  simplenvr:
-    image: ghcr.io/mouldybread/simplenvr:${SIMPLENVR_VERSION:-v0.2.2}
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:8443:443"
-    environment:
-      NVR_EXPORT_SCRATCH_DIR: /exports
-    volumes:
-      - type: bind
-        source: ./recordings
-        target: /recordings
-        bind:
-          create_host_path: false
-      - type: bind
-        source: ./exports
-        target: /exports
-        bind:
-          create_host_path: false
-      - ./certs:/certs
-```
+The example Compose file is [docs/compose/compose.yaml](docs/compose/compose.yaml). Copy it into your install directory as `compose.yaml` before running the commands below, because its `./recordings`, `./exports` and `./certs` paths are relative to the Compose file.
 
 Optionally set `SIMPLENVR_VERSION` in `.env` to another published version that supports these features. Unlike the old example, this Compose file actually uses that setting.
 

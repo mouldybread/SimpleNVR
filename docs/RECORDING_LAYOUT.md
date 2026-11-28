@@ -27,7 +27,7 @@ Duplicates are deduplicated, an unknown ID returns 404, and an empty ID returns
 400. Omitting `camera_id` scans all registered cameras. The playback page sends one
 `camera_id` for each camera selected for playback and makes no request when none is
 selected, so a problem in one camera's files does not affect another camera's view.
-It does this from `static/js/timeline-camera-filter.js`, a small script that wraps
+It does this from `web/static/js/timeline-camera-filter.js`, a small script that wraps
 the page's timeline request, because `playback.js` itself is unchanged.
 
 A recording overlaps the window exactly when `start < windowEnd` and

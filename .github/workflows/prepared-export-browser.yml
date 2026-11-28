@@ -43,8 +43,8 @@ jobs:
       - name: Protocol regressions and real HTTPS/browser acceptance
         run: |
           . "$RUNNER_TEMP/export-browser-venv/bin/activate"
-          python -m unittest discover -s tests -p 'test_prepared_export_protocol.py' -v
-          GITHUB_SHA="$CHECKPOINT_SHA" bash tests/runtime-browser-acceptance.sh simplenvr-export-test "$RUNNER_TEMP/prepared-export-browser"
+          python -m unittest discover -s tests/acceptance -p 'test_prepared_export_protocol.py' -v
+          GITHUB_SHA="$CHECKPOINT_SHA" bash tests/acceptance/runtime-browser-acceptance.sh simplenvr-export-test "$RUNNER_TEMP/prepared-export-browser"
       - name: Retain media, network, browser and container evidence
         if: always()
         uses: actions/upload-artifact@v4

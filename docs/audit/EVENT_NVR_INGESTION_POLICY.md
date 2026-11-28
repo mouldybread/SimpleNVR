@@ -51,7 +51,7 @@ or deployment is included.
 
 Run manually with stock ffmpeg/ffprobe and libx264/AAC available:
 
-    python3 tests/qualify_ingestion_time.py ingestion-qualification.json
+    python3 tests/acceptance/qualify_ingestion_time.py ingestion-qualification.json
 
 This developer tool generates three seconds of H.264 B-frames and AAC and sends
 it over loopback UDP/MPEG-TS with deliberately non-UTC source timestamps. It compares

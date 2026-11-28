@@ -35,13 +35,13 @@ These are required restrictions for the proposed supported profile, not claims o
 
 The opt-in Go test is skipped unless SIMPLENVR_DEPLOYMENT_TEST_ROOT names a real scratch parent on the intended filesystem. Example, using an operator-owned directory on that filesystem:
 
-    SIMPLENVR_DEPLOYMENT_TEST_ROOT=/operator-supplied/scratch go test -count=1 -v -run '^TestDeploymentFilesystemCompatibility$' .
+    SIMPLENVR_DEPLOYMENT_TEST_ROOT=/operator-supplied/scratch go test -count=1 -v -run '^TestDeploymentFilesystemCompatibility$' ./cmd/simplenvr
 
 It creates only a uniquely named synthetic scratch directory, then removes that test directory. It does not inspect or delete existing recordings. It checks actual no-replace rename/collision preservation, reopening an original inode through procfs after pathname replacement, and the application's publication boundary with an accepting synthetic probe. Save the exact commit, runtime/kernel/filesystem context and DEPLOYMENT_FILESYSTEM_COMPATIBILITY log. Run under the intended permissions and container procfs policy. This is not a media-decode, power-loss, fsync-durability or lost-mount test.
 
 ## Active runtime-container CI fixture
 
-The added CI step builds on the unchanged runtime Dockerfile and runs tests/active-container-storage.sh against that exact CI-built image. It requires active continuous and event-buffer FFmpeg processes, continuous output bytes and at least two prebuffer segments before SIGTERM. It checks clean container exit, persisted restart intent for both cameras, a new nonempty published partial per stop, transient-buffer cleanup and byte-identical synthetic retained event inputs/checkpoints. It repeats start/stop in the same container to exercise persisted restart intent.
+The added CI step builds on the unchanged runtime Dockerfile and runs tests/acceptance/active-container-storage.sh against that exact CI-built image. It requires active continuous and event-buffer FFmpeg processes, continuous output bytes and at least two prebuffer segments before SIGTERM. It checks clean container exit, persisted restart intent for both cameras, a new nonempty published partial per stop, transient-buffer cleanup and byte-identical synthetic retained event inputs/checkpoints. It repeats start/stop in the same container to exercise persisted restart intent.
 
 The fixture uses the real application, Alpine runtime and real FFmpeg, a read-only root, writable recordings/certs/tmp mounts, dropped capabilities except NET_BIND_SERVICE, no-new-privileges and no networking. A wrapper replaces RTSP input with a paced looping synthetic file. It does not validate Dahua RTSP disconnect/reconnect, queued event capture/assembly in the runtime image, authenticated export traffic, genuine browser behavior, physical storage or production mount-loss handling. It checks published partial presence, not complete footage. Synthetic fixture directories are removed by the test; production evidence is never touched. Existing empty-camera SIGTERM smoke and all prior media/storage tests remain enabled.
 

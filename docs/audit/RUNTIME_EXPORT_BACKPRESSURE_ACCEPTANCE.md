@@ -7,11 +7,11 @@ defect is claimed and no production implementation is changed.
 
 ## Integrated batch
 
-- tests/runtime-export-acceptance.sh owns an isolated synthetic state directory,
+- tests/acceptance/runtime-export-acceptance.sh owns an isolated synthetic state directory,
   fixture generator, password initializer and hardened runtime container.
-- tests/runtime_export_acceptance.py exercises authenticated real HTTPS exports,
+- tests/acceptance/runtime_export_acceptance.py exercises authenticated real HTTPS exports,
   bounded ownership observations, disconnect, SIGTERM, persistence and restart.
-- tests/test_runtime_export_acceptance.py contains 22 tooling regression methods.
+- tests/acceptance/test_runtime_export_acceptance.py contains 22 tooling regression methods.
 - .github/workflows/safety-ci.yml runs the campaign as a mandatory core step after
   the existing recording/restart and SIGTERM smoke checks, then retains evidence
   with always(). The existing aggregate requires core. Both isolated Chrome
