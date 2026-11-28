@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from browser_playback_control import template_contract, mark_failed_stages
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 class MarkupTests(unittest.TestCase):
@@ -45,7 +45,7 @@ class MarkupTests(unittest.TestCase):
 
 class AggregateTests(unittest.IsolatedAsyncioTestCase):
     def module(self):
-        spec=importlib.util.spec_from_file_location('browser_expanded_contract',ROOT/'tests/runtime-browser-expanded.py')
+        spec=importlib.util.spec_from_file_location('browser_expanded_contract',ROOT/'tests/acceptance/runtime-browser-expanded.py')
         module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
         return module
 

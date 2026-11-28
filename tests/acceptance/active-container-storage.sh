@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-image=${1:?usage: bash tests/active-container-storage.sh IMAGE}
+image=${1:?usage: bash tests/acceptance/active-container-storage.sh IMAGE}
 work=$(mktemp -d "${RUNNER_TEMP:-/tmp}/simplenvr-active-container.XXXXXX")
 state=$work/state
 fixture=$work/fixture

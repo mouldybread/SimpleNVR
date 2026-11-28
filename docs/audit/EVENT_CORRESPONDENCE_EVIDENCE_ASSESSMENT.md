@@ -17,7 +17,7 @@ tail-latency claims. Background lifetime CPU is separate; zero kernel block
 operations do not prove zero logical reads. No host threshold is invented.
 
 Usage:
-python3 tests/correspondence_assessment.py EXTRACTED_ARTIFACT_DIRECTORY \
+python3 tests/acceptance/correspondence_assessment.py EXTRACTED_ARTIFACT_DIRECTORY \
   --expected-head FULL_COMMIT_SHA --output assessment.json --summary assessment.md
 
 The workflow runs regression tests and assessment after resource collection,

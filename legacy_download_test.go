@@ -29,4 +29,4 @@ func TestNoLegacyDownloadCallsInAssets(t *testing.T) {
  if !bytes.Contains(page,[]byte(`onclick="startExportDownloads()"`)) {t.Fatal("monitored export entry point is not wired to the page")}
 }
 
-func TestFrontendDownloadEntryPoints(t *testing.T) {runFrontendRegression(t,"tests/download-entrypoints.cjs","UTC")}
+func TestFrontendDownloadEntryPoints(t *testing.T) {runFrontendRegression(t,"tests/frontend/download-entrypoints.cjs","UTC")}

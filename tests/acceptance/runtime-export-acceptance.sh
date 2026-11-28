@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-image=${1:?usage: bash tests/runtime-export-acceptance.sh IMAGE EVIDENCE_DIR}
+image=${1:?usage: bash tests/acceptance/runtime-export-acceptance.sh IMAGE EVIDENCE_DIR}
 evidence=${2:?evidence directory required}
 work=$(mktemp -d "${RUNNER_TEMP:-/tmp}/simplenvr-runtime-export.XXXXXX")
 state=$work/state
@@ -12,7 +12,7 @@ cleanup() {
   status=$?
   cleanup_failed=0
   # Keep safe failure facts visible before disposable fixture teardown.
-  timeout --kill-after=2 5 python3 tests/runtime_export_diagnostics.py \
+  timeout --kill-after=2 5 python3 tests/acceptance/runtime_export_diagnostics.py \
     "$evidence/runtime-export-report.json" | tee "$evidence/runtime-export-console-summary.json" || cleanup_failed=1
   # No raw auth/proc/network captures. Keep a bounded completion-marker count
   # even when the campaign fails before it can finish its JSON report.
@@ -37,7 +37,7 @@ PY
   exit "$status"
 }
 trap cleanup EXIT
-timeout --kill-after=2 20 python3 -m unittest discover -s tests -p 'test_runtime_export*.py' -v \
+timeout --kill-after=2 20 python3 -m unittest discover -s tests/acceptance -p 'test_runtime_export*.py' -v \
   2>&1 | tee "$evidence/runtime-export-tooling-tests.log"
 # Deliberately complex, bounded, video-only input. Generate with the exact
 # runtime image, before applying the pacing shim to application exports.
@@ -77,7 +77,7 @@ docker run -d --name "$name" --label simplenvr.safety.fixture=runtime-export \
   --mount "type=bind,src=$state,dst=/recordings" \
   --mount "type=bind,src=$bin,dst=/fixture-bin,readonly" "$image" >/dev/null
 image_id=$(docker image inspect -f '{{.Id}}' "$image")
-timeout --kill-after=10 240 python3 tests/runtime_export_acceptance.py \
+timeout --kill-after=10 240 python3 tests/acceptance/runtime_export_acceptance.py \
   --container "$name" --state "$state" --evidence "$evidence" \
   --commit "${GITHUB_SHA:-$(git rev-parse HEAD)}" --image-id "$image_id"
 test "$(docker inspect -f '{{.State.Running}}' "$name")" = false

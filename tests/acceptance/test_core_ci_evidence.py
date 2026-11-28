@@ -159,7 +159,7 @@ class AssessmentTests(unittest.TestCase):
         for name,body in programs.items():
             path=bindir/name;path.write_text(body);path.chmod(0o700)
         wrapper=Path(m.__file__).with_name('core-ci-evidence.sh')
-        checkout=wrapper.parent.parent
+        checkout=wrapper.parent.parent.parent
         for mode in ('pass','test_failure','stale_head','tee_failure'):
             with self.subTest(mode=mode):
                 evidence=self.root/('evidence-'+mode)

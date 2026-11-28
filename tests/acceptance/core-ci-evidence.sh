@@ -8,7 +8,7 @@ expected_head=${GITHUB_SHA:?GitHub head required}
 package=$(go list .)
 media="$evidence/bframe-media"
 mkdir -p "$media/bin"
-helper=$(pwd)/tests/capture-copy-media.py
+helper=$(pwd)/tests/acceptance/capture-copy-media.py
 for tool in ffmpeg ffprobe; do
   printf '#!/bin/sh\nexec python3 "$SIMPLENVR_CAPTURE_HELPER" %s "$@"\n' "$tool" > "$media/bin/$tool"
   chmod 700 "$media/bin/$tool"
@@ -47,7 +47,7 @@ with open(path,'w') as f:
                'runtime_qualified':False,'cleanup_authorized':False},f,indent=2)
     f.write('\n')
 PY
-python3 tests/core_ci_evidence.py "$evidence" --expected-head "$expected_head"
+python3 tests/acceptance/core_ci_evidence.py "$evidence" --expected-head "$expected_head"
 test "$test_exit" -eq 0
 test "$tee_exit" -eq 0
 test "${focused_statuses[0]}" -eq 0

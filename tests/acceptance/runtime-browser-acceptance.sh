@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-image=${1:?usage: bash tests/runtime-browser-acceptance.sh IMAGE EVIDENCE_DIR}
+image=${1:?usage: bash tests/acceptance/runtime-browser-acceptance.sh IMAGE EVIDENCE_DIR}
 evidence=${2:?evidence directory required}
 work=$(mktemp -d "${RUNNER_TEMP:-/tmp}/simplenvr-runtime-browser.XXXXXX")
 state=$work/state
@@ -16,7 +16,7 @@ cleanup() {
   sudo rm -rf -- "$work"
 }
 trap cleanup EXIT
-timeout --kill-after=2 20 python3 -m unittest discover -s tests -p 'test_browser_playback*.py' -v \
+timeout --kill-after=2 20 python3 -m unittest discover -s tests/acceptance -p 'test_browser_playback*.py' -v \
   2>&1 | tee "$evidence/playback-edge-unit-tests.log"
 # Deterministic non-reordered video exercises the supported subsection-copy path.
 # The Go suite separately retains reordered-video refusal and accurate rendering.
@@ -74,9 +74,9 @@ port=$(docker inspect -f '{{(index (index .NetworkSettings.Ports "443/tcp") 0).H
 image_id=$(docker image inspect -f '{{.Id}}' "$image")
 host_ifindex=$(docker exec "$name" cat /sys/class/net/eth0/iflink)
 [[ "$host_ifindex" =~ ^[1-9][0-9]*$ ]]
-timeout --kill-after=10 340 python3 tests/browser_network_ready.py \
+timeout --kill-after=10 340 python3 tests/acceptance/browser_network_ready.py \
   --ifindex "$host_ifindex" --evidence "$evidence" -- \
-  python3 tests/runtime-browser-expanded.py \
+  python3 tests/acceptance/runtime-browser-expanded.py \
   --origin "https://127.0.0.1:$port" --container "$name" \
   --commit "${GITHUB_SHA:-$(git rev-parse HEAD)}" --image-id "$image_id" --evidence "$evidence"
 docker stop --timeout 75 "$name" >/dev/null

@@ -109,7 +109,7 @@ class ExportDiagnosticTests(unittest.TestCase):
                 for name in ("docker","sudo"):(binary/name).chmod(0o700)
                 env=dict(os.environ,PATH=str(binary)+os.pathsep+os.environ["PATH"],DIAGNOSTIC_TEST_RM_FAIL="1" if fail else "0")
                 script='set -euo pipefail\nevidence=$1\nwork=$2\nname=simplenvr-runtime-export-123\n'+cleanup+'trap cleanup EXIT\nexit "$3"\n'
-                result=subprocess.run(["bash","-c",script,"test",str(evidence),str(root),str(code)],cwd=path.parent.parent,env=env,capture_output=True,text=True,timeout=5)
+                result=subprocess.run(["bash","-c",script,"test",str(evidence),str(root),str(code)],cwd=path.parent.parent.parent,env=env,capture_output=True,text=True,timeout=5)
                 self.assertEqual(result.returncode,1 if fail else code)
                 self.assertIn('"diagnostic_only": true',result.stdout)
                 self.assertEqual((evidence/"runtime-export-report.json").read_text(),raw)

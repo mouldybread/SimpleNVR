@@ -37,7 +37,7 @@ CSRF proof, cross-tab idempotency, or deletion permission.
 ## Failed runtime-export campaign at 926dd03
 
 The user-provided output identifies the command as
-`bash tests/runtime-export-acceptance.sh simplenvr-safety-test "$RUNNER_TEMP/simplenvr-export-evidence"`.
+`bash tests/acceptance/runtime-export-acceptance.sh simplenvr-safety-test "$RUNNER_TEMP/simplenvr-export-evidence"`.
 
 | Campaign case | Reported state |
 | --- | --- |

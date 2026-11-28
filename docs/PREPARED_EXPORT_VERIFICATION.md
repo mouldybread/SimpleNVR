@@ -41,4 +41,4 @@ Passing synthetic acceptance is not production-camera, full-resolution, multi-Gi
 
 The live browser fixture has a single camera, so queuing several cameras from the UI in one request and the 8-camera client limit are covered by the Node UI tests, not by live Chrome. The server's capacity limit is exercised live through the API, with several jobs for the same camera.
 
-The older routed-response harness `tests/browser-export-acceptance.py` has been removed. It targeted the retired direct-download flow and was not run by any workflow. The live-runtime entrypoint is `tests/runtime-browser-acceptance.py`, invoked through the expanded playback runner.
+The older routed-response harness `tests/browser-export-acceptance.py` has been removed. It targeted the retired direct-download flow and was not run by any workflow. The live-runtime entrypoint is `tests/acceptance/runtime-browser-acceptance.py`, invoked through the expanded playback runner.

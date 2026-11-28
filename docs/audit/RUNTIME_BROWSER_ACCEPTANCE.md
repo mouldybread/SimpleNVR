@@ -34,7 +34,7 @@ CI uploads the commit/image/browser report, saved synthetic whole-copy and trim 
 
 For an explicit local run with Docker, the image, Python Playwright/Chromium and host FFmpeg installed:
 
-    bash tests/runtime-browser-acceptance.sh IMAGE EVIDENCE_DIRECTORY
+    bash tests/acceptance/runtime-browser-acceptance.sh IMAGE EVIDENCE_DIRECTORY
 
 The driver generates and cleans its own application state. It does not run against an arbitrary existing production server. It requires sudo for synthetic container-owned state cleanup. Do not point its fixture storage at deployment evidence.
 

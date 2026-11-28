@@ -3,7 +3,7 @@
 // DOMContentLoaded callbacks, and models the pointer and keyboard APIs used by handles.
 // HTML sinks and inline handlers throw so any HTML injection path fails the tests.
 const fs = require('node:fs'), vm = require('node:vm'), path = require('node:path');
-const root = path.join(__dirname, '..');
+const root = path.join(__dirname, '..', '..');
 const source = fs.readFileSync(path.join(root, 'static/js/export-ui.js'), 'utf8');
 const geometrySource = fs.readFileSync(path.join(root, 'static/js/timeline-geometry.js'), 'utf8');
 const VIEW_START = Date.parse('2026-11-21T00:00:00Z'), VIEW_END = Date.parse('2026-11-22T00:00:00Z');

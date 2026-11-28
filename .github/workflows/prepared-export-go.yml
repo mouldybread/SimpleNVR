@@ -39,7 +39,7 @@ jobs:
       - run: bash .github/scripts/ci-media-apt.sh update
       - run: bash .github/scripts/ci-media-apt.sh install ffmpeg
       - name: Prepared protocol regression tests
-        run: python3 -m unittest discover -s tests -p 'test_prepared_export_protocol.py' -v
+        run: python3 -m unittest discover -s tests/acceptance -p 'test_prepared_export_protocol.py' -v
       - name: Verify dependencies and build the exact checkout
         run: |
           go mod download
@@ -47,7 +47,7 @@ jobs:
           git diff --exit-code -- go.mod go.sum
           go build ./...
       - name: Full race-enabled Go suite including Node and native media tests
-        run: GITHUB_SHA="$CHECKPOINT_SHA" bash tests/core-ci-evidence.sh "$RUNNER_TEMP/prepared-export-go"
+        run: GITHUB_SHA="$CHECKPOINT_SHA" bash tests/acceptance/core-ci-evidence.sh "$RUNNER_TEMP/prepared-export-go"
       - name: Static analysis
         if: always()
         run: go vet ./...

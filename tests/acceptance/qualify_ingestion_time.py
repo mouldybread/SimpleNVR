@@ -2,7 +2,7 @@
 """Offline qualification of a CANDIDATE, not production ingestion-time support.
 
 Requires stock ffmpeg/ffprobe, libx264 and AAC. Uses generated media, temporary
-files and loopback UDP only. Run: python3 tests/qualify_ingestion_time.py report.json
+files and loopback UDP only. Run: python3 tests/acceptance/qualify_ingestion_time.py report.json
 Exit 0 means this limited fixture passed, 1 means candidate unqualified, 2 means
 infrastructure/fixture failure. None of these outcomes certifies RTSP or coverage.
 """

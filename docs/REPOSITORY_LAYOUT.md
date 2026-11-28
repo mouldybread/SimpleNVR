@@ -7,7 +7,8 @@ inventory in the last batch.
 
 - `cmd/simplenvr/` - all Go sources and Go tests (`package main`, unchanged)
 - `web/templates/`, `web/static/` - HTML templates and static assets
-- `tests/frontend/`, `tests/runtime/`, `tests/ci/` - Node suites, runtime acceptance scripts, CI helpers and their unit tests
+- `tests/frontend/` - Node (`*.cjs`) frontend suites
+- `tests/acceptance/` - Python helpers and their unit tests, and the shell acceptance scripts
 - `tests/fixtures/`, `tests/evidence/` - unchanged
 - `docs/` - documentation, including `docs/compose/` for Compose examples
 - `.github/` - workflows and scripts (stay in place)
