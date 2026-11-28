@@ -9,7 +9,7 @@ class Video {
  set src(value){this.assignments.push(value);this.ended=false;}
  removeAttribute(){}pause(){}play(){this.plays++;return Promise.resolve();}
 }
-const source=fs.readFileSync('static/js/playback.js','utf8');
+const source=['static/js/playback-state.js','static/js/playback-camera-date.js','static/js/playback-timeline-load.js','static/js/playback-canvas.js','static/js/playback-seek-session.js','static/js/playback-video-controls.js'].map(f=>fs.readFileSync(f,'utf8')).join('');
 function harness(extra=[]){
  const timers=new Map(),errors=[];let id=0;const video=new Video();
  const c=vm.createContext({console,testVideo:video,document:{readyState:'loading',addEventListener(){},getElementById(){return null;}},showError:message=>errors.push(message),setTimeout(fn,delay){const key=++id;timers.set(key,{fn,delay});return key;},clearTimeout(key){timers.delete(key);}});
