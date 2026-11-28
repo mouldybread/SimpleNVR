@@ -22,7 +22,7 @@ function toggleFullscreen() {
 }
 function toggleMuteAll() {
   const muted=videoPlayers.filter(Boolean).every(video=>video.muted); videoPlayers.forEach(video=>{ if (video) video.muted=!muted; });
-  const button=document.getElementById('mute-all-btn'); if (button) button.textContent=muted?'?? Unmute All':'?? Mute All';
+  const button=document.getElementById('mute-all-btn'); if (button) button.textContent=muted?'🔊 Unmute All':'🔇 Mute All';
 }
 function updateVideoGrid() {
   const container=document.getElementById('video-grid'); if (!container) return;
