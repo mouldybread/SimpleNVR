@@ -79,7 +79,7 @@ function showEventTooltip(event,x,y) {
   tooltip.style.left=(x+10)+'px'; tooltip.style.top=(y+10)+'px';
   tooltip.appendChild(eventTextElement('div',`${eventIconText(event.label)} ${event.label ?? ''}`,'font-weight:bold;color:#4CAF50;margin-bottom:4px;'));
   const details=document.createElement('div'); details.style.cssText='font-size:11px;color:#ccc;';
-  details.appendChild(eventTextElement('div',`?? ${event.camera_name ?? ''}`)); details.appendChild(eventTextElement('div',`?? ${new Date(event.start_time).toLocaleTimeString()}`)); details.appendChild(eventTextElement('div',`?? ${event.duration_seconds || event.duration}s`));
+  details.appendChild(eventTextElement('div',`📹 ${event.camera_name ?? ''}`)); details.appendChild(eventTextElement('div',`🕐 ${new Date(event.start_time).toLocaleTimeString()}`)); details.appendChild(eventTextElement('div',`⏱️ ${event.duration_seconds || event.duration}s`));
   tooltip.appendChild(details); tooltip.appendChild(eventTextElement('div','Click to view recording','font-size:10px;color:#888;margin-top:4px;font-style:italic;'));
   document.body.appendChild(tooltip); eventTooltip=tooltip;
 }

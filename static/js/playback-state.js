@@ -9,7 +9,7 @@ let timelineRequestVersion = 0, timelineAbort = null, pendingEventNavigation = n
 let playbackIntentVersion = 0;
 const playbackSessions = new Map();
 let seekGeneration = 0, mediaCleanups = [], segmentCleanups = [];
-const EVENT_ICONS = {'Motion Detected':'???','Person Detected':'??','Vehicle Detected':'??','Intrusion':'??','Loitering':'??','Object Removed':'??','Object Left Behind':'??','Sound Alert':'??','Line Crossing':'??','Tamper Alert':'??'};
+const EVENT_ICONS = {'Motion Detected':'👁️','Person Detected':'👤','Vehicle Detected':'🚗','Intrusion':'⚠️','Loitering':'⏱️','Object Removed':'📦','Object Left Behind':'🎒','Sound Alert':'🔔','Line Crossing':'➡️','Tamper Alert':'🚨'};
 let cameraColorMap = {};
 const COLORS = ['#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06b6d4','#84cc16','#f97316','#14b8a6','#a855f7','#f43f5e','#0ea5e9','#eab308','#6366f1','#d946ef'];
 let timelineZoomLevel = 1.0, timelineOffset = 0, nextColorIndex = 0;

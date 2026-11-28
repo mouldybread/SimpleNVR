@@ -41,7 +41,7 @@ for (const label of ['constructor','__proto__','toString','hasOwnProperty']) {
   context.showEventTooltip({...event,label},10,20);
   assert.equal(body.children.length,1); assert.ok(body.children[0].textContent.startsWith('? '+label));
 }
-assert.equal(context.eventIconText('Motion Detected'),'???');
+assert.equal(context.eventIconText('Motion Detected'),'👁️');
 context.hideEventTooltip(); assert.equal(body.children.length,0);
 context.renderEventsList([]); assert.equal(list.textContent,'No events to display');
 context.renderEventsList([{id:'normal',label:'Motion Detected',camera_name:'Front Door',start_time:'2026-11-10T12:00:00Z',duration_seconds:10}]);
